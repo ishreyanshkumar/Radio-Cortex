@@ -107,28 +107,56 @@ The "Digital Twin" of the RAN. Implements the LTE/5G network, traffic generation
 ## 🔄 System Architecture
 
 ```mermaid
-graph LR
-    subgraph "Python (RL Agent)"
-        Agent[PPO Agent]
-        Env[Gym Class]
+graph TD
+    %% Subgraph for the ns-3 Simulation Environment
+    subgraph NS3_SIM ["Simulation (C++)"]
+        direction TB
+        RAN["LTE/NR Network<br>(eNodeBs + UEs)"]
+        Trace["Traces"]
+        subgraph E2_MODULE ["E2 Interface Layer"]
+            MC["MetricCollector<br>(Aggregates Stats)"]
+            E2M["E2InterfaceManager<br>(Kafka Producer/Consumer)"]
+        end
     end
 
-    subgraph "Kafka (Middleware)"
-        KPM[Topic: e2_kpm_stream]
-        RC[Topic: e2_rc_control]
+    %% Subgraph for the Kafka Messaging Middleware
+    subgraph KAFKA ["Kafka Middleware"]
+        direction TB
+        Topic_KPM[("e2_kpm_stream<br>(Metrics)")]
+        Topic_RC[("e2_rc_control<br>(Actions)")]
     end
 
-    subgraph "C++ (ns-3 Simulation)"
-        E2[E2InterfaceManager]
-        RAN[LTE Network]
+    %% Subgraph for the Python RL Environment
+    subgraph PYTHON_AGENT ["RL Agent (Python)"]
+        direction TB
+        Gym["Gym Environment<br>(oran_ns3_env.py)"]
+        subgraph PPO_ALG ["PPO Implementation"]
+            Agent["PPO Agent<br>(Actor-Critic)"]
+            Model["Neural Network"]
+        end
     end
 
-    RAN -- Traces --> E2
-    E2 -- "Metrics (JSON)" --> KPM
-    KPM --> Env
-    Env -- State/Reward --> Agent
-    Agent -- Action --> Env
-    Env -- "Control (JSON)" --> RC
-    RC --> E2
-    E2 -- SetTxPower --> RAN
+    %% Data Flow Connections
+    RAN -- "Packet/PHY Events" --> Trace
+    Trace -- "Callbacks" --> MC
+    MC -- "Accumulated Metrics<br>(TP, Delay, SINR)" --> E2M
+    E2M -- "JSON Serialized Report" --> Topic_KPM
+
+    Topic_KPM -- "Poll Messages" --> Gym
+    Gym -- "State Vector<br>(Normalized)" --> Agent
+    Agent -- "Inference" --> Model
+    Model -- "Action Logits" --> Agent
+    Agent -- "Selected Action" --> Gym
+
+    Gym -- "JSON Control Command" --> Topic_RC
+    Topic_RC -- "Consume Command" --> E2M
+    E2M -- "SetTxPower(cell, power)" --> RAN
+    
+    %% Styling
+    classDef cpp fill:#f9f,stroke:#333,stroke-width:2px;
+    classDef python fill:#9cf,stroke:#333,stroke-width:2px;
+    classDef kafka fill:#ff9,stroke:#333,stroke-width:2px;
+    class NS3_SIM,RAN,E2_MODULE,MC,E2M cpp;
+    class PYTHON_AGENT,Gym,PPO_ALG,Agent,Model python;
+    class KAFKA,Topic_KPM,Topic_RC kafka;
 ```
