@@ -21,6 +21,21 @@
 
 ## ⚡ 5-Minute Setup
 
+### Step 0: Start Kafka (Required)
+The simulation requires a Kafka broker.
+
+**Option A: Using Docker (Recommended)**
+```bash
+docker compose up -d
+```
+
+**Option B: Without Docker (If Docker fails)**
+I have created a script to download and run Kafka directly:
+```bash
+bash run_kafka_native.sh
+```
+*Keep this terminal open.*
+
 ### Step 1: Check Prerequisites
 ```bash
 # Check Python is installed

@@ -52,7 +52,8 @@ class NS3Interface:
     def __init__(self, config: NS3Config):
         self.config = config
         self.ns3_process = None
-        self.e2_socket = None
+        self.kafka_consumer = None
+        self.kafka_producer = None
         self.current_step = 0
         
     def start_simulation(self):
@@ -60,7 +61,11 @@ class NS3Interface:
         # Resolve ns3 script path
         ns3_path = 'ns3'
         if not os.path.exists(ns3_path):
-            if os.path.exists(os.path.join('..', 'ns3')):
+            # Check for standard nested structure
+            nested_path = os.path.join('ns-allinone-3.46.1', 'ns-3.46.1', 'ns3')
+            if os.path.exists(nested_path):
+                ns3_path = nested_path
+            elif os.path.exists(os.path.join('..', 'ns3')):
                 ns3_path = os.path.join('..', 'ns3')
             elif os.path.exists(os.path.join('..', '..', 'ns3')): # Handle scratch/Radio-Cortex case
                 ns3_path = os.path.join('..', '..', 'ns3')
@@ -73,98 +78,85 @@ class NS3Interface:
             f'--numCells={self.config.num_cells}',
             f'--simTime={self.config.sim_time}',
             f'--seed={self.config.seed}',
-            f'--e2Port={self.config.e2_port}',
             f'--kpmInterval={self.config.kpm_interval_ms}',
-            '--enableE2=true'
+            '--enableE2=true',
+            '--scenario=flash_crowd'
         ]
         
         # Start ns-3 in subprocess
+        # Native Kafka support in ns-3, no adapter needed.
+        # Redirect output to file for debugging
+        self.ns3_log_file = open("ns3.log", "w")
         self.ns3_process = subprocess.Popen(
             ns3_cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
+            stdout=self.ns3_log_file,
+            stderr=subprocess.STDOUT,
         )
         
-        # Connect to E2 interface (SCTP socket) with retry
-        self._connect_e2()
+        time.sleep(2) # Give ns-3 time to initialize
         
-    def _connect_e2(self):
-        """Establish E2 connection with ns-3 simulation with retry logic"""
-        self.e2_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        # Connect to Kafka
+        self._connect_kafka()
         
-        max_retries = 150  # 300 seconds total wait for build
-        retry_interval = 2
-        
-        print(f"Waiting for ns-3 E2 interface on port {self.config.e2_port} (timeout: {max_retries*retry_interval}s)...")
-        
-        for i in range(max_retries):
-            try:
-                self.e2_socket.connect(('localhost', self.config.e2_port))
-                print(f"✓ Connected to ns-3 E2 interface on port {self.config.e2_port}")
-                return
-            except ConnectionRefusedError:
-                if i < max_retries - 1:
-                    time.sleep(retry_interval)
-                    # Check if process is still alive
-                    if self.ns3_process.poll() is not None:
-                        stdout, stderr = self.ns3_process.communicate()
-                        raise RuntimeError(f"ns-3 process died unexpectedly.\nSTDOUT: {stdout.decode()}\nSTDERR: {stderr.decode()}")
-                else:
-                    raise
-            except Exception as e:
-                print(f"✗ Failed to connect to E2 interface: {e}")
-                raise
+    def _connect_kafka(self):
+        """Establish Kafka connections"""
+        from kafka import KafkaConsumer, KafkaProducer
+        import socket
+
+        try:
+            print("Connecting to Kafka...")
+            self.kafka_consumer = KafkaConsumer(
+                'e2_kpm_stream',
+                bootstrap_servers=['localhost:9092'],
+                auto_offset_reset='latest',
+                value_deserializer=lambda x: json.loads(x.decode('utf-8')),
+                consumer_timeout_ms=1000  # Non-blocking check
+            )
+            
+            self.kafka_producer = KafkaProducer(
+                bootstrap_servers=['localhost:9092'],
+                value_serializer=lambda x: json.dumps(x).encode('utf-8')
+            )
+            print("✓ Connected to Kafka")
+            
+        except Exception as e:
+            print(f"✗ Failed to connect to Kafka: {e}")
+            raise
     
     def receive_kpm_report(self) -> E2Message:
         """
-        Receive E2SM-KPM report from ns-3
+        Receive E2SM-KPM report from Kafka ('e2_kpm_stream')
         Returns current network state metrics
         """
         try:
-            # Receive E2AP message (simplified - real impl uses ASN.1 encoding)
-            # Loop to handle partial reads/stream buffering
-            buffer = ""
-            while True:
-                chunk = self.e2_socket.recv(4096).decode()
-                if not chunk:
-                    raise ConnectionError("Socket connection closed")
-                buffer += chunk
-                try:
-                    # Try to parse JSON from the buffer
-                    # Note: This is a simple implementation assuming one JSON object per packet
-                    # or that recv gets the full JSON. In TCP streams, we might get partials.
-                    # A robust implementation would use a delimiter or length prefix.
-                    # For now, let's assume ns-3 sends one full JSON string which might be fragmented
-                    # But Python's json.loads picks it up if it's valid.
-                    
-                    # Hack: The C++ side sends "}{" if multiple messages are concatenated quickly
-                    # We might need to handle stream delimiters. 
-                    # Let's try to find the first complete JSON object.
-                    
-                    # Brute force: find matching braces
-                    depth = 0
-                    start_idx = buffer.find('{')
-                    if start_idx == -1:
-                        if len(buffer) > 8192: buffer = "" # Clear garbage
-                        continue
-
-                    for i, char in enumerate(buffer[start_idx:], start_idx):
-                        if char == '{': depth +=1
-                        elif char == '}': depth -=1
-                        
-                        if depth == 0:
-                            # Found complete object
-                            json_str = buffer[start_idx:i+1]
-                            kpm_data = json.loads(json_str)
-                            # Keep the rest of the buffer for next time? 
-                            # For gym step(), we just need one fresh state.
-                            # It's better to discard old buffer to behave like a sample hold.
-                            return self._parse_kpm(kpm_data)
-                            
-                except json.JSONDecodeError:
-                    continue # Wait for more data
+            # Poll for new messages
+            # We want the LATEST message for the current step
+            records = self.kafka_consumer.poll(timeout_ms=2000)
+            
+            if not records:
+                # No data yet, return defaults or wait?
+                # For training, we need data.
+                return self._get_default_metrics()
+            
+            # Get the last message from the partition
+            # Assuming one partition for simplicity
+            last_record = None
+            for partition, messages in records.items():
+                if messages:
+                    last_record = messages[-1]
+            
+            if last_record:
+                kpm_data = last_record.value
+                # DEBUG: Print keys from first few reports to verify JSON structure
+                if getattr(self, '_debug_kpm_count', 0) < 5:
+                    print(f"DEBUG: Received KPM keys: {list(kpm_data.keys())} Sample: {kpm_data}")
+                    self._debug_kpm_count = getattr(self, '_debug_kpm_count', 0) + 1
+                return self._parse_kpm(kpm_data)
+            else:
+                return self._get_default_metrics()
+                
         except Exception as e:
-            # print(f"Error receiving KPM: {e}")
+            print(f"Error receiving KPM: {e}")
             return self._get_default_metrics()
             
     def _parse_kpm(self, kpm_data):
@@ -196,7 +188,7 @@ class NS3Interface:
     
     def send_rc_control(self, actions: Dict):
         """
-        Send E2SM-RC control message to ns-3
+        Send E2SM-RC control message to Kafka ('e2_rc_control')
         Applies RL agent's actions to the RAN
         """
         rc_message = {
@@ -206,10 +198,11 @@ class NS3Interface:
         }
         
         try:
-            self.e2_socket.send(json.dumps(rc_message).encode())
+            self.kafka_producer.send('e2_rc_control', rc_message)
+            self.kafka_producer.flush()
         except Exception as e:
             # print(f"Error sending RC control: {e}")
-            pass # Suppress send error to continue training loop if simulation ended
+            pass 
     
     def _get_default_metrics(self) -> E2Message:
         """Fallback metrics if E2 connection fails"""
@@ -222,9 +215,16 @@ class NS3Interface:
         )
     
     def stop_simulation(self):
-        """Clean shutdown of ns-3 and E2 connection"""
-        if self.e2_socket:
-            self.e2_socket.close()
+        """Clean shutdown of ns-3 and Kafka connection"""
+        if self.kafka_consumer:
+            self.kafka_consumer.close()
+        if self.kafka_producer:
+            self.kafka_producer.close()
+            
+        if hasattr(self, 'adapter_process') and self.adapter_process:
+            self.adapter_process.terminate()
+            self.adapter_process.wait()
+            
         if self.ns3_process:
             self.ns3_process.terminate()
             self.ns3_process.wait()
@@ -401,49 +401,42 @@ class ORANns3Env(gym.Env):
                 'MaxHarqTx': int(action[idx + 2]),
                 'Hysteresis': float(action[idx + 3]),
             }
-        
         return rc_actions
     
     def _compute_reward(self, e2_msg: E2Message) -> float:
         """
-        Reward function optimizing for:
-        1. High aggregate throughput
-        2. Low latency
-        3. Low packet loss
-        4. Fairness (Jain's index)
+        Compute reward based on network performance
+        Maximize Throughput and Fairness, Minimize Delay
+        Adding SINR component to ensure gradient even without traffic
         """
-        throughputs = [m['throughput'] for m in e2_msg.ue_metrics.values()]
+        if not e2_msg.ue_metrics:
+            return 0.0
+            
+        for m in e2_msg.ue_metrics.values():
+            print(m)
+        tputs = [m['throughput'] for m in e2_msg.ue_metrics.values()]
         delays = [m['delay'] for m in e2_msg.ue_metrics.values()]
-        losses = [m['packet_loss'] for m in e2_msg.ue_metrics.values()]
+        sinrs = [m['sinr'] for m in e2_msg.ue_metrics.values()]
         
-        # Throughput reward (higher is better)
-        avg_tput = np.mean(throughputs)
-        tput_reward = avg_tput / 10.0  # Normalize
-        
-        # Latency penalty (lower is better)
+        sum_log_tput = np.sum(np.log(np.array(tputs) + 1e-6)) # Proportional Fairness
         avg_delay = np.mean(delays)
-        delay_penalty = -avg_delay / 100.0
-        
-        # Packet loss penalty (catastrophic if high)
-        avg_loss = np.mean(losses)
-        loss_penalty = -100.0 * avg_loss
+        avg_sinr = np.mean(sinrs)
         
         # Fairness (Jain's index)
-        if sum(throughputs) > 0:
-            fairness = (sum(throughputs) ** 2) / (len(throughputs) * sum([t**2 for t in throughputs]))
+        if sum(tputs) > 0:
+            fairness = (sum(tputs) ** 2) / (len(tputs) * sum(np.array(tputs) ** 2))
         else:
-            fairness = 0
-        fairness_reward = fairness
+            fairness = 1.0
+            
+        # Reward components
+        # 1. Throughput (Log utility)
+        # 2. Delay penalty
+        # 3. SINR bonus (0.05 * SINR_dB) -> e.g. 20dB -> +1.0
+        # 4. Fairness bonus
         
-        # Combined reward
-        reward = (
-            1.0 * tput_reward +
-            0.5 * delay_penalty +
-            2.0 * loss_penalty +
-            0.3 * fairness_reward
-        )
+        reward = sum_log_tput - (0.1 * avg_delay) + (0.05 * avg_sinr) + (0.5 * fairness)
         
-        return reward
+        return float(reward)
     
     def render(self, mode='human'):
         """Visualize current network state"""

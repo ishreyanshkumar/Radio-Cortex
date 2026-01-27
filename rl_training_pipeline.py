@@ -251,7 +251,7 @@ class PPOTrainer:
         
         state, _ = self.env.reset()
         
-        for _ in range(num_steps):
+        for step_i in range(num_steps):
             state_tensor = torch.FloatTensor(state).unsqueeze(0).to(self.device)
             
             with torch.no_grad():
@@ -264,7 +264,18 @@ class PPOTrainer:
             
             next_state, reward, terminated, truncated, info = self.env.step(action_denorm)
             
-            # Log action
+            # Console Logging for User Verification
+            if step_i % 10 == 0:
+                e2_metrics = info.get('e2_metrics')
+                avg_tput = 0.0
+                if e2_metrics and e2_metrics.ue_metrics:
+                    avg_tput = np.mean([m['throughput'] for m in e2_metrics.ue_metrics.values()])
+                
+                # Format action for display (first 3 dims)
+                action_str = f"[{', '.join(f'{x:.2f}' for x in action_denorm[:3])}...]"
+                print(f"[{self.total_steps}] Action={action_str} | Reward={reward:.3f} | Tput={avg_tput:.2f} Mbps", flush=True)
+
+            # File logging
             try:
                 e2_metrics = info.get('e2_metrics')
                 log_entry = {

@@ -614,6 +614,71 @@ class EvaluationSuite:
         return results
 
 
+class RandomScenarioFactory:
+    """
+    Automates the creation of randomized congestion scenarios for 
+    continuous training or robust testing.
+    """
+    
+    def __init__(self, num_ues: int, num_cells: int):
+        self.num_ues = num_ues
+        self.num_cells = num_cells
+        
+    def generate_random_config(self, 
+                              min_duration: float = 5.0, 
+                              max_duration: float = 20.0,
+                              min_severity: float = 0.3,
+                              max_severity: float = 1.0) -> ScenarioConfig:
+        """Create a single random scenario configuration"""
+        
+        # Pick random type
+        scenario_type = np.random.choice(list(ScenarioType))
+        
+        # Random duration and severity
+        duration = np.random.uniform(min_duration, max_duration)
+        severity = np.random.uniform(min_severity, max_severity)
+        
+        # Select affected cells (1 to all cells)
+        num_affected = np.random.randint(1, self.num_cells + 1)
+        affected_cells = list(np.random.choice(
+            range(self.num_cells), 
+            size=num_affected, 
+            replace=False
+        ))
+        
+        # Create config
+        return ScenarioConfig(
+            scenario_type=scenario_type,
+            start_time=0.0,  # Caller can adjust this
+            duration=duration,
+            severity=severity,
+            affected_cells=affected_cells
+        )
+
+    def generate_continuous_stream(self, total_duration: float) -> List[ScenarioConfig]:
+        """
+        Generates a sequence of back-to-back scenarios filling the total_duration.
+        Useful for creating long-running training episodes.
+        """
+        configs = []
+        current_time = 0.0
+        
+        while current_time < total_duration:
+            # Generate random config
+            cfg = self.generate_random_config()
+            
+            # Update start time
+            cfg.start_time = current_time
+            
+            # Add some gap/normal operation between scenarios (optional)
+            gap = np.random.uniform(2.0, 10.0)
+            
+            configs.append(cfg)
+            current_time += cfg.duration + gap
+            
+        return configs
+
+
 # ============================================================================
 # Demo and Testing
 # ============================================================================
