@@ -11,11 +11,21 @@ Radio-Cortex is a closed-loop control system that uses Reinforcement Learning (R
 - ns-3 (v3.46.1) with dependent modules
 - Apache Kafka (v3.6.1)
 
-### 2. Build ns-3
+### 2. Configure Simulation
+Link the congestion scenario to the ns-3 scratch directory so it can be compiled.
+```bash
+# From project root
+cd ns-allinone-3.46.1/ns-3.46.1/scratch
+ln -s ../../../oran-congestion-scenario.cc .
+cd ../../..
+```
+
+### 3. Build ns-3
 Compile the C++ simulation scenario.
 ```bash
 cd ns-allinone-3.46.1/ns-3.46.1
 ./ns3 build
+cd ../..
 ```
 
 ### 3. Start Kafka

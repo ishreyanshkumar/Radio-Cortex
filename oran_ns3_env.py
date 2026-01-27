@@ -412,8 +412,8 @@ class ORANns3Env(gym.Env):
         if not e2_msg.ue_metrics:
             return 0.0
             
-        for m in e2_msg.ue_metrics.values():
-            print(m)
+        # for m in e2_msg.ue_metrics.values():
+        #     print(m)
         tputs = [m['throughput'] for m in e2_msg.ue_metrics.values()]
         delays = [m['delay'] for m in e2_msg.ue_metrics.values()]
         sinrs = [m['sinr'] for m in e2_msg.ue_metrics.values()]
