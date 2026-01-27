@@ -118,15 +118,15 @@ class EvaluationRunner:
     def evaluate_controller(
         self,
         controller,
-        kpm_timeline: List[Dict],
+        env,
         controller_name: str
     ) -> EvaluationMetrics:
         """
-        Simulate controller behavior on given scenario
+        Run online evaluation episode with real ns-3 environment
         
         Args:
             controller: Controller instance (Baseline, Heuristic, or RL)
-            kpm_timeline: Pre-generated KPM reports (scenario)
+            env: Gym environment (ORANns3Env)
             controller_name: Name for logging
         
         Returns:
@@ -139,32 +139,39 @@ class EvaluationRunner:
         delays = []
         losses = []
         
-        # Group KPM by timestep
-        timesteps = {}
-        for kpm in kpm_timeline:
-            t = kpm['timestamp']
-            if t not in timesteps:
-                timesteps[t] = []
-            timesteps[t].append(kpm)
+        # Reset environment
+        state, info = env.reset()
+        terminated = False
+        truncated = False
         
-        # Simulate controller decisions
-        for t in sorted(timesteps.keys()):
-            kpm_reports = timesteps[t]
-            
-            # Build state from KPM reports
-            state = self._build_state(kpm_reports)
-            
+        while not (terminated or truncated):
             # Controller makes decision
-            action = controller.get_action(state)
+            if hasattr(controller, 'get_rl_action'):
+                # Real RL Agent: Uses raw numpy state
+                action_arr = controller.get_rl_action(state)
+            else:
+                # Heuristic/Baseline: Uses parsed state dict
+                state_dict = self._parse_state(state, env.config)
+                action = controller.get_action(state_dict)
+                action_arr = self._dict_to_action(action, env.action_space)
             
-            # Apply action effects (simplified simulation)
-            modified_kpm = self._apply_action(kpm_reports, action)
+            # Execute step
+            next_state, reward, terminated, truncated, info = env.step(action_arr)
             
-            # Collect metrics
-            for kpm in modified_kpm:
-                throughputs.append(kpm['throughput'])
-                delays.append(kpm['delay'])
-                losses.append(kpm['packet_loss'])
+            # Collect metrics from info (which contains raw KPMs)
+            e2_msg = info['e2_metrics']
+            ue_kpms = list(e2_msg.ue_metrics.values())
+            
+            # Aggregate per-step metrics
+            step_tput = np.mean([m['throughput'] for m in ue_kpms]) if ue_kpms else 0.0
+            step_delay = np.mean([m['delay'] for m in ue_kpms]) if ue_kpms else 0.0
+            step_loss = np.mean([m['packet_loss'] for m in ue_kpms]) if ue_kpms else 0.0
+            
+            throughputs.append(step_tput)
+            delays.append(step_delay)
+            losses.append(step_loss)
+            
+            state = next_state
         
         # Calculate aggregate metrics
         metrics = self._calculate_metrics(throughputs, delays, losses)
@@ -175,64 +182,61 @@ class EvaluationRunner:
         
         return metrics
     
-    def _build_state(self, kpm_reports: List[Dict]) -> Dict:
-        """Convert KPM reports to state dict"""
-        state = {}
+    def _parse_state(self, state_arr, config) -> Dict:
+        """Convert flattened numpy state back to dict for heuristic controllers"""
+        state_dict = {}
         
-        # Per-cell aggregates
-        for cell_id in range(self.num_cells):
-            cell_kpms = [k for k in kpm_reports if k['cell_id'] == cell_id]
-            if cell_kpms:
-                state[f'cell_{cell_id}_rb_util'] = np.mean([
-                    k.get('rb_utilization', 0.5) for k in cell_kpms
-                ])
-                state[f'cell_{cell_id}_avg_loss'] = np.mean([
-                    k['packet_loss'] for k in cell_kpms
-                ])
+        # We mainly need cell metrics for the Heuristic controller
+        offset = config.num_ues * 4
         
-        return state
+        # Approximate packet loss per cell from state_arr
+        # State: [UE_DL_TP, UE_DL_LOSS, UE_DL_DELAY, UE_SINR] * num_ues
+        # Heuristic needs cell-level loss. We average UE losses.
+        ue_losses = state_arr[1:offset:4]
+        global_avg_loss = np.mean(ue_losses) if len(ue_losses) > 0 else 0.0
+        
+        for cell_id in range(config.num_cells):
+            idx = offset + cell_id * 3
+            state_dict[f'cell_{cell_id}_queue'] = state_arr[idx] * 1000
+            state_dict[f'cell_{cell_id}_rb_util'] = state_arr[idx+1] 
+            state_dict[f'cell_{cell_id}_power'] = state_arr[idx+2] * 36.0 + 10.0
+            
+            # Real-ish association: UEs are usually assigned to cells based on index
+            # for sim simplicity (num_ues / num_cells).
+            ues_per_cell = config.num_ues // config.num_cells
+            start_ue = cell_id * ues_per_cell
+            end_ue = (cell_id + 1) * ues_per_cell
+            cell_ue_losses = ue_losses[start_ue:end_ue]
+            
+            state_dict[f'cell_{cell_id}_avg_loss'] = np.mean(cell_ue_losses) if len(cell_ue_losses) > 0 else global_avg_loss
+            
+        return state_dict
+
+    def _dict_to_action(self, action_dict, action_space) -> np.ndarray:
+        """Convert controller action dict to numpy array"""
+        # Action: [tx_power, scheduler, harq, hyster] per cell
+        # defaults
+        flat_action = []
+        num_cells = len(action_dict['tx_power'])
+        
+        for i in range(num_cells):
+             # Tx Power
+             flat_action.append(action_dict['tx_power'][i])
+             
+             # Scheduler
+             sched = action_dict['scheduler'][i]
+             sched_val = 0.0 if sched == 'PF' else 1.0 # Simple map
+             flat_action.append(sched_val)
+             
+             # HARQ
+             flat_action.append(float(action_dict['harq_retx'][i]))
+             
+             # Hysteresis (default 3.0)
+             flat_action.append(3.0)
+             
+        return np.array(flat_action, dtype=np.float32)
     
-    def _apply_action(
-        self,
-        kpm_reports: List[Dict],
-        action: Dict
-    ) -> List[Dict]:
-        """
-        Simulate effect of controller action on network performance
-        
-        This is a simplified model. In reality, actions would modify
-        ns-3 simulation via E2 interface.
-        """
-        modified = []
-        
-        for kpm in kpm_reports:
-            cell_id = kpm['cell_id']
-            kpm_copy = kpm.copy()
-            
-            # Model action effects
-            # 1. Tx Power change affects SINR
-            if action['tx_power'][cell_id] < 23.0:
-                # Lower power → slightly worse SINR but offloads UEs
-                kpm_copy['sinr'] -= 2.0
-                kpm_copy['throughput'] *= 1.1  # Offloading benefit
-            elif action['tx_power'][cell_id] > 26.0:
-                # Higher power → better SINR
-                kpm_copy['sinr'] += 2.0
-            
-            # 2. Scheduler change affects fairness
-            if action['scheduler'][cell_id] == 'RR':
-                # Round Robin reduces variance (fairness)
-                kpm_copy['throughput'] *= 0.9  # Slight throughput penalty
-            
-            # 3. HARQ retransmissions affect loss vs delay
-            if action['harq_retx'][cell_id] > 4:
-                # More retries → less loss but higher delay
-                kpm_copy['packet_loss'] *= 0.7
-                kpm_copy['delay'] *= 1.3
-            
-            modified.append(kpm_copy)
-        
-        return modified
+
     
     def _calculate_metrics(
         self,
@@ -480,91 +484,4 @@ class VisualizationSuite:
 # Main Evaluation Script
 # ============================================================================
 
-def run_full_evaluation():
-    """Run complete evaluation suite"""
-    print("=== Radio-Cortex Evaluation Suite ===\n")
-    
-    # Load scenarios
-    from congestion_scenarios import EvaluationSuite as ScenarioSuite
-    
-    scenario_suite = ScenarioSuite(num_ues=20, num_cells=3)
-    scenarios = scenario_suite.generate_all()
-    
-    # Initialize controllers
-    baseline = BaselineController(num_cells=3)
-    heuristic = HeuristicController(num_cells=3)
-    # RL controller would be loaded here: radio_cortex = load_trained_model()
-    
-    # For now, simulate RL as improved heuristic
-    class SimulatedRLController(HeuristicController):
-        def get_action(self, state):
-            # Better rules that RL would learn
-            actions = super().get_action(state)
-            # RL learns to be more aggressive
-            actions['tx_power'] = [p * 0.9 for p in actions['tx_power']]
-            return actions
-    
-    radio_cortex = SimulatedRLController(num_cells=3)
-    
-    # Run evaluations
-    evaluator = EvaluationRunner(num_ues=20, num_cells=3)
-    all_results = {}
-    
-    for scenario_name, kpm_timeline in scenarios.items():
-        print(f"\n{'='*60}")
-        print(f"Scenario: {scenario_name}")
-        print('='*60)
-        
-        results = {
-            'Baseline': evaluator.evaluate_controller(baseline, kpm_timeline, 'Baseline'),
-            'Heuristic': evaluator.evaluate_controller(heuristic, kpm_timeline, 'Heuristic'),
-            'Radio-Cortex': evaluator.evaluate_controller(radio_cortex, kpm_timeline, 'Radio-Cortex')
-        }
-        
-        all_results[scenario_name] = results
-        
-        # Generate plots
-        VisualizationSuite.plot_comparison(
-            results,
-            scenario_name,
-            save_path=f'eval_{scenario_name}.png'
-        )
-        
-        VisualizationSuite.plot_timeseries(
-            kpm_timeline,
-            scenario_name,
-            save_path=f'timeseries_{scenario_name}.png'
-        )
-    
-    # Generate summary table
-    VisualizationSuite.generate_latex_table(
-        all_results,
-        save_path='results_table.tex'
-    )
-    
-    # Print summary
-    print("\n" + "="*60)
-    print("EVALUATION SUMMARY")
-    print("="*60)
-    
-    for scenario_name, results in all_results.items():
-        print(f"\n{scenario_name}:")
-        for controller, metrics in results.items():
-            improvement = ""
-            if controller == "Radio-Cortex":
-                baseline_loss = all_results[scenario_name]['Baseline'].avg_packet_loss
-                rc_loss = metrics.avg_packet_loss
-                reduction = (1 - rc_loss / baseline_loss) * 100
-                improvement = f" ({reduction:.1f}% loss reduction)"
-            
-            print(f"  {controller}: "
-                  f"Tput={metrics.avg_throughput:.1f} Mbps, "
-                  f"Loss={metrics.avg_packet_loss:.2%}, "
-                  f"Recovery={metrics.recovery_time:.1f}s"
-                  f"{improvement}")
-    
-    print("\n✓ Evaluation complete. Results saved to current directory.")
 
-
-if __name__ == "__main__":
-    run_full_evaluation()

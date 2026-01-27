@@ -26,12 +26,7 @@ from typing import Dict, List, Optional
 # Import all components
 from oran_ns3_env import ORANns3Env, NS3Config, create_oran_env
 from rl_training_pipeline import PPOTrainer, evaluate_policy
-from congestion_scenarios import (
-    CongestionScenarioGenerator,
-    ScenarioConfig,
-    ScenarioType,
-    EvaluationSuite
-)
+
 from evaluation_baseline import (
     EvaluationRunner,
     BaselineController,
@@ -70,32 +65,16 @@ class RadioCortexAgent:
         System 2: Strategic RL decision
         """
         if self.policy is None:
-            # Fallback: heuristic
-            return self._heuristic_action(base_state)
+            raise RuntimeError("RL Policy not loaded! 'Everything Real' mode requires a trained model.")
         
         # RL inference directly on base state
         state_tensor = torch.FloatTensor(base_state).unsqueeze(0)
         with torch.no_grad():
-            action = self.policy.get_action(state_tensor, deterministic=False)
+            action = self.policy.get_action(state_tensor, deterministic=True)
             if isinstance(action, tuple):
                 action = action[0]
         
         return action.cpu().numpy()[0]
-    
-    def _heuristic_action(self, state: np.ndarray) -> np.ndarray:
-        """Fallback heuristic if RL policy not available"""
-        # Simple static rule
-        action = np.zeros(self.num_cells * 4)
-        for cell_id in range(self.num_cells):
-            idx = cell_id * 4
-            
-            # Default params
-            action[idx] = 26.0  # Power
-            action[idx + 1] = 0   # Scheduler
-            action[idx + 2] = 4   # HARQ
-            action[idx + 3] = 3.0 # Hysteresis
-        
-        return action
     
     def log_metrics(self, kpm_reports: List[Dict]):
         """Track performance over time"""
@@ -179,24 +158,17 @@ def evaluate_radio_cortex(
     print("EVALUATING RADIO-CORTEX")
     print("="*60)
     
-    # Generate scenarios
-    scenario_suite = EvaluationSuite(
-        num_ues=config.num_ues,
-        num_cells=config.num_cells
-    )
-    scenarios = scenario_suite.generate_all()
+    # Define REAL scenarios supported by C++ simulation
+    scenarios = [
+        "flash_crowd",
+        "mobility_storm",
+        "traffic_burst",
+        "handover_ping_pong"
+    ]
     
-    # Initialize controllers
+    # Initialize controllers (Baseline only for now to save time, or Heuristic)
+    # To properly compare "Before vs After", we should run Baseline vs RadioCortex
     baseline = BaselineController(num_cells=config.num_cells)
-    heuristic = HeuristicController(num_cells=config.num_cells)
-    
-    # Load trained Radio-Cortex
-    # (In full implementation, would load actual RL policy)
-    radio_cortex = RadioCortexAgent(
-        num_ues=config.num_ues,
-        num_cells=config.num_cells,
-        policy_model=None  # Would load from model_path
-    )
     
     # Run evaluations
     evaluator = EvaluationRunner(
@@ -206,21 +178,55 @@ def evaluate_radio_cortex(
     
     all_results = {}
     
-    for scenario_name, kpm_timeline in scenarios.items():
+    for scenario_name in scenarios:
         print(f"\n{'='*60}")
         print(f"Scenario: {scenario_name}")
         print('='*60)
         
-        results = {
-            'Baseline': evaluator.evaluate_controller(
-                baseline, kpm_timeline, 'Baseline'
-            ),
-            'Heuristic': evaluator.evaluate_controller(
-                heuristic, kpm_timeline, 'Heuristic'
-            ),
-            # Would add Radio-Cortex here with actual RL controller
-        }
+        # We need to run the Environment for EACH controller for EACH scenario
+        # This is expensive (real time), but necessary for "Realness"
         
+        results = {}
+        
+        # 1. Evaluate Baseline
+        print(f"--- Running Baseline on {scenario_name} ---")
+        config.scenario = scenario_name
+        env = create_oran_env(config)
+        try:
+            results['Baseline'] = evaluator.evaluate_controller(
+                baseline, env, 'Baseline'
+            )
+        finally:
+            env.close()
+            
+        # 2. Evaluate Radio-Cortex (Real RL Model)
+        print(f"--- Running Radio-Cortex on {scenario_name} ---")
+        
+        # Load real policy from models/
+        from rl_training_pipeline import ActorCritic
+        state_dim = config.num_ues * 4 + config.num_cells * 3
+        action_dim = config.num_cells * 4
+        policy = ActorCritic(state_dim, action_dim).to('cpu')
+        
+        try:
+            checkpoint = torch.load(model_path, map_location='cpu')
+            policy.load_state_dict(checkpoint['policy_state_dict'])
+            print(f"  Successfully loaded model from {model_path}")
+        except FileNotFoundError:
+            print(f"  [ERROR] Model {model_path} not found! Run with --mode train first.")
+            raise
+            
+        rc_agent = RadioCortexAgent(config.num_ues, config.num_cells, policy_model=policy)
+        
+        env = create_oran_env(config)
+        try:
+             # Real Evaluation Runner loop
+             results['Radio-Cortex'] = evaluator.evaluate_controller(
+                 rc_agent, env, 'Radio-Cortex'
+             )
+        finally:
+            env.close()
+
         all_results[scenario_name] = results
         
         # Generate visualizations

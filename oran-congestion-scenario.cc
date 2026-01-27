@@ -637,12 +637,14 @@ public:
     HANDOVER_PING_PONG
   };
 
-  CongestionScenarioManager(NodeContainer ueNodes, Ptr<LteHelper> lteHelper);
+  CongestionScenarioManager(NodeContainer ueNodes, Ptr<LteHelper> lteHelper,
+                            ApplicationContainer clientApps);
   void ActivateScenario(ScenarioType type, Time startTime);
 
 private:
   NodeContainer m_ueNodes;
   Ptr<LteHelper> m_lteHelper;
+  ApplicationContainer m_clientApps;
 
   void TriggerFlashCrowd(uint32_t numUes);
   void TriggerMobilityStorm();
@@ -650,9 +652,10 @@ private:
   void TriggerHandoverPingPong();
 };
 
-CongestionScenarioManager::CongestionScenarioManager(NodeContainer ueNodes,
-                                                     Ptr<LteHelper> lteHelper)
-    : m_ueNodes(ueNodes), m_lteHelper(lteHelper) {}
+CongestionScenarioManager::CongestionScenarioManager(
+    NodeContainer ueNodes, Ptr<LteHelper> lteHelper,
+    ApplicationContainer clientApps)
+    : m_ueNodes(ueNodes), m_lteHelper(lteHelper), m_clientApps(clientApps) {}
 
 void CongestionScenarioManager::ActivateScenario(ScenarioType type,
                                                  Time startTime) {
@@ -680,6 +683,14 @@ void CongestionScenarioManager::ActivateScenario(ScenarioType type,
 void CongestionScenarioManager::TriggerFlashCrowd(uint32_t numUes) {
   NS_LOG_INFO("TRIGGERING FLASH CROWD: "
               << numUes << " UEs suddenly requesting high bandwidth");
+  // Increase traffic for the first numUes
+  for (uint32_t i = 0; i < numUes && i < m_clientApps.GetN(); ++i) {
+    Ptr<UdpClient> app = m_clientApps.Get(i)->GetObject<UdpClient>();
+    if (app) {
+      // Increase rate: 1024 bytes every 2ms = ~4 Mbps
+      app->SetAttribute("Interval", TimeValue(MilliSeconds(2)));
+    }
+  }
 }
 
 void CongestionScenarioManager::TriggerMobilityStorm() {
@@ -699,14 +710,29 @@ void CongestionScenarioManager::TriggerMobilityStorm() {
 
 void CongestionScenarioManager::TriggerTrafficBurst() {
   NS_LOG_INFO("TRIGGERING TRAFFIC BURST: Sudden spike in data transmission");
+  // Spike for ALL UEs
+  for (uint32_t i = 0; i < m_clientApps.GetN(); ++i) {
+    Ptr<UdpClient> app = m_clientApps.Get(i)->GetObject<UdpClient>();
+    if (app) {
+      app->SetAttribute("Interval", TimeValue(MilliSeconds(1))); // ~8 Mbps
+    }
+  }
 }
 
 void CongestionScenarioManager::TriggerHandoverPingPong() {
   NS_LOG_INFO("TRIGGERING HANDOVER PING-PONG: UEs oscillating between cells");
+  // Force UEs to move rapidly
+  for (uint32_t i = 0; i < m_ueNodes.GetN(); ++i) {
+    Ptr<MobilityModel> mobility = m_ueNodes.Get(i)->GetObject<MobilityModel>();
+    if (Ptr<ConstantVelocityMobilityModel> cv =
+            DynamicCast<ConstantVelocityMobilityModel>(mobility)) {
+      cv->SetVelocity(Vector(50.0, 0.0, 0.0)); // High speed
+    }
+  }
 }
 
-void SetupTraffic(NodeContainer ues, NodeContainer remoteHost,
-                  Ptr<LteHelper> lteHelper) {
+ApplicationContainer SetupTraffic(NodeContainer ues, NodeContainer remoteHost,
+                                  Ptr<LteHelper> lteHelper) {
   // Install UDP traffic on all UEs
   // UEs receive data from Remote Host (DL)
   uint16_t dlPort = 1234;
@@ -739,6 +765,8 @@ void SetupTraffic(NodeContainer ues, NodeContainer remoteHost,
 
   serverApps.Start(Seconds(0.1));
   clientApps.Start(Seconds(0.1));
+
+  return serverApps;
 }
 
 // ============================================================================
@@ -827,15 +855,25 @@ int main(int argc, char *argv[]) {
   enbMobility.Install(enbNodes);
 
   MobilityHelper ueMobility;
-  ueMobility.SetMobilityModel(
-      "ns3::RandomWalk2dMobilityModel", "Bounds",
-      RectangleValue(Rectangle(-500, numCells * 500, -250, 250)));
+  ueMobility.SetMobilityModel("ns3::ConstantVelocityMobilityModel");
   ueMobility.SetPositionAllocator(
       "ns3::RandomRectanglePositionAllocator", "X",
       StringValue("ns3::UniformRandomVariable[Min=0|Max=" +
                   std::to_string(numCells * 500) + "]"),
       "Y", StringValue("ns3::UniformRandomVariable[Min=-250|Max=250]"));
   ueMobility.Install(ueNodes);
+
+  // Set initial random velocities
+  Ptr<UniformRandomVariable> xVar = CreateObject<UniformRandomVariable>();
+  xVar->SetAttribute("Min", DoubleValue(0.0));
+  xVar->SetAttribute("Max", DoubleValue(10.0));
+  for (uint32_t i = 0; i < numUes; ++i) {
+    Ptr<ConstantVelocityMobilityModel> cv =
+        ueNodes.Get(i)
+            ->GetObject<MobilityModel>()
+            ->GetObject<ConstantVelocityMobilityModel>();
+    cv->SetVelocity(Vector(xVar->GetValue(), 0, 0));
+  }
 
   // Devices
   NetDeviceContainer enbLteDevs = lteHelper->InstallEnbDevice(enbNodes);
@@ -861,7 +899,8 @@ int main(int argc, char *argv[]) {
 
   // Setup Application Traffic
   // Note: remoteHostContainer is needed but defined earlier as NodeContainer.
-  SetupTraffic(ueNodes, remoteHostContainer, lteHelper);
+  ApplicationContainer trafficApps =
+      SetupTraffic(ueNodes, remoteHostContainer, lteHelper);
 
   // Enable E2 interface
   Ptr<E2InterfaceManager> e2Manager;
@@ -874,7 +913,7 @@ int main(int argc, char *argv[]) {
 
   // Congestion
   Ptr<CongestionScenarioManager> scenarioManager =
-      Create<CongestionScenarioManager>(ueNodes, lteHelper);
+      Create<CongestionScenarioManager>(ueNodes, lteHelper, trafficApps);
 
   if (congestionScenario == "flash_crowd") {
     scenarioManager->ActivateScenario(CongestionScenarioManager::FLASH_CROWD,

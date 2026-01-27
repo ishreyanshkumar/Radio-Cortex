@@ -31,8 +31,10 @@ class NS3Config:
     num_cells: int = 3
     sim_time: float = 10.0  # seconds
     seed: int = 42
+    seed: int = 42
     e2_port: int = 36421
     kpm_interval_ms: int = 10  # E2SM-KPM reporting interval
+    scenario: str = "flash_crowd"  # Scenario to run
 
 
 @dataclass
@@ -79,8 +81,9 @@ class NS3Interface:
             f'--simTime={self.config.sim_time}',
             f'--seed={self.config.seed}',
             f'--kpmInterval={self.config.kpm_interval_ms}',
+            f'--kpmInterval={self.config.kpm_interval_ms}',
             '--enableE2=true',
-            '--scenario=flash_crowd'
+            f'--scenario={self.config.scenario}'
         ]
         
         # Start ns-3 in subprocess
