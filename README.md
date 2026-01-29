@@ -81,15 +81,21 @@ converts ns-3 simulation into a standard OpenAI Gym interface (observation, acti
 **Role:** Reinforcement Learning Algorithms (PPO).
 Implements the PPO algorithm from scratch using PyTorch.
 
-*   **`ActorCritic`**: The Neural Network architecture.
-    *   `Actor`: Maps state -> action (Gaussian distribution).
-    *   `Critic`: Maps state -> value estimate.
 *   **`PPOTrainer`**: Implementation of PPO logic.
     *   `collect_rollout()`: Interacts with the env to gather a batch of experiences.
     *   `compute_gae()`: Calculates Generalized Advantage Estimation for stable learning.
     *   `update_policy()`: Performs the Gradient Descent update steps on the Actor and Critic networks.
 
-### 4. `oran-congestion-scenario.cc`
+### 4. `neural_networks.py`
+**Role:** Neural Network Architectures.
+Contains the PyTorch definitions for the RL agents, separated to allow easy swapping of architectures (e.g., replacing MLPs with Transformers).
+
+*   **`ActorCritic`**: The default PPO network.
+    *   `Actor`: Maps state -> action (Gaussian distribution).
+    *   `Critic`: Maps state -> value estimate.
+*   **`SACAgent`**: Soft Actor-Critic network implementation.
+
+### 5. `oran-congestion-scenario.cc`
 **Role:** ns-3 Simulation Scenario (C++).
 The "Digital Twin" of the RAN. Implements the LTE/5G network, traffic generation, and E2 interface.
 

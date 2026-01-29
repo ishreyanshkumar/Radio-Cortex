@@ -203,7 +203,7 @@ def evaluate_radio_cortex(
         print(f"--- Running Radio-Cortex on {scenario_name} ---")
         
         # Load real policy from models/
-        from rl_training_pipeline import ActorCritic
+        from neural_networks import ActorCritic
         state_dim = config.num_ues * 4 + config.num_cells * 3
         action_dim = config.num_cells * 4
         policy = ActorCritic(state_dim, action_dim).to('cpu')
