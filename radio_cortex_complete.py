@@ -281,7 +281,7 @@ def main():
     )
     parser.add_argument('--num-ues', type=int, default=20, help='Number of UEs')
     parser.add_argument('--num-cells', type=int, default=3, help='Number of cells')
-    parser.add_argument('--timesteps', type=int, default=10000, help='Training timesteps')
+    parser.add_argument('--timesteps', type=int, default=3000, help='Training timesteps')
     parser.add_argument('--model-path', type=str, default='models/radio_cortex.pt', help='Model path')
     
     args = parser.parse_args()

@@ -1063,10 +1063,19 @@ main(int argc, char* argv[])
     NS_LOG_INFO("UEs: " << numUes << ", Cells: " << numCells);
     NS_LOG_INFO("Simulation time: " << simTime << "s");
 
+    // Global LTE defaults (must be set before helper creation)
+    Config::SetDefault("ns3::LteHelper::UseIdealRrc", BooleanValue(true));
+    Config::SetDefault("ns3::LteHelper::HandoverAlgorithm",
+                       StringValue("ns3::NoOpHandoverAlgorithm"));
+
     // Create LTE/EPC helpers
     Ptr<LteHelper> lteHelper = CreateObject<LteHelper>();
     Ptr<PointToPointEpcHelper> epcHelper = CreateObject<PointToPointEpcHelper>();
     lteHelper->SetEpcHelper(epcHelper);
+
+    // Stabilize RRC: avoid UE manager asserts from rapid RRC churn
+    lteHelper->SetAttribute("UseIdealRrc", BooleanValue(true));
+    lteHelper->SetHandoverAlgorithmType("ns3::NoOpHandoverAlgorithm");
 
     // Set scheduler (can be changed via E2 RC)
     lteHelper->SetSchedulerType("ns3::PfFfMacScheduler"); // Proportional Fair

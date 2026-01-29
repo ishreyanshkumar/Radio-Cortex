@@ -13,8 +13,7 @@ class ActorCritic(nn.Module):
     """
     
     def __init__(self, state_dim: int, action_dim: int, hidden_dim: int = 256):
-        super().__init__()
-        
+        super().__init__()        
         # Shared feature extractor
         self.feature_net = nn.Sequential(
             nn.Linear(state_dim, hidden_dim),
@@ -78,7 +77,6 @@ class SACAgent(nn.Module):
     
     def __init__(self, state_dim: int, action_dim: int, hidden_dim: int = 256):
         super().__init__()
-        
         # Actor network
         self.actor = nn.Sequential(
             nn.Linear(state_dim, hidden_dim),

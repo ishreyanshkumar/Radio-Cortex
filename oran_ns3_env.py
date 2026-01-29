@@ -115,11 +115,11 @@ class NS3Interface:
                 auto_offset_reset='latest',
                 enable_auto_commit=False,
                 value_deserializer=lambda x: json.loads(x.decode('utf-8')),
-                consumer_timeout_ms=10000  # Non-blocking check
+                consumer_timeout_ms=30000  # Non-blocking check
             )
 
             # Ensure we only consume NEW messages from this point onward
-            self.kafka_consumer.poll(timeout_ms=10000)
+            self.kafka_consumer.poll(timeout_ms=30000)
             partitions = self.kafka_consumer.assignment()
             if partitions:
                 self.kafka_consumer.seek_to_end(*partitions)
@@ -150,7 +150,7 @@ class NS3Interface:
             last_record = None
 
             while True:
-                records = self.kafka_consumer.poll(timeout_ms=10000)
+                records = self.kafka_consumer.poll(timeout_ms=30000)
                 if records:
                     for partition, messages in records.items():
                         if messages:
@@ -176,12 +176,12 @@ class NS3Interface:
                 kpm_data = last_record.value
                 # DEBUG: Print keys from first few reports to verify JSON structure
                 if getattr(self, '_debug_kpm_count', 0) < 5:
-                    print(f"DEBUG: Received KPM keys: {list(kpm_data.keys())} Sample: {kpm_data}")
+                    #print(f"DEBUG: Received KPM keys: {list(kpm_data.keys())} Sample: {kpm_data}")
                     self._debug_kpm_count = getattr(self, '_debug_kpm_count', 0) + 1
                 return self._parse_kpm(kpm_data)
             else:
                 return self._get_default_metrics()
-                
+            
         except Exception as e:
             print(f"Error receiving KPM: {e}")
             return self._get_default_metrics()
@@ -189,7 +189,7 @@ class NS3Interface:
     def _parse_kpm(self, kpm_data):
         # Parse KPM metrics
         ue_metrics = {}
-        print(kpm_data.keys())
+      #  print(kpm_data.keys())
         for ue_id in range(self.config.num_ues):
             ue_metrics[ue_id] = {
                 'throughput': kpm_data.get(f'ue_{ue_id}_tput', 0.0),  # Mbps

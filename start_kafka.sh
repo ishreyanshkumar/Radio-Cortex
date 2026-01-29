@@ -1,8 +1,6 @@
 #!/bin/bash
 
 
-
-
 SCRIPT_DIR=$(cd -- "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 KAFKA_DIR="$SCRIPT_DIR/kafka_2.13-3.6.1"
 LOG_DIR="$SCRIPT_DIR"
