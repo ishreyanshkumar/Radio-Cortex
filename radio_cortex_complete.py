@@ -110,7 +110,7 @@ def train_radio_cortex(
     
     # Create environment
     env = create_oran_env(config)
-    
+  #  print("[debug] env created, about to build PPO trainer")
     # Create trainer
     trainer = PPOTrainer(
         env=env,
@@ -276,12 +276,12 @@ def main():
     parser.add_argument(
         '--mode',
         choices=['train', 'eval', 'demo'],
-        default='demo',
+        default='train',
         help='Operation mode'
     )
     parser.add_argument('--num-ues', type=int, default=20, help='Number of UEs')
     parser.add_argument('--num-cells', type=int, default=3, help='Number of cells')
-    parser.add_argument('--timesteps', type=int, default=100000, help='Training timesteps')
+    parser.add_argument('--timesteps', type=int, default=10000, help='Training timesteps')
     parser.add_argument('--model-path', type=str, default='models/radio_cortex.pt', help='Model path')
     
     args = parser.parse_args()

@@ -134,11 +134,13 @@ class NS3Interface:
         try:
             # Poll for new messages
             # We want the LATEST message for the current step
-            records = self.kafka_consumer.poll(timeout_ms=2000)
+            records = self.kafka_consumer.poll(timeout_ms=100000)
             
             if not records:
                 # No data yet, return defaults or wait?
                 # For training, we need data.
+                print("No KPM data received, returning default metrics")
+                
                 return self._get_default_metrics()
             
             # Get the last message from the partition
@@ -165,6 +167,7 @@ class NS3Interface:
     def _parse_kpm(self, kpm_data):
         # Parse KPM metrics
         ue_metrics = {}
+        print(kpm_data.keys())
         for ue_id in range(self.config.num_ues):
             ue_metrics[ue_id] = {
                 'throughput': kpm_data.get(f'ue_{ue_id}_tput', 0.0),  # Mbps
@@ -374,6 +377,8 @@ class ORANns3Env(gym.Env):
         # UE metrics
         for ue_id in range(self.config.num_ues):
             ue = e2_msg.ue_metrics.get(ue_id, {})
+
+            #print(ue.keys())
             state.extend([
                 ue.get('throughput', 0.0) / 100.0,  # Normalize to ~[0,1]
                 ue.get('delay', 0.0) / 1000.0,      # Normalize ms
@@ -415,8 +420,8 @@ class ORANns3Env(gym.Env):
         if not e2_msg.ue_metrics:
             return 0.0
             
-        # for m in e2_msg.ue_metrics.values():
-        #     print(m)
+        for m in e2_msg.ue_metrics.values():
+            print(m)
         tputs = [m['throughput'] for m in e2_msg.ue_metrics.values()]
         delays = [m['delay'] for m in e2_msg.ue_metrics.values()]
         sinrs = [m['sinr'] for m in e2_msg.ue_metrics.values()]
@@ -438,7 +443,7 @@ class ORANns3Env(gym.Env):
         # 4. Fairness bonus
         
         reward = sum_log_tput - (0.1 * avg_delay) + (0.05 * avg_sinr) + (0.5 * fairness)
-        
+        print(f"Reward components: Throughput={sum_log_tput:.3f}, Delay={avg_delay:.3f}, SINR={avg_sinr:.3f}, Fairness={fairness:.3f}, Total Reward={reward:.3f}")
         return float(reward)
     
     def render(self, mode='human'):

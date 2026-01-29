@@ -32,3 +32,9 @@ models/
 # OS specific files
 .DS_Store
 Thumbs.db
+
+
+java-17/
+scratch/
+build/
+start_kafka_sarvesh.sh

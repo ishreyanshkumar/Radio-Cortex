@@ -8,6 +8,7 @@ KAFKA_DIR="kafka_${SCALA_VER}-${KAFKA_VER}"
 URL="https://archive.apache.org/dist/kafka/${KAFKA_VER}/${KAFKA_TGZ}"
 
 # 1. Download if not exists
+sudo apt-get update && sudo apt-get install -y librdkafka-dev
 if [ ! -d "$KAFKA_DIR" ]; then
     echo "Downloading Kafka $KAFKA_VER..."
     if [ ! -f "$KAFKA_TGZ" ]; then

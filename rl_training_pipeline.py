@@ -130,6 +130,7 @@ class PPOTrainer:
         states, actions, rewards, dones, values, log_probs = [], [], [], [], [], []
         
         state, _ = self.env.reset()
+        print(f"[debug] collect_rollout start: num_steps={num_steps}, state_shape={np.shape(state)}")
         
         for step_i in range(num_steps):
             state_tensor = torch.FloatTensor(state).unsqueeze(0).to(self.device)
@@ -186,6 +187,7 @@ class PPOTrainer:
             self.total_steps += 1
             
             if done:
+                print(f"[debug] rollout early done at step {step_i}, total_steps={self.total_steps}")
                 state, _ = self.env.reset()
         
         # Get value of final state for GAE
@@ -219,12 +221,15 @@ class PPOTrainer:
         
         dataset_size = states.shape[0]
         
+        print(f"[debug] update_policy: dataset_size={dataset_size}, num_epochs={num_epochs}, batch_size={batch_size}")
         for epoch in range(num_epochs):
             indices = torch.randperm(dataset_size)
+            print(f"[debug] update_policy: epoch {epoch+1}/{num_epochs}")
             
             for start in range(0, dataset_size, batch_size):
                 end = start + batch_size
                 idx = indices[start:end]
+                print(f"[debug]   batch rows {start}-{end} (actual {len(idx)})")
                 
                 batch_states = states[idx]
                 batch_actions = actions[idx]
@@ -272,7 +277,7 @@ class PPOTrainer:
         high = self.env.action_space.high
         return low + (action + 1.0) * 0.5 * (high - low)
     
-    def train(self, total_timesteps: int, rollout_steps: int = 2048, log_interval: int = 10):
+    def train(self, total_timesteps: int, rollout_steps: int = 20, log_interval: int = 1):
         """Main training loop"""
         num_updates = total_timesteps // rollout_steps
         
@@ -281,11 +286,13 @@ class PPOTrainer:
         
         for update in range(num_updates):
             # Collect rollout
+            print(f"[debug] train: starting rollout {update+1}/{num_updates}")
             rollout = self.collect_rollout(rollout_steps)
             
             # Update policy
+            print(f"[debug] train: starting policy update for rollout {update+1}")
             metrics = self.update_policy(rollout)
-            
+            print(f"[debug] train: completed policy update for rollout {update+1}")
             # Logging
             if update % log_interval == 0:
                 avg_reward = rollout['returns'].mean().item()
@@ -336,6 +343,7 @@ def evaluate_policy(
         episode_reward = 0
         episode_data = {
             'throughputs': [],
+        
             'delays': [],
             'losses': []
         }
