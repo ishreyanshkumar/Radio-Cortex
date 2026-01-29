@@ -57,6 +57,7 @@ class NS3Interface:
         self.kafka_consumer = None
         self.kafka_producer = None
         self.current_step = 0
+        self.last_kpm_ts = None
         
     def start_simulation(self):
         """Launch ns-3 simulation with O-RAN E2 interface enabled"""
@@ -112,9 +113,17 @@ class NS3Interface:
                 'e2_kpm_stream',
                 bootstrap_servers=['localhost:9092'],
                 auto_offset_reset='latest',
+                enable_auto_commit=False,
                 value_deserializer=lambda x: json.loads(x.decode('utf-8')),
-                consumer_timeout_ms=1000  # Non-blocking check
+                consumer_timeout_ms=10000  # Non-blocking check
             )
+
+            # Ensure we only consume NEW messages from this point onward
+            self.kafka_consumer.poll(timeout_ms=10000)
+            partitions = self.kafka_consumer.assignment()
+            if partitions:
+                self.kafka_consumer.seek_to_end(*partitions)
+            self.last_kpm_ts = None
             
             self.kafka_producer = KafkaProducer(
                 bootstrap_servers=['localhost:9092'],
@@ -126,7 +135,7 @@ class NS3Interface:
             print(f"✗ Failed to connect to Kafka: {e}")
             raise
     
-    def receive_kpm_report(self) -> E2Message:
+    def receive_kpm_report(self, wait_for_new: bool = True, max_wait_s: Optional[float] = None) -> E2Message:
         """
         Receive E2SM-KPM report from Kafka ('e2_kpm_stream')
         Returns current network state metrics
@@ -134,7 +143,26 @@ class NS3Interface:
         try:
             # Poll for new messages
             # We want the LATEST message for the current step
-            records = self.kafka_consumer.poll(timeout_ms=100000)
+            if max_wait_s is None:
+                max_wait_s = max(1.0, (self.config.kpm_interval_ms / 1000.0) * 2)
+
+            deadline = time.time() + max_wait_s
+            last_record = None
+
+            while True:
+                records = self.kafka_consumer.poll(timeout_ms=10000)
+                if records:
+                    for partition, messages in records.items():
+                        if messages:
+                            candidate = messages[-1]
+                            if self.last_kpm_ts is None or candidate.timestamp > self.last_kpm_ts:
+                                last_record = candidate
+
+                    if last_record is not None:
+                        break
+
+                if not wait_for_new or time.time() >= deadline:
+                    break
             
             if not records:
                 # No data yet, return defaults or wait?
@@ -143,14 +171,8 @@ class NS3Interface:
                 
                 return self._get_default_metrics()
             
-            # Get the last message from the partition
-            # Assuming one partition for simplicity
-            last_record = None
-            for partition, messages in records.items():
-                if messages:
-                    last_record = messages[-1]
-            
             if last_record:
+                self.last_kpm_ts = last_record.timestamp
                 kpm_data = last_record.value
                 # DEBUG: Print keys from first few reports to verify JSON structure
                 if getattr(self, '_debug_kpm_count', 0) < 5:
@@ -174,6 +196,9 @@ class NS3Interface:
                 'delay': kpm_data.get(f'ue_{ue_id}_delay', 0.0),  # ms
                 'packet_loss': kpm_data.get(f'ue_{ue_id}_loss', 0.0),  # ratio
                 'sinr': kpm_data.get(f'ue_{ue_id}_sinr', 0.0),  # dB
+                'rsrp': kpm_data.get(f'ue_{ue_id}_rsrp', -140.0),  # dBm
+                'rsrq': kpm_data.get(f'ue_{ue_id}_rsrq', -20.0),  # dB
+                'ul_rbs': kpm_data.get(f'ue_{ue_id}_ul_rbs', 0.0),  # avg RBs
                 'rb_allocated': kpm_data.get(f'ue_{ue_id}_rbs', 0),
             }
         
@@ -214,7 +239,8 @@ class NS3Interface:
         """Fallback metrics if E2 connection fails"""
         return E2Message(
             timestamp=time.time(),
-            ue_metrics={i: {'throughput': 0, 'delay': 0, 'packet_loss': 0, 'sinr': -10, 'rb_allocated': 0} 
+            ue_metrics={i: {'throughput': 0, 'delay': 0, 'packet_loss': 0, 'sinr': -10,
+                            'rsrp': -140, 'rsrq': -20, 'ul_rbs': 0.0, 'rb_allocated': 0}
                        for i in range(self.config.num_ues)},
             cell_metrics={i: {'queue_length': 0, 'rb_utilization': 0, 'tx_power': 23, 'num_connected_ues': 0}
                          for i in range(self.config.num_cells)}
@@ -254,9 +280,9 @@ class ORANns3Env(gym.Env):
         self.ns3 = NS3Interface(self.config)
         
         # State space: flattened network metrics
-        # [per-UE: throughput, delay, loss, sinr] + [per-cell: queue, rb_util, power]
+        # [per-UE: throughput, delay, loss, sinr, rsrp, rsrq, ul_rbs] + [per-cell: queue, rb_util, power]
         state_dim = (
-            self.config.num_ues * 4 +  # UE metrics
+            self.config.num_ues * 7 +  # UE metrics
             self.config.num_cells * 3   # Cell metrics
         )
         self.observation_space = spaces.Box(
@@ -266,20 +292,24 @@ class ORANns3Env(gym.Env):
             dtype=np.float32
         )
         
-        # Action space: per-cell control parameters (from Table 1)
-        # [tx_power, scheduler_type, max_harq_tx, handover_hysteresis]
+        # Action space: per-cell control parameters
+        # [tx_power, scheduler_type, max_harq_tx, handover_hysteresis, mac_ch_delay, noise_figure]
         self.action_space = spaces.Box(
             low=np.array([
                 10.0,  # TxPower min (dBm)
                 0.0,   # SchedulerType (discrete, normalized)
                 1.0,   # MaxHarqTx min
                 0.0,   # Hysteresis min (dB)
+                0.0,   # MacChDelay min (TTIs)
+                0.0,   # NoiseFigure min (dB)
             ] * self.config.num_cells),
             high=np.array([
                 46.0,  # TxPower max
                 2.0,   # SchedulerType max
                 8.0,   # MaxHarqTx max
                 6.0,   # Hysteresis max
+                10.0,  # MacChDelay max (TTIs)
+                10.0,  # NoiseFigure max (dB)
             ] * self.config.num_cells),
             dtype=np.float32
         )
@@ -306,7 +336,7 @@ class ORANns3Env(gym.Env):
         
         # Get initial state
         time.sleep(0.1)  # Wait for first KPM report
-        e2_msg = self.ns3.receive_kpm_report()
+        e2_msg = self.ns3.receive_kpm_report(wait_for_new=False)
         state = self._extract_state(e2_msg)
         
         self.current_step = 0
@@ -341,9 +371,9 @@ class ORANns3Env(gym.Env):
         
         # Wait for next KPM interval
         time.sleep(self.config.kpm_interval_ms / 1000.0)
-        
-        # Receive new state from E2SM-KPM
-        e2_msg = self.ns3.receive_kpm_report()
+
+        # Receive new state from E2SM-KPM (synchronized to newest Kafka record)
+        e2_msg = self.ns3.receive_kpm_report(wait_for_new=True, max_wait_s=(self.config.kpm_interval_ms / 1000.0) * 2)
         next_state = self._extract_state(e2_msg)
         
         # Calculate reward
@@ -384,6 +414,9 @@ class ORANns3Env(gym.Env):
                 ue.get('delay', 0.0) / 1000.0,      # Normalize ms
                 ue.get('packet_loss', 0.0),         # Already ratio
                 (ue.get('sinr', 0.0) + 10) / 40.0,  # Normalize SINR [-10,30]dB
+                (ue.get('rsrp', -140.0) + 140.0) / 100.0,  # RSRP [-140,-40] dBm
+                (ue.get('rsrq', -20.0) + 20.0) / 20.0,     # RSRQ [-20,0] dB
+                ue.get('ul_rbs', 0.0) / 100.0,       # Normalize avg UL RBs
             ])
         
         # Cell metrics
@@ -402,12 +435,14 @@ class ORANns3Env(gym.Env):
         rc_actions = {}
         
         for cell_id in range(self.config.num_cells):
-            idx = cell_id * 4
+            idx = cell_id * 6
             rc_actions[f'cell_{cell_id}'] = {
                 'TxPower': float(action[idx]),
                 'SchedulerType': SchedulerType(int(action[idx + 1])).name,
                 'MaxHarqTx': int(action[idx + 2]),
                 'Hysteresis': float(action[idx + 3]),
+                'MacChDelay': float(action[idx + 4]),
+                'NoiseFigure': float(action[idx + 5]),
             }
         return rc_actions
     

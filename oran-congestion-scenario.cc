@@ -55,6 +55,12 @@ struct UeMetricAccumulator
     double sumLatency{0.0}; // milliseconds
     double sumSinr{0.0};    // linear
     uint32_t sinrSamples{0};
+    double sumRsrp{0.0}; // dBm
+    uint32_t rsrpSamples{0};
+    double sumRsrq{0.0}; // dB
+    uint32_t rsrqSamples{0};
+    uint32_t ulRbCountSum{0};
+    uint32_t ulRbSamples{0};
     uint32_t packetsLost{0};
     uint64_t rbsAllocated{0}; // Estimated
 
@@ -65,6 +71,12 @@ struct UeMetricAccumulator
         sumLatency = 0.0;
         sumSinr = 0.0;
         sinrSamples = 0;
+        sumRsrp = 0.0;
+        rsrpSamples = 0;
+        sumRsrq = 0.0;
+        rsrqSamples = 0;
+        ulRbCountSum = 0;
+        ulRbSamples = 0;
         packetsLost = 0;
         rbsAllocated = 0;
     }
@@ -86,6 +98,13 @@ class MetricCollector : public SimpleRefCount<MetricCollector>
                       double rsrp,
                       double sinr,
                       uint8_t componentCarrierId);
+    void ReportUeMeasurements(uint16_t rnti,
+                              uint16_t cellId,
+                              double rsrp,
+                              double rsrq,
+                              bool isServingCell,
+                              uint8_t componentCarrierId);
+    void ReportUlPhyResourceBlocks(uint16_t rnti, const std::vector<int>& rbs);
     void ReportDlScheduling(DlSchedulingCallbackInfo info);
     void ReportAppRx(uint32_t ueIndex, Ptr<const Packet> packet);
     // void ReportUeRxPdu(uint16_t rnti, uint32_t pduLen, uint64_t delayNs);
@@ -177,6 +196,12 @@ MetricCollector::RegisterUeTraces(NodeContainer ues)
                     phy->TraceConnectWithoutContext(
                         "ReportCurrentCellRsrpSinr",
                         MakeCallback(&MetricCollector::ReportUeSinr, this));
+                    phy->TraceConnectWithoutContext(
+                        "ReportUeMeasurements",
+                        MakeCallback(&MetricCollector::ReportUeMeasurements, this));
+                    phy->TraceConnectWithoutContext(
+                        "ReportUlPhyResourceBlocks",
+                        MakeCallback(&MetricCollector::ReportUlPhyResourceBlocks, this));
                 }
             }
         }
@@ -228,6 +253,46 @@ MetricCollector::ReportUeSinr(uint16_t cellId,
     m_ueMetrics[ueIndex].sumSinr += sinr;
     m_ueMetrics[ueIndex].sinrSamples++;
     // Debug log for verification (rarely needed, high volume)
+}
+
+void
+MetricCollector::ReportUeMeasurements(uint16_t rnti,
+                                      uint16_t cellId,
+                                      double rsrp,
+                                      double rsrq,
+                                      bool isServingCell,
+                                      uint8_t componentCarrierId)
+{
+    if (!isServingCell)
+    {
+        return;
+    }
+
+    std::lock_guard<std::mutex> lock(m_mutex);
+    auto it = m_rntiToUeIndex.find(rnti);
+    if (it == m_rntiToUeIndex.end())
+    {
+        return;
+    }
+    uint32_t ueIndex = it->second;
+    m_ueMetrics[ueIndex].sumRsrp += rsrp;
+    m_ueMetrics[ueIndex].rsrpSamples++;
+    m_ueMetrics[ueIndex].sumRsrq += rsrq;
+    m_ueMetrics[ueIndex].rsrqSamples++;
+}
+
+void
+MetricCollector::ReportUlPhyResourceBlocks(uint16_t rnti, const std::vector<int>& rbs)
+{
+    std::lock_guard<std::mutex> lock(m_mutex);
+    auto it = m_rntiToUeIndex.find(rnti);
+    if (it == m_rntiToUeIndex.end())
+    {
+        return;
+    }
+    uint32_t ueIndex = it->second;
+    m_ueMetrics[ueIndex].ulRbCountSum += static_cast<uint32_t>(rbs.size());
+    m_ueMetrics[ueIndex].ulRbSamples++;
 }
 
 void
@@ -358,6 +423,9 @@ class E2InterfaceManager : public SimpleRefCount<E2InterfaceManager>
         double delayDl;
         double packetLoss;
         double sinr;
+        double rsrp;
+        double rsrq;
+        double ulRbAvg;
         uint32_t rbAllocated;
     };
 
@@ -561,6 +629,9 @@ E2InterfaceManager::CollectUeMetrics()
         ueMetric.delayDl = 0.0;
         ueMetric.packetLoss = 0.0;
         ueMetric.rbAllocated = 0;
+        ueMetric.rsrp = -140.0;
+        ueMetric.rsrq = -20.0;
+        ueMetric.ulRbAvg = 0.0;
 
         if (realMetrics.count(i))
         {
@@ -568,6 +639,18 @@ E2InterfaceManager::CollectUeMetrics()
             if (acc.sinrSamples > 0)
             {
                 ueMetric.sinr = 10 * log10(acc.sumSinr / acc.sinrSamples);
+            }
+            if (acc.rsrpSamples > 0)
+            {
+                ueMetric.rsrp = acc.sumRsrp / acc.rsrpSamples;
+            }
+            if (acc.rsrqSamples > 0)
+            {
+                ueMetric.rsrq = acc.sumRsrq / acc.rsrqSamples;
+            }
+            if (acc.ulRbSamples > 0)
+            {
+                ueMetric.ulRbAvg = static_cast<double>(acc.ulRbCountSum) / acc.ulRbSamples;
             }
             // Convert Bytes to Mbps (interval is important)
             double intervalSec = m_kpmInterval.GetSeconds();
@@ -641,6 +724,9 @@ E2InterfaceManager::SendKpmReport()
         kpmJson << "\"ue_" << ueId << "_delay\":" << metrics.delayDl << ",";
         kpmJson << "\"ue_" << ueId << "_loss\":" << metrics.packetLoss << ",";
         kpmJson << "\"ue_" << ueId << "_sinr\":" << metrics.sinr << ",";
+        kpmJson << "\"ue_" << ueId << "_rsrp\":" << metrics.rsrp << ",";
+        kpmJson << "\"ue_" << ueId << "_rsrq\":" << metrics.rsrq << ",";
+        kpmJson << "\"ue_" << ueId << "_ul_rbs\":" << metrics.ulRbAvg << ",";
         kpmJson << "\"ue_" << ueId << "_rbs\":" << metrics.rbAllocated << ",";
     }
 
@@ -702,18 +788,14 @@ E2InterfaceManager::ProcessRcCommand(std::string command)
         size_t cellPos = command.find(cellKey);
         if (cellPos != std::string::npos)
         {
-            // Look for TxPower after cell key
-            size_t txPowerPos = command.find("\"TxPower\":", cellPos);
-            if (txPowerPos != std::string::npos)
-            {
-                // Check if this TxPower belongs to this cell (sanity check, next char
-                // should be number) Ideally we check if it's before the next cell key,
-                // but simplified logic: Find "TxPower" closer to this cellKey than any
-                // other cellKey? "TxPower" position should be > cellPos
+            auto parseValue = [&](const std::string& key, double& outValue) -> bool {
+                size_t keyPos = command.find(key, cellPos);
+                if (keyPos == std::string::npos)
+                {
+                    return false;
+                }
 
-                // Extract value
-                size_t valStart = txPowerPos + 10; // len("\"TxPower\":")
-                // Skip whitespace
+                size_t valStart = keyPos + key.size();
                 while (valStart < command.length() &&
                        (command[valStart] == ' ' || command[valStart] == '\t'))
                 {
@@ -727,31 +809,50 @@ E2InterfaceManager::ProcessRcCommand(std::string command)
                     valEnd++;
                 }
 
-                if (valEnd > valStart)
+                if (valEnd <= valStart)
                 {
-                    std::string valStr = command.substr(valStart, valEnd - valStart);
-                    try
-                    {
-                        double txPower = std::stod(valStr);
-
-                        // Apply to eNB
-                        Ptr<Node> enbNode = m_enbNodes.Get(i);
-                        Ptr<LteEnbNetDevice> dev =
-                            enbNode->GetDevice(0)->GetObject<LteEnbNetDevice>();
-                        if (dev)
-                        {
-                            // VERIFY: Prove Control Loop is Closed (RL -> ns-3)
-                            // std::cout << "VERIFY: RC_CONTROL Cell=" << i
-                            //           << " NewTxPower=" << txPower << " dBm" << std::endl;
-                            dev->GetPhy()->SetTxPower(txPower);
-                            NS_LOG_INFO("Set Cell " << i << " TxPower to " << txPower << " dBm");
-                        }
-                    }
-                    catch (...)
-                    {
-                        NS_LOG_WARN("Failed to parse TxPower value: " << valStr);
-                    }
+                    return false;
                 }
+
+                std::string valStr = command.substr(valStart, valEnd - valStart);
+                try
+                {
+                    outValue = std::stod(valStr);
+                    return true;
+                }
+                catch (...)
+                {
+                    NS_LOG_WARN("Failed to parse value for " << key << ": " << valStr);
+                    return false;
+                }
+            };
+
+            Ptr<Node> enbNode = m_enbNodes.Get(i);
+            Ptr<LteEnbNetDevice> dev = enbNode->GetDevice(0)->GetObject<LteEnbNetDevice>();
+            if (!dev)
+            {
+                continue;
+            }
+
+            double txPower = 0.0;
+            if (parseValue("\"TxPower\":", txPower))
+            {
+                dev->GetPhy()->SetTxPower(txPower);
+                NS_LOG_INFO("Set Cell " << i << " TxPower to " << txPower << " dBm");
+            }
+
+            double macChDelay = 0.0;
+            if (parseValue("\"MacChDelay\":", macChDelay))
+            {
+                dev->GetPhy()->SetMacChDelay(static_cast<uint8_t>(macChDelay));
+                NS_LOG_INFO("Set Cell " << i << " MacChDelay to " << macChDelay << " TTIs");
+            }
+
+            double noiseFigure = 0.0;
+            if (parseValue("\"NoiseFigure\":", noiseFigure))
+            {
+                dev->GetPhy()->SetNoiseFigure(noiseFigure);
+                NS_LOG_INFO("Set Cell " << i << " NoiseFigure to " << noiseFigure << " dB");
             }
         }
     }
