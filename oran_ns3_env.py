@@ -390,12 +390,18 @@ class ORANns3Env(gym.Env):
         
         self.current_step += 1
         terminated = self.current_step >= self.max_steps
+
+        # If ns-3 simulation has ended, terminate the episode immediately
+        if self.ns3.ns3_process and self.ns3.ns3_process.poll() is not None:
+            terminated = True
         truncated = False
         
+        ns3_finished = bool(self.ns3.ns3_process and self.ns3.ns3_process.poll() is not None)
         info = {
             'step': self.current_step,
             'e2_metrics': e2_msg,
-            'actions_applied': rc_actions
+            'actions_applied': rc_actions,
+            'ns3_finished': ns3_finished
         }
         
         return next_state, reward, terminated, truncated, info

@@ -15,6 +15,7 @@ import json
 from pathlib import Path
 from datetime import datetime
 import dataclasses
+import torch
 
 
 # ============================================================================
@@ -163,14 +164,29 @@ class PPOTrainer:
                     'step': self.total_steps,
                     'timestamp': datetime.now().isoformat(),
                     'reward': float(reward),
-                    'action': action_denorm.tolist(),
+                    'action': [float(x) for x in action_denorm.tolist()],
                     'metrics': {
                         'ue': e2_metrics.ue_metrics if e2_metrics else {},
                         'cell': e2_metrics.cell_metrics if e2_metrics else {}
                     }
                 }
+                # Use custom default to handle numpy/torch types
+                def _json_default(o):
+                    try:
+                        import numpy as _np
+                        import torch as _torch
+                        if isinstance(o, (_np.floating, _np.integer)):
+                            return o.item()
+                        if isinstance(o, _np.ndarray):
+                            return o.tolist()
+                        if isinstance(o, _torch.Tensor):
+                            return o.detach().cpu().numpy().tolist()
+                    except Exception:
+                        pass
+                    return str(o)
+
                 with open(self.log_file, 'a') as f:
-                    f.write(json.dumps(log_entry) + "\n")
+                    f.write(json.dumps(log_entry, default=_json_default) + "\n")
             except Exception as e:
                 print(f"Logging error: {e}")
 

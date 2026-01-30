@@ -92,7 +92,7 @@ class RadioCortexAgent:
 
 def train_radio_cortex(
     config: NS3Config,
-    total_timesteps: int = 100000,
+    total_timesteps: int = 10000,
     save_path: str = 'models/radio_cortex.pt'
 ):
     """
