@@ -88,14 +88,24 @@ Implements the PPO algorithm from scratch using PyTorch.
 
 ### 4. `neural_networks.py`
 **Role:** Neural Network Architectures.
-Contains the PyTorch definitions for the RL agents, separated to allow easy swapping of architectures (e.g., replacing MLPs with Transformers).
+Contains the PyTorch definitions for the RL agents.
 
 *   **`ActorCritic`**: The default PPO network.
     *   `Actor`: Maps state -> action (Gaussian distribution).
     *   `Critic`: Maps state -> value estimate.
-*   **`SACAgent`**: Soft Actor-Critic network implementation.
 
-### 5. `oran-congestion-scenario.cc`
+### 5. `interpret_policy.py`
+**Role:** Model Interpretability.
+Computes saliency maps (gradient * input) to understand which state features (e.g., UE throughput, Cell queue) influence the agent's decisions the most.
+
+*   `_saliency()`: Backpropagates from the action mean to the input state.
+*   usage: `python interpret_policy.py --checkpoint models/radio_cortex.pt`
+
+### 6. `quick_train.py`
+**Role:** Fast Verification (Mock).
+Trains a tiny PPO agent on a mock environment (no ns-3, no Kafka) to verify the RL pipeline implementation quickly (seconds vs hours).
+
+### 7. `oran-congestion-scenario.cc`
 **Role:** ns-3 Simulation Scenario (C++).
 The "Digital Twin" of the RAN. Implements the LTE/5G network, traffic generation, and E2 interface.
 
