@@ -93,7 +93,10 @@ class RadioCortexAgent:
 def train_radio_cortex(
     config: NS3Config,
     total_timesteps: int = 10000,
-    save_path: str = 'models/radio_cortex.pt'
+    save_path: str = 'models/radio_cortex.pt',
+    lr: float = 3e-4,
+    gamma: float = 0.99,
+    batch_size: int = 64
 ):
     """
     Train Radio-Cortex agent
@@ -106,6 +109,7 @@ def train_radio_cortex(
     """
     print("="*60)
     print("TRAINING RADIO-CORTEX")
+    print(f"LR: {lr}, Gamma: {gamma}, Batch: {batch_size}")
     print("="*60)
     
     # Create environment
@@ -115,8 +119,8 @@ def train_radio_cortex(
     trainer = PPOTrainer(
         env=env,
         hidden_dim=256,
-        lr=3e-4,
-        gamma=0.99,
+        lr=lr,
+        gamma=gamma,
         clip_epsilon=0.2
     )
     
@@ -125,7 +129,8 @@ def train_radio_cortex(
     trainer.train(
         total_timesteps=total_timesteps,
         rollout_steps=2048,
-        log_interval=5
+        log_interval=5,
+        batch_size=batch_size
     )
     
     # Save
@@ -279,12 +284,33 @@ def main():
         default='train',
         help='Operation mode'
     )
+    # Environment configs
     parser.add_argument('--num-ues', type=int, default=20, help='Number of UEs')
     parser.add_argument('--num-cells', type=int, default=3, help='Number of cells')
-    parser.add_argument('--timesteps', type=int, default=3000, help='Training timesteps')
-    parser.add_argument('--model-path', type=str, default='models/radio_cortex.pt', help='Model path')
+    parser.add_argument('--scenario', type=str, default='flash_crowd', help='ns-3 Scenario (flash_crowd, mobility_storm)')
     
+    # Training configs
+    parser.add_argument('--timesteps', type=int, default=10000, help='Training timesteps')
+    parser.add_argument('--model-path', type=str, default='models/radio_cortex.pt', help='Model save path')
+    parser.add_argument('--learning-rate', type=float, default=3e-4, help='Learning rate')
+    parser.add_argument('--gamma', type=float, default=0.99, help='Discount factor')
+    parser.add_argument('--batch-size', type=int, default=64, help='Batch size for optimization')
+    parser.add_argument('--config', type=str, default=None, help='Path to JSON config file to override arguments')
+
     args = parser.parse_args()
+
+    # Load config file if provided
+    if args.config:
+        try:
+            with open(args.config, 'r') as f:
+                config_args = json.load(f)
+                for key, value in config_args.items():
+                    if hasattr(args, key):
+                        setattr(args, key, value)
+            print(f"Loaded configuration from {args.config}")
+        except FileNotFoundError:
+            print(f"Warning: Config file {args.config} not found.")
+
     
     # Configuration
     config = NS3Config(
@@ -292,7 +318,8 @@ def main():
         num_cells=args.num_cells,
         sim_time=10.0,
         kpm_interval_ms=100,
-        seed=42
+        seed=42,
+        scenario=args.scenario
     )
     
     # Execute mode
@@ -300,7 +327,10 @@ def main():
         trainer = train_radio_cortex(
             config=config,
             total_timesteps=args.timesteps,
-            save_path=args.model_path
+            save_path=args.model_path,
+            lr=args.learning_rate,
+            gamma=args.gamma,
+            batch_size=args.batch_size
         )
     
     elif args.mode == 'eval':

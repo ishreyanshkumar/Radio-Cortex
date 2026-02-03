@@ -1,7 +1,6 @@
-
 # Radio-Cortex: O-RAN RL Congestion Control
 
-Radio-Cortex is a closed-loop control system that uses Reinforcement Learning (RL) to optimize network parameters (Tx Power) in an O-RAN compliant ns-3 simulation. It demonstrates a real-time feedback loop where an RL agent (PPO) receives KPM (Key Performance Metrics) from ns-3 via Kafka and sends back RC (RAN Control) actions.
+Radio-Cortex is a closed-loop control system that uses Reinforcement Learning (RL) to optimize network parameters (Tx Power, Schedulers) in an O-RAN compliant ns-3 simulation. It demonstrates a real-time feedback loop where an RL agent (PPO) receives KPM (Key Performance Metrics) from ns-3 via Kafka and sends back RC (RAN Control) actions.
 
 ## 🚀 Quick Start
 
@@ -11,39 +10,90 @@ Radio-Cortex is a closed-loop control system that uses Reinforcement Learning (R
 - ns-3 (v3.46.1) with dependent modules
 - Apache Kafka (v3.6.1)
 
-### 2. Configure Simulation
-Link the congestion scenario to the ns-3 scratch directory so it can be compiled.
+### 2. Installation
 ```bash
-# From project root
-cd ns-allinone-3.46.1/ns-3.46.1/scratch
-ln -s ../../../oran-congestion-scenario.cc .
-cd ../../..
-```
+# 1. Install Python dependencies
+pip install numpy torch gymnasium kafka-python
 
-### 3. Build ns-3
-Compile the C++ simulation scenario.
-```bash
+# 2. Build ns-3
 cd ns-allinone-3.46.1/ns-3.46.1
 ./ns3 build
 cd ../..
+
+# 3. Link Simulation Scenario
+cd ns-allinone-3.46.1/ns-3.46.1/scratch
+ln -sf ../../../oran-congestion-scenario.cc .
+cd ../../..
 ```
 
-### 3. Start Kafka
-Start Zookeeper and Kafka brokers using the provided script.
+### 3. Running the Training
+The training pipeline is managed by `radio_cortex_complete.py`. It requires Kafka to be running.
+
 ```bash
+# 1. Start Kafka (in a separate terminal or background)
 ./start_kafka.sh
-```
 
-### 4. Stop Kafka
-Stop the background processes when finished.
-```bash
-./stop_kafka.sh
-```
-
-### 5. Run Training
-Start the RL training loop. This launches the Python agent, which in turn spawns the ns-3 simulation process.
-```bash
+# 2. Run Training (Standard)
 python3 radio_cortex_complete.py --mode train
+```
+
+This commands automatically:
+1.  Launches the ns-3 simulation subprocess.
+2.  Connects to the Kafka E2 interface.
+3.  Trains the PPO agent.
+4.  Saves models to `models/`.
+
+---
+
+## 🎮 Usage & Workflows
+
+### advanced Training Configuration
+You can customize the training hyperparameters and environment settings via command-line arguments.
+
+| Argument | Default | Description |
+|:---|:---|:---|
+| `--num-ues` | 20 | Number of User Equipments (UEs) |
+| `--num-cells` | 3 | Number of cells (eNodeBs) |
+| `--timesteps` | 10000 | Total training timesteps |
+| `--learning-rate` | 3e-4 | Learning rate for PPO |
+| `--batch-size` | 64 | Batch size for optimization |
+| `--gamma` | 0.99 | Discount factor |
+| `--scenario` | flash_crowd | Simulation scenario (flash_crowd, mobility_storm) |
+| `--config` | None | Path to JSON config file to override args |
+
+**Examples:**
+
+**Challenging Scenario:**
+```bash
+python3 radio_cortex_complete.py --mode train --num-ues 50 --num-cells 10 --scenario mobility_storm
+```
+
+**Hyperparameter Tuning:**
+```bash
+python3 radio_cortex_complete.py --mode train --learning-rate 0.0001 --gamma 0.995 --batch-size 128
+```
+
+**Using a Config File:**
+```bash
+python3 radio_cortex_complete.py --mode train --config experiments/exp1_config.json
+```
+
+### Evaluation
+Evaluate a trained model against baselines.
+```bash
+python3 radio_cortex_complete.py --mode eval --model-path models/radio_cortex.pt
+```
+
+### Quick Logic Verification
+To test the RL pipeline without the overhead of the full ns-3 simulation (no Kafka required):
+```bash
+python3 quick_train.py
+```
+
+### Interpretability
+Understand which input features (e.g., Queue Length vs Throughput) drove the agent's decisions.
+```bash
+python3 interpret_policy.py --checkpoint models/radio_cortex.pt
 ```
 
 ---
@@ -176,3 +226,86 @@ graph TD
     class PYTHON_AGENT,Gym,PPO_ALG,Agent,Model python;
     class KAFKA,Topic_KPM,Topic_RC kafka;
 ```
+
+---
+
+## 🐛 Troubleshooting
+
+### "Failed to connect to Kafka"
+-   Ensure you ran `./start_kafka.sh`.
+-   Check logs: `cat kafka.log` or `cat zookeeper.log`.
+-   Verify ports: `netstat -tuln | grep 9092`
+
+### "No KPM data received"
+-   Wait a few seconds for ns-3 to initialize.
+-   Check `ns3.log` (created in project root) to see if the simulation crashed.
+-   Ensure `oran-congestion-scenario` compiled successfully.
+
+### Monitoring
+Watch training progress in real-time:
+```bash
+tail -f action_logs.jsonl
+```
+
+---
+
+## 📊 Monitoring & Analysis
+
+### 1. Plot Training Metrics
+You can plot the training progress (rewards, throughput) using this Python script. It reads from `action_logs.jsonl`.
+```python
+import json
+import matplotlib.pyplot as plt
+
+with open('action_logs.jsonl') as f:
+    # Read line by line
+    data = [json.loads(line) for line in f]
+
+rewards = [d['reward'] for d in data]
+steps = [d['step'] for d in data]
+
+plt.figure(figsize=(10, 5))
+plt.plot(steps, rewards)
+plt.xlabel('Steps')
+plt.ylabel('Reward')
+plt.title('Training Progress')
+plt.savefig('training_plot.png')
+print("Saved training_plot.png")
+```
+
+### 2. View Summary Stats
+Quickly check the average metrics from the logs:
+```bash
+python3 -c "import json; import numpy as np; 
+data = [json.loads(l) for l in open('action_logs.jsonl')]; 
+print(f'Mean Reward: {np.mean([d[\"reward\"] for d in data]):.4f}')"
+```
+
+---
+
+## 🔬 Advanced Workflows
+
+### Curriculum Learning Loop
+Train on progressively harder scenarios (Small -> Medium -> Large network).
+
+```bash
+# Stage 1: Small Network
+python3 radio_cortex_complete.py --mode train --num-ues 5 --num-cells 2 --timesteps 5000 --model-path models/stage1.pt
+
+# Stage 2: Medium Network (Load Stage 1 model?? - currently training from scratch)
+# To implement true curriculum, you'd load the previous model.
+python3 radio_cortex_complete.py --mode train --num-ues 20 --num-cells 3 --timesteps 10000 --model-path models/stage2.pt
+
+# Stage 3: Large Network
+python3 radio_cortex_complete.py --mode train --num-ues 40 --num-cells 5 --timesteps 20000 --model-path models/stage3.pt
+```
+
+### Batch Experiments (Bash Loop)
+Run multiple experiments with different learning rates.
+```bash
+for lr in 0.0001 0.0003 0.001; do
+    echo "Training with LR=$lr"
+    python3 radio_cortex_complete.py --mode train --learning-rate $lr --model-path models/lr_${lr}.pt
+done
+```
+

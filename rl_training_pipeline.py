@@ -293,7 +293,7 @@ class PPOTrainer:
         high = self.env.action_space.high
         return low + (action + 1.0) * 0.5 * (high - low)
     
-    def train(self, total_timesteps: int, rollout_steps: int = 20, log_interval: int = 1):
+    def train(self, total_timesteps: int, rollout_steps: int = 20, log_interval: int = 1, batch_size: int = 64):
         """Main training loop"""
         num_updates = total_timesteps // rollout_steps
         
@@ -307,7 +307,7 @@ class PPOTrainer:
             
             # Update policy
             print(f"[debug] train: starting policy update for rollout {update+1}")
-            metrics = self.update_policy(rollout)
+            metrics = self.update_policy(rollout, batch_size=batch_size)
             print(f"[debug] train: completed policy update for rollout {update+1}")
             # Logging
             if update % log_interval == 0:
