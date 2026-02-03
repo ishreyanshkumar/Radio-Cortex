@@ -200,6 +200,10 @@ class NS3Interface:
                 'rsrq': kpm_data.get(f'ue_{ue_id}_rsrq', -20.0),  # dB
                 'ul_rbs': kpm_data.get(f'ue_{ue_id}_ul_rbs', 0.0),  # avg RBs
                 'rb_allocated': kpm_data.get(f'ue_{ue_id}_rbs', 0),
+                'cqi': kpm_data.get(f'ue_{ue_id}_cqi', 0.0),
+                'rsrp_var': kpm_data.get(f'ue_{ue_id}_rsrp_var', 0.0),
+                'rsrq_var': kpm_data.get(f'ue_{ue_id}_rsrq_var', 0.0),
+                'buffer_occupancy': kpm_data.get(f'ue_{ue_id}_buffer', 0.0),
             }
         
         cell_metrics = {}
@@ -209,6 +213,8 @@ class NS3Interface:
                 'rb_utilization': kpm_data.get(f'cell_{cell_id}_rb_util', 0.0),
                 'tx_power': kpm_data.get(f'cell_{cell_id}_power', 23.0),  # dBm
                 'num_connected_ues': kpm_data.get(f'cell_{cell_id}_ues', 0),
+                'cell_load': kpm_data.get(f'cell_{cell_id}_load', 0.0),
+                'avg_rb_request': kpm_data.get(f'cell_{cell_id}_avg_rb_req', 0.0),
             }
         
         return E2Message(
@@ -280,10 +286,12 @@ class ORANns3Env(gym.Env):
         self.ns3 = NS3Interface(self.config)
         
         # State space: flattened network metrics
-        # [per-UE: throughput, delay, loss, sinr, rsrp, rsrq, ul_rbs] + [per-cell: queue, rb_util, power]
+        # Per-UE features: throughput, delay, loss, sinr, rsrp, rsrq, ul_rbs,
+        #                rb_allocated, cqi, rsrp_var, rsrq_var, buffer_occupancy  (12 per UE)
+        # Per-cell features: queue_length, rb_utilization, tx_power, cell_load, avg_rb_request (5 per cell)
         state_dim = (
-            self.config.num_ues * 7 +  # UE metrics
-            self.config.num_cells * 3   # Cell metrics
+            self.config.num_ues * 12 +  # UE metrics (expanded)
+            self.config.num_cells * 5    # Cell metrics (expanded)
         )
         self.observation_space = spaces.Box(
             low=-np.inf,
@@ -292,27 +300,36 @@ class ORANns3Env(gym.Env):
             dtype=np.float32
         )
         
-        # Action space: per-cell control parameters
-        # [tx_power, scheduler_type, max_harq_tx, handover_hysteresis, mac_ch_delay, noise_figure]
-        self.action_space = spaces.Box(
-            low=np.array([
-                10.0,  # TxPower min (dBm)
-                0.0,   # SchedulerType (discrete, normalized)
-                1.0,   # MaxHarqTx min
-                0.0,   # Hysteresis min (dB)
-                0.0,   # MacChDelay min (TTIs)
-                0.0,   # NoiseFigure min (dB)
-            ] * self.config.num_cells),
-            high=np.array([
-                46.0,  # TxPower max
-                2.0,   # SchedulerType max
-                8.0,   # MaxHarqTx max
-                6.0,   # Hysteresis max
-                10.0,  # MacChDelay max (TTIs)
-                10.0,  # NoiseFigure max (dB)
-            ] * self.config.num_cells),
-            dtype=np.float32
-        )
+        # Action space: per-cell + per-UE controls
+        # Per-cell: [TxPower, SchedulerType, MaxHarqTx, Hysteresis, MacChDelay, NoiseFigure, SchedulerWeight]
+        # Per-UE: [priority_weight] for each UE
+        per_cell_low = [
+            10.0,  # TxPower min (dBm)
+            0.0,   # SchedulerType (discrete index)
+            1.0,   # MaxHarqTx min
+            0.0,   # Hysteresis min (dB)
+            0.0,   # MacChDelay min (TTIs)
+            0.0,   # NoiseFigure min (dB)
+            0.0,   # SchedulerWeight min
+        ]
+        per_cell_high = [
+            46.0,  # TxPower max
+            2.0,   # SchedulerType max
+            8.0,   # MaxHarqTx max
+            6.0,   # Hysteresis max
+            10.0,  # MacChDelay max (TTIs)
+            10.0,  # NoiseFigure max (dB)
+            5.0,   # SchedulerWeight max
+        ]
+
+        # Per-UE priority weight bounds
+        per_ue_low = [0.0] * self.config.num_ues
+        per_ue_high = [10.0] * self.config.num_ues
+
+        low = np.array(per_cell_low * self.config.num_cells + per_ue_low, dtype=np.float32)
+        high = np.array(per_cell_high * self.config.num_cells + per_ue_high, dtype=np.float32)
+
+        self.action_space = spaces.Box(low=low, high=high, dtype=np.float32)
         
         # Episode tracking
         self.current_step = 0
@@ -415,23 +432,34 @@ class ORANns3Env(gym.Env):
             ue = e2_msg.ue_metrics.get(ue_id, {})
 
             #print(ue.keys())
+            # Map expanded UE features (11 total):
+            # throughput, delay, packet_loss, sinr, rsrp, rsrq,
+            # ul_rbs, rb_allocated, cqi, rsrp_var, rsrq_var, buffer_occupancy
             state.extend([
-                ue.get('throughput', 0.0) / 100.0,  # Normalize to ~[0,1]
-                ue.get('delay', 0.0) / 1000.0,      # Normalize ms
-                ue.get('packet_loss', 0.0),         # Already ratio
-                (ue.get('sinr', 0.0) + 10) / 40.0,  # Normalize SINR [-10,30]dB
-                (ue.get('rsrp', -140.0) + 140.0) / 100.0,  # RSRP [-140,-40] dBm
-                (ue.get('rsrq', -20.0) + 20.0) / 20.0,     # RSRQ [-20,0] dB
-                ue.get('ul_rbs', 0.0) / 100.0,       # Normalize avg UL RBs
+                ue.get('throughput', 0.0) / 100.0,            # Mbps -> ~[0,1]
+                ue.get('delay', 0.0) / 1000.0,                # ms -> seconds
+                ue.get('packet_loss', 0.0),                   # ratio
+                (ue.get('sinr', 0.0) + 10.0) / 40.0,          # SINR normalize [-10,30]
+                (ue.get('rsrp', -140.0) + 140.0) / 100.0,     # RSRP [-140,-40]
+                (ue.get('rsrq', -20.0) + 20.0) / 20.0,        # RSRQ [-20,0]
+                ue.get('ul_rbs', 0.0) / 100.0,               # avg UL RBs
+                ue.get('rb_allocated', 0) / 100.0,           # allocated RBs
+                ue.get('cqi', 0.0) / 15.0,                   # CQI 0-15
+                ue.get('rsrp_var', 0.0) / 50.0,              # variance scaled
+                ue.get('rsrq_var', 0.0) / 50.0,              # variance scaled
+                ue.get('buffer_occupancy', 0.0) / 10000.0,   # bytes scaled
             ])
         
         # Cell metrics
+        # Per-cell features (5 per cell): queue_length, rb_utilization, tx_power, cell_load, avg_rb_request
         for cell_id in range(self.config.num_cells):
             cell = e2_msg.cell_metrics.get(cell_id, {})
             state.extend([
-                cell.get('queue_length', 0) / 1000.0,  # Normalize queue
-                cell.get('rb_utilization', 0.0),       # Already ratio
-                (cell.get('tx_power', 23.0) - 10) / 36.0,  # Normalize power
+                cell.get('queue_length', 0) / 1000.0,          # queue length
+                cell.get('rb_utilization', 0.0),               # ratio
+                (cell.get('tx_power', 23.0) - 10.0) / 36.0,    # normalize tx power
+                cell.get('cell_load', 0.0) / max(1.0, self.config.num_ues),
+                cell.get('avg_rb_request', 0.0) / 100.0,
             ])
         
         return np.array(state, dtype=np.float32)
@@ -441,15 +469,24 @@ class ORANns3Env(gym.Env):
         rc_actions = {}
         
         for cell_id in range(self.config.num_cells):
-            idx = cell_id * 6
+            # action layout per cell: 7 values
+            idx = cell_id * 7
+            sched_type = int(np.clip(int(action[idx + 1]), 0, len(SchedulerType) - 1))
             rc_actions[f'cell_{cell_id}'] = {
                 'TxPower': float(action[idx]),
-                'SchedulerType': SchedulerType(int(action[idx + 1])).name,
-                'MaxHarqTx': int(action[idx + 2]),
+                'SchedulerType': SchedulerType(sched_type).name,
+                'MaxHarqTx': int(np.clip(int(action[idx + 2]), 1, 8)),
                 'Hysteresis': float(action[idx + 3]),
                 'MacChDelay': float(action[idx + 4]),
                 'NoiseFigure': float(action[idx + 5]),
+                'SchedulerWeight': float(action[idx + 6]),
             }
+        # Per-UE priority weights (remaining part of the action vector)
+        base = self.config.num_cells * 7
+        for ue_id in range(self.config.num_ues):
+            rc_actions.setdefault('ues', {})
+            rc_actions['ues'][f'ue_{ue_id}'] = {'priority_weight': float(action[base + ue_id])}
+
         return rc_actions
     
     def _compute_reward(self, e2_msg: E2Message) -> float:

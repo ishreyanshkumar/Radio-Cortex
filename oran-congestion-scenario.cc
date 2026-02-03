@@ -57,8 +57,10 @@ struct UeMetricAccumulator
     uint32_t sinrSamples{0};
     double sumRsrp{0.0}; // dBm
     uint32_t rsrpSamples{0};
+    double sumRsrpSq{0.0};
     double sumRsrq{0.0}; // dB
     uint32_t rsrqSamples{0};
+    double sumRsrqSq{0.0};
     uint32_t ulRbCountSum{0};
     uint32_t ulRbSamples{0};
     uint32_t packetsLost{0};
@@ -73,8 +75,10 @@ struct UeMetricAccumulator
         sinrSamples = 0;
         sumRsrp = 0.0;
         rsrpSamples = 0;
+        sumRsrpSq = 0.0;
         sumRsrq = 0.0;
         rsrqSamples = 0;
+        sumRsrqSq = 0.0;
         ulRbCountSum = 0;
         ulRbSamples = 0;
         packetsLost = 0;
@@ -276,8 +280,10 @@ MetricCollector::ReportUeMeasurements(uint16_t rnti,
     }
     uint32_t ueIndex = it->second;
     m_ueMetrics[ueIndex].sumRsrp += rsrp;
+    m_ueMetrics[ueIndex].sumRsrpSq += rsrp * rsrp;
     m_ueMetrics[ueIndex].rsrpSamples++;
     m_ueMetrics[ueIndex].sumRsrq += rsrq;
+    m_ueMetrics[ueIndex].sumRsrqSq += rsrq * rsrq;
     m_ueMetrics[ueIndex].rsrqSamples++;
 }
 
@@ -427,6 +433,10 @@ class E2InterfaceManager : public SimpleRefCount<E2InterfaceManager>
         double rsrq;
         double ulRbAvg;
         uint32_t rbAllocated;
+        double cqi;
+        double rsrp_var;
+        double rsrq_var;
+        double bufferOccupancy;
     };
 
     struct CellMetrics
@@ -632,6 +642,10 @@ E2InterfaceManager::CollectUeMetrics()
         ueMetric.rsrp = -140.0;
         ueMetric.rsrq = -20.0;
         ueMetric.ulRbAvg = 0.0;
+        ueMetric.cqi = 0.0;
+        ueMetric.rsrp_var = 0.0;
+        ueMetric.rsrq_var = 0.0;
+        ueMetric.bufferOccupancy = 0.0;
 
         if (realMetrics.count(i))
         {
@@ -643,10 +657,26 @@ E2InterfaceManager::CollectUeMetrics()
             if (acc.rsrpSamples > 0)
             {
                 ueMetric.rsrp = acc.sumRsrp / acc.rsrpSamples;
+                double mean = ueMetric.rsrp;
+                double meanSq = acc.sumRsrpSq / acc.rsrpSamples;
+                double var = meanSq - (mean * mean);
+                if (var < 1e-8 || var != var) // tiny or NaN
+                {
+                    var = 0.0;
+                }
+                ueMetric.rsrp_var = var;
             }
             if (acc.rsrqSamples > 0)
             {
                 ueMetric.rsrq = acc.sumRsrq / acc.rsrqSamples;
+                double mean = ueMetric.rsrq;
+                double meanSq = acc.sumRsrqSq / acc.rsrqSamples;
+                double var = meanSq - (mean * mean);
+                if (var < 1e-8 || var != var)
+                {
+                    var = 0.0;
+                }
+                ueMetric.rsrq_var = var;
             }
             if (acc.ulRbSamples > 0)
             {
@@ -662,6 +692,21 @@ E2InterfaceManager::CollectUeMetrics()
             }
             ueMetric.packetLoss = (double)acc.packetsLost;
             ueMetric.rbAllocated = acc.rbsAllocated;
+            // Placeholder buffer occupancy (not directly available); keep zero for now
+            ueMetric.bufferOccupancy = 0.0;
+
+            // Estimate CQI from SINR (simple linear mapping clamped to 0-15)
+            double sinrDb = ueMetric.sinr;
+            int estCqi = static_cast<int>(std::round((sinrDb + 10.0) / 1.5));
+            if (estCqi < 0)
+            {
+                estCqi = 0;
+            }
+            if (estCqi > 15)
+            {
+                estCqi = 15;
+            }
+            ueMetric.cqi = static_cast<double>(estCqi);
         }
 
         metrics[i] = ueMetric;
@@ -728,6 +773,24 @@ E2InterfaceManager::SendKpmReport()
         kpmJson << "\"ue_" << ueId << "_rsrq\":" << metrics.rsrq << ",";
         kpmJson << "\"ue_" << ueId << "_ul_rbs\":" << metrics.ulRbAvg << ",";
         kpmJson << "\"ue_" << ueId << "_rbs\":" << metrics.rbAllocated << ",";
+        kpmJson << "\"ue_" << ueId << "_cqi\":" << metrics.cqi << ",";
+        kpmJson << "\"ue_" << ueId << "_rsrp_var\":" << metrics.rsrp_var << ",";
+        kpmJson << "\"ue_" << ueId << "_rsrq_var\":" << metrics.rsrq_var << ",";
+        kpmJson << "\"ue_" << ueId << "_buffer\":" << metrics.bufferOccupancy << ",";
+    }
+
+    // Prepare per-cell aggregates (avg rb request, load)
+    uint32_t numCells = m_enbNodes.GetN();
+    std::vector<double> sumRbReq(numCells, 0.0);
+    std::vector<uint32_t> countUes(numCells, 0);
+    for (const auto& [ueId, metrics] : ueMetrics)
+    {
+        uint32_t cellId = (numCells > 0) ? (ueId % numCells) : 0;
+        if (cellId < numCells)
+        {
+            sumRbReq[cellId] += static_cast<double>(metrics.rbAllocated);
+            countUes[cellId] += 1;
+        }
     }
 
     // Cell metrics
@@ -736,7 +799,17 @@ E2InterfaceManager::SendKpmReport()
         kpmJson << "\"cell_" << cellId << "_queue\":" << metrics.queueLength << ",";
         kpmJson << "\"cell_" << cellId << "_rb_util\":" << metrics.rbUtilization << ",";
         kpmJson << "\"cell_" << cellId << "_power\":" << metrics.txPower << ",";
-        kpmJson << "\"cell_" << cellId << "_ues\":" << metrics.numConnectedUes;
+        kpmJson << "\"cell_" << cellId << "_ues\":" << metrics.numConnectedUes << ",";
+
+        double avgRbReq = 0.0;
+        if (cellId < sumRbReq.size() && countUes[cellId] > 0)
+        {
+            avgRbReq = sumRbReq[cellId] / static_cast<double>(countUes[cellId]);
+        }
+        double cellLoad = static_cast<double>(countUes[cellId]);
+
+        kpmJson << "\"cell_" << cellId << "_load\":" << cellLoad << ",";
+        kpmJson << "\"cell_" << cellId << "_avg_rb_req\":" << avgRbReq;
 
         if (cellId < cellMetrics.size() - 1)
         {
