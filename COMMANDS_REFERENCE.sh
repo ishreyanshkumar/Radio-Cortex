@@ -3,7 +3,26 @@
 # ORAN RL Training - Common Commands Reference
 
 # ============================================================================
-# SETUP & INSTALLATION
+# [NEW] SYSTEM COMMANDS (radio_cortex_complete.py)
+# ============================================================================
+
+# Install Dependencies (New System)
+pip install numpy torch gymnasium kafka-python
+
+# Start Kafka (Required)
+./start_kafka.sh
+
+# Train Agent (New System - manages ns-3 automatically)
+python3 radio_cortex_complete.py --mode train
+
+# Train with Custom Topology
+python3 radio_cortex_complete.py --mode train --num-ues 30 --num-cells 5
+
+# Fast Verification (Mock environment)
+python3 quick_train.py
+
+# ============================================================================
+# [LEGACY] SETUP & INSTALLATION (Refers to older scripts)
 # ============================================================================
 
 # Install Python dependencies

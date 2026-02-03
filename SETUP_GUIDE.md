@@ -21,7 +21,15 @@
 
 ## ⚡ 5-Minute Setup
 
-### Step 0: Start Kafka (Required)
+### [NEW] Quick Start (Current System)
+The new system uses `radio_cortex_complete.py` and manages ns-3 automatically.
+
+1.  **Start Kafka**: `./start_kafka.sh`
+2.  **Run Training**: `python3 radio_cortex_complete.py --mode train`
+
+---
+
+### [LEGACY] Step 0: Start Kafka (Required)
 The simulation requires a Kafka broker.
 
 **Option A: Using Docker (Recommended)**
