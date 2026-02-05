@@ -96,7 +96,16 @@ def train_radio_cortex(
     save_path: str = 'models/radio_cortex.pt',
     lr: float = 3e-4,
     gamma: float = 0.99,
-    batch_size: int = 64
+    batch_size: int = 64,
+    hidden_dim: int = 256,
+    gae_lambda: float = 0.95,
+    clip_epsilon: float = 0.2,
+    vf_coef: float = 0.5,
+    ent_coef: float = 0.01,
+    max_grad_norm: float = 0.5,
+    rollout_steps: int = 2048,
+    log_interval: int = 5,
+    device: str = 'cuda' if torch.cuda.is_available() else 'cpu'
 ):
     """
     Train Radio-Cortex agent
@@ -109,7 +118,7 @@ def train_radio_cortex(
     """
     print("="*60)
     print("TRAINING RADIO-CORTEX")
-    print(f"LR: {lr}, Gamma: {gamma}, Batch: {batch_size}")
+    print(f"LR: {lr}, Gamma: {gamma}, Batch: {batch_size}, Device: {device}")
     print("="*60)
     
     # Create environment
@@ -118,18 +127,23 @@ def train_radio_cortex(
     # Create trainer
     trainer = PPOTrainer(
         env=env,
-        hidden_dim=256,
+        hidden_dim=hidden_dim,
         lr=lr,
         gamma=gamma,
-        clip_epsilon=0.2
+        gae_lambda=gae_lambda,
+        clip_epsilon=clip_epsilon,
+        vf_coef=vf_coef,
+        ent_coef=ent_coef,
+        max_grad_norm=max_grad_norm,
+        device=device
     )
     
     # Train
     print(f"\nTraining for {total_timesteps} timesteps...")
     trainer.train(
         total_timesteps=total_timesteps,
-        rollout_steps=2048,
-        log_interval=5,
+        rollout_steps=rollout_steps,
+        log_interval=log_interval,
         batch_size=batch_size
     )
     
@@ -295,7 +309,16 @@ def main():
     parser.add_argument('--learning-rate', type=float, default=3e-4, help='Learning rate')
     parser.add_argument('--gamma', type=float, default=0.99, help='Discount factor')
     parser.add_argument('--batch-size', type=int, default=64, help='Batch size for optimization')
-    parser.add_argument('--config', type=str, default=None, help='Path to JSON config file to override arguments')
+    # Advanced PPO configs
+    parser.add_argument('--hidden-dim', type=int, default=256, help='Hidden dimension for actor/critic networks')
+    parser.add_argument('--gae-lambda', type=float, default=0.95, help='GAE lambda')
+    parser.add_argument('--clip-epsilon', type=float, default=0.2, help='PPO clip epsilon')
+    parser.add_argument('--vf-coef', type=float, default=0.5, help='Value function coefficient')
+    parser.add_argument('--ent-coef', type=float, default=0.01, help='Entropy coefficient')
+    parser.add_argument('--max-grad-norm', type=float, default=0.5, help='Max gradient norm')
+    parser.add_argument('--rollout-steps', type=int, default=2048, help='Steps per rollout')
+    parser.add_argument('--log-interval', type=int, default=5, help='Logging interval (updates)')
+    parser.add_argument('--device', type=str, default='cuda' if torch.cuda.is_available() else 'cpu', help='Device (cpu/cuda)')
 
     args = parser.parse_args()
 
@@ -330,7 +353,16 @@ def main():
             save_path=args.model_path,
             lr=args.learning_rate,
             gamma=args.gamma,
-            batch_size=args.batch_size
+            batch_size=args.batch_size,
+            hidden_dim=args.hidden_dim,
+            gae_lambda=args.gae_lambda,
+            clip_epsilon=args.clip_epsilon,
+            vf_coef=args.vf_coef,
+            ent_coef=args.ent_coef,
+            max_grad_norm=args.max_grad_norm,
+            rollout_steps=args.rollout_steps,
+            log_interval=args.log_interval,
+            device=args.device
         )
     
     elif args.mode == 'eval':
