@@ -31,9 +31,9 @@ class NS3Config:
     num_cells: int = 3
     sim_time: float = 10.0  # seconds
     seed: int = 42
-    seed: int = 42
+
     e2_port: int = 36421
-    kpm_interval_ms: int = 10  # E2SM-KPM reporting interval
+    kpm_interval_ms: int = 100  # E2SM-KPM reporting interval
     scenario: str = "flash_crowd"  # Scenario to run
 
 
@@ -82,7 +82,7 @@ class NS3Interface:
             f'--simTime={self.config.sim_time}',
             f'--seed={self.config.seed}',
             f'--kpmInterval={self.config.kpm_interval_ms}',
-            f'--kpmInterval={self.config.kpm_interval_ms}',
+
             '--enableE2=true',
             f'--scenario={self.config.scenario}'
         ]
@@ -204,6 +204,7 @@ class NS3Interface:
                 'rsrp_var': kpm_data.get(f'ue_{ue_id}_rsrp_var', 0.0),
                 'rsrq_var': kpm_data.get(f'ue_{ue_id}_rsrq_var', 0.0),
                 'buffer_occupancy': kpm_data.get(f'ue_{ue_id}_buffer', 0.0),
+                'serving_cell': kpm_data.get(f'ue_{ue_id}_cell', -1),
             }
         
         cell_metrics = {}
@@ -390,7 +391,8 @@ class ORANns3Env(gym.Env):
         time.sleep(self.config.kpm_interval_ms / 1000.0)
 
         # Receive new state from E2SM-KPM (synchronized to newest Kafka record)
-        e2_msg = self.ns3.receive_kpm_report(wait_for_new=True, max_wait_s=(self.config.kpm_interval_ms / 1000.0) * 2)
+        # Using a shorter wait multiplier to be more aggressive
+        e2_msg = self.ns3.receive_kpm_report(wait_for_new=True, max_wait_s=(self.config.kpm_interval_ms / 1000.0) * 1.5)
         next_state = self._extract_state(e2_msg)
         
         # Calculate reward
@@ -431,7 +433,7 @@ class ORANns3Env(gym.Env):
         for ue_id in range(self.config.num_ues):
             ue = e2_msg.ue_metrics.get(ue_id, {})
 
-            #print(ue.keys())
+
             # Map expanded UE features (11 total):
             # throughput, delay, packet_loss, sinr, rsrp, rsrq,
             # ul_rbs, rb_allocated, cqi, rsrp_var, rsrq_var, buffer_occupancy

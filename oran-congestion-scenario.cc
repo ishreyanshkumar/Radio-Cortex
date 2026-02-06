@@ -65,6 +65,7 @@ struct UeMetricAccumulator
     uint32_t ulRbSamples{0};
     uint32_t packetsLost{0};
     uint64_t rbsAllocated{0}; // Estimated
+    int32_t servingCellId{-1};
 
     void Reset()
     {
@@ -83,6 +84,7 @@ struct UeMetricAccumulator
         ulRbSamples = 0;
         packetsLost = 0;
         rbsAllocated = 0;
+        servingCellId = -1;
     }
 };
 
@@ -284,7 +286,10 @@ MetricCollector::ReportUeMeasurements(uint16_t rnti,
     m_ueMetrics[ueIndex].rsrpSamples++;
     m_ueMetrics[ueIndex].sumRsrq += rsrq;
     m_ueMetrics[ueIndex].sumRsrqSq += rsrq * rsrq;
+    m_ueMetrics[ueIndex].sumRsrq += rsrq;
+    m_ueMetrics[ueIndex].sumRsrqSq += rsrq * rsrq;
     m_ueMetrics[ueIndex].rsrqSamples++;
+    m_ueMetrics[ueIndex].servingCellId = cellId;
 }
 
 void
@@ -437,6 +442,7 @@ class E2InterfaceManager : public SimpleRefCount<E2InterfaceManager>
         double rsrp_var;
         double rsrq_var;
         double bufferOccupancy;
+        int32_t servingCellId;
     };
 
     struct CellMetrics
@@ -645,7 +651,9 @@ E2InterfaceManager::CollectUeMetrics()
         ueMetric.cqi = 0.0;
         ueMetric.rsrp_var = 0.0;
         ueMetric.rsrq_var = 0.0;
+        ueMetric.rsrq_var = 0.0;
         ueMetric.bufferOccupancy = 0.0;
+        ueMetric.servingCellId = -1;
 
         if (realMetrics.count(i))
         {
@@ -690,10 +698,23 @@ E2InterfaceManager::CollectUeMetrics()
             {
                 ueMetric.delayDl = acc.sumLatency / acc.packetsRx;
             }
-            ueMetric.packetLoss = (double)acc.packetsLost;
+
+            // Calculate Packet Loss Ratio (PLR)
+            double totalPackets = (double)(acc.packetsRx + acc.packetsLost);
+            if (totalPackets > 0)
+            {
+                ueMetric.packetLoss = (double)acc.packetsLost / totalPackets;
+            }
+            else
+            {
+                ueMetric.packetLoss = 0.0;
+            }
+
             ueMetric.rbAllocated = acc.rbsAllocated;
             // Placeholder buffer occupancy (not directly available); keep zero for now
+            // Placeholder buffer occupancy (not directly available); keep zero for now
             ueMetric.bufferOccupancy = 0.0;
+            ueMetric.servingCellId = acc.servingCellId;
 
             // Estimate CQI from SINR (simple linear mapping clamped to 0-15)
             double sinrDb = ueMetric.sinr;
@@ -777,6 +798,7 @@ E2InterfaceManager::SendKpmReport()
         kpmJson << "\"ue_" << ueId << "_rsrp_var\":" << metrics.rsrp_var << ",";
         kpmJson << "\"ue_" << ueId << "_rsrq_var\":" << metrics.rsrq_var << ",";
         kpmJson << "\"ue_" << ueId << "_buffer\":" << metrics.bufferOccupancy << ",";
+        kpmJson << "\"ue_" << ueId << "_cell\":" << metrics.servingCellId << ",";
     }
 
     // Prepare per-cell aggregates (avg rb request, load)

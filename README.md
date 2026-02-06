@@ -54,11 +54,12 @@ You can customize the training hyperparameters and environment settings via comm
 |:---|:---|:---|
 | `--num-ues` | 20 | Number of User Equipments (UEs) |
 | `--num-cells` | 3 | Number of cells (eNodeBs) |
-| `--timesteps` | 10000 | Total training timesteps |
+| `--total-timesteps` | 10000 | Total training timesteps |
 | `--learning-rate` | 3e-4 | Learning rate for PPO |
 | `--batch-size` | 64 | Batch size for optimization |
 | `--gamma` | 0.99 | Discount factor |
 | `--scenario` | flash_crowd | Simulation scenario (flash_crowd, mobility_storm) |
+| `--kpm-interval` | 100 | KPM Reporting Interval in ms (100 = Fast Training, 10 = High Freq Control) |
 | `--config` | None | Path to JSON config file to override args |
 
 **Examples:**
@@ -290,14 +291,14 @@ Train on progressively harder scenarios (Small -> Medium -> Large network).
 
 ```bash
 # Stage 1: Small Network
-python3 radio_cortex_complete.py --mode train --num-ues 5 --num-cells 2 --timesteps 5000 --model-path models/stage1.pt
+python3 radio_cortex_complete.py --mode train --num-ues 5 --num-cells 2 --total-timesteps 5000 --model-path models/stage1.pt
 
 # Stage 2: Medium Network (Load Stage 1 model?? - currently training from scratch)
 # To implement true curriculum, you'd load the previous model.
-python3 radio_cortex_complete.py --mode train --num-ues 20 --num-cells 3 --timesteps 10000 --model-path models/stage2.pt
+python3 radio_cortex_complete.py --mode train --num-ues 20 --num-cells 3 --total-timesteps 10000 --model-path models/stage2.pt
 
 # Stage 3: Large Network
-python3 radio_cortex_complete.py --mode train --num-ues 40 --num-cells 5 --timesteps 20000 --model-path models/stage3.pt
+python3 radio_cortex_complete.py --mode train --num-ues 40 --num-cells 5 --total-timesteps 20000 --model-path models/stage3.pt
 ```
 
 ### Batch Experiments (Bash Loop)

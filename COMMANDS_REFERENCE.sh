@@ -44,6 +44,13 @@ python3 radio_cortex_complete.py --mode train \
     --device cuda \
     --model-path models/advanced_ppo.pt
 
+# --- Training Speed vs Control Frequency ---
+# Fast Training (100ms interval - Default)
+python3 radio_cortex_complete.py --mode train --kpm-interval 100
+
+# High-Fidelity Control (10ms interval - Standard O-RAN)
+python3 radio_cortex_complete.py --mode train --kpm-interval 10 --total-timesteps 200000
+
 # --- Using Config File ---
 # Load arguments from a JSON file
 python3 radio_cortex_complete.py --mode train --config experiments/config_example.json

@@ -188,6 +188,7 @@ def evaluate_radio_cortex(
     # Initialize controllers (Baseline only for now to save time, or Heuristic)
     # To properly compare "Before vs After", we should run Baseline vs RadioCortex
     baseline = BaselineController(num_cells=config.num_cells)
+    heuristic = HeuristicController(num_cells=config.num_cells)
     
     # Run evaluations
     evaluator = EvaluationRunner(
@@ -217,14 +218,27 @@ def evaluate_radio_cortex(
             )
         finally:
             env.close()
-            
-        # 2. Evaluate Radio-Cortex (Real RL Model)
+
+        # 2. Evaluate Heuristic
+        print(f"--- Running Heuristic on {scenario_name} ---")
+        config.scenario = scenario_name
+        env = create_oran_env(config)
+        try:
+            results['Heuristic'] = evaluator.evaluate_controller(
+                heuristic, env, 'Heuristic'
+            )
+        finally:
+            env.close()
+
+        # 3. Evaluate Radio-Cortex (Real RL Model)
         print(f"--- Running Radio-Cortex on {scenario_name} ---")
         
         # Load real policy from models/
         from neural_networks import ActorCritic
-        state_dim = config.num_ues * 4 + config.num_cells * 3
-        action_dim = config.num_cells * 4
+        # state_dim MUST match ORANns3Env (12 per UE + 5 per Cell)
+        state_dim = config.num_ues * 12 + config.num_cells * 5
+        # action_dim MUST match ORANns3Env (7 per Cell + 1 per UE)
+        action_dim = config.num_cells * 7 + config.num_ues
         policy = ActorCritic(state_dim, action_dim).to('cpu')
         
         try:
@@ -253,6 +267,17 @@ def evaluate_radio_cortex(
             results,
             scenario_name,
             save_path=f'results/{scenario_name}_comparison.png'
+        )
+        VisualizationSuite.plot_radar(
+            results,
+            scenario_name,
+            save_path=f'results/{scenario_name}_radar.png'
+        )
+        
+        # Generate LaTeX Table
+        VisualizationSuite.generate_latex_table(
+            {scenario_name: results},
+            save_path=f'results/{scenario_name}_metrics.tex'
         )
     
     # Summary
@@ -302,9 +327,10 @@ def main():
     parser.add_argument('--num-ues', type=int, default=20, help='Number of UEs')
     parser.add_argument('--num-cells', type=int, default=3, help='Number of cells')
     parser.add_argument('--scenario', type=str, default='flash_crowd', help='ns-3 Scenario (flash_crowd, mobility_storm)')
+    parser.add_argument('--kpm-interval', type=int, default=100, help='KPM Reporting Interval (ms)')
     
     # Training configs
-    parser.add_argument('--timesteps', type=int, default=10000, help='Training timesteps')
+    parser.add_argument('--total-timesteps', type=int, default=10000, help='Training timesteps')
     parser.add_argument('--model-path', type=str, default='models/radio_cortex.pt', help='Model save path')
     parser.add_argument('--learning-rate', type=float, default=3e-4, help='Learning rate')
     parser.add_argument('--gamma', type=float, default=0.99, help='Discount factor')
@@ -319,6 +345,7 @@ def main():
     parser.add_argument('--rollout-steps', type=int, default=2048, help='Steps per rollout')
     parser.add_argument('--log-interval', type=int, default=5, help='Logging interval (updates)')
     parser.add_argument('--device', type=str, default='cuda' if torch.cuda.is_available() else 'cpu', help='Device (cpu/cuda)')
+    parser.add_argument('--config', type=str, default=None, help='Path to JSON config file to override arguments')
 
     args = parser.parse_args()
 
@@ -340,7 +367,7 @@ def main():
         num_ues=args.num_ues,
         num_cells=args.num_cells,
         sim_time=10.0,
-        kpm_interval_ms=100,
+        kpm_interval_ms=args.kpm_interval,
         seed=42,
         scenario=args.scenario
     )
@@ -349,7 +376,7 @@ def main():
     if args.mode == 'train':
         trainer = train_radio_cortex(
             config=config,
-            total_timesteps=args.timesteps,
+            total_timesteps=args.total_timesteps,
             save_path=args.model_path,
             lr=args.learning_rate,
             gamma=args.gamma,

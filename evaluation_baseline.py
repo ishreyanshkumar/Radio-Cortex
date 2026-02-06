@@ -1,10 +1,10 @@
 """
 Radio-Cortex Evaluation and Baseline Comparison Suite
 
-Compares self-healing performance against baselines:
+Compares congestion control performance against baselines:
 1. Static RAN (no RL control)
 2. Heuristic-based control (rule-based)
-3. Radio-Cortex (Hebbian + RL)
+3. Radio-Cortex (PPO RL)
 
 Metrics:
 - Packet loss rate
@@ -12,6 +12,10 @@ Metrics:
 - Fairness (Jain's index)
 - QoS violations
 - Recovery time
+- Congestion Intensity
+- Satisfied User Ratio
+- Peak Burst Loss
+- Cell Edge Throughput
 """
 
 import numpy as np
@@ -20,8 +24,11 @@ import pandas as pd
 from typing import Dict, List, Tuple
 from dataclasses import dataclass
 import json
+from datetime import datetime
+from tqdm import tqdm
 from pathlib import Path
 import seaborn as sns
+import os
 
 
 @dataclass
@@ -36,6 +43,22 @@ class EvaluationMetrics:
     qos_violations: int  # count of SLA breaches
     recovery_time: float  # seconds to recover after failure
     total_downtime: float  # seconds of service outage
+    congestion_intensity: float # % time RB > 90%
+    satisfied_user_ratio: float # % UEs > 1 Mbps & < 100ms
+    peak_burst_loss: float # Max loss in 1s window
+    cell_edge_tput: float # 5th percentile throughput
+    avg_jitter: float # ms (std dev of delay)
+    avg_sinr: float # dB
+    avg_pdr: float # ratio (0-1)
+    avg_rsrp: float # dBm
+    avg_handover_count: float # Average handovers per UE per episode
+    
+    # Composite Scores (0-100) for Radar Chart
+    qos_score: float
+    reliability_score: float
+    resource_score: float
+    buffer_score: float
+    phy_score: float
 
 
 class BaselineController:
@@ -123,34 +146,39 @@ class EvaluationRunner:
     ) -> EvaluationMetrics:
         """
         Run online evaluation episode with real ns-3 environment
-        
-        Args:
-            controller: Controller instance (Baseline, Heuristic, or RL)
-            env: Gym environment (ORANns3Env)
-            controller_name: Name for logging
-        
-        Returns:
-            Performance metrics
         """
         print(f"\nEvaluating {controller_name}...")
         
-        # Track metrics over time
+        # Track metrics
         throughputs = []
         delays = []
         losses = []
+        sinrs = []
+        rsrps = []
+        
+        # New: Tracking for advanced metrics
+        queue_lengths = [] # List of avg queue length per step
+        rb_utils = []      # List of avg RB utilization per step
+        per_ue_stats = {}  # {ue_id: {'tput': [], 'delay': []}}
+        
+        # Handover tracking
+        prev_cells = {} # {ue_id: cell_id}
+        total_handovers = 0
         
         # Reset environment
         state, info = env.reset()
         terminated = False
         truncated = False
         
+        # Calculate expected steps for progress bar
+        total_steps = int(env.config.sim_time * 1000 / env.config.kpm_interval_ms)
+        pbar = tqdm(total=total_steps, desc=f"Eval {controller_name}", unit="step")
+        
         while not (terminated or truncated):
             # Controller makes decision
             if hasattr(controller, 'get_rl_action'):
-                # Real RL Agent: Uses raw numpy state
                 action_arr = controller.get_rl_action(state)
             else:
-                # Heuristic/Baseline: Uses parsed state dict
                 state_dict = self._parse_state(state, env.config)
                 action = controller.get_action(state_dict)
                 action_arr = self._dict_to_action(action, env.action_space)
@@ -158,30 +186,67 @@ class EvaluationRunner:
             # Execute step
             next_state, reward, terminated, truncated, info = env.step(action_arr)
             
+            pbar.update(1)
+            pbar.set_postfix({'reward': f'{reward:.2f}'})
+            
+            # Track Handovers
+            if 'e2_metrics' in info:
+                ue_metrics = info['e2_metrics'].ue_metrics
+                for ue_id, m in ue_metrics.items():
+                    curr_cell = m.get('serving_cell', -1)
+                    if ue_id in prev_cells:
+                        if prev_cells[ue_id] != -1 and curr_cell != -1 and curr_cell != prev_cells[ue_id]:
+                            total_handovers += 1
+                    prev_cells[ue_id] = curr_cell
+
             # Collect metrics from info (which contains raw KPMs)
             e2_msg = info['e2_metrics']
             ue_kpms = list(e2_msg.ue_metrics.values())
+            cell_kpms = list(e2_msg.cell_metrics.values())
             
             # Aggregate per-step metrics
             step_tput = np.mean([m['throughput'] for m in ue_kpms]) if ue_kpms else 0.0
             step_delay = np.mean([m['delay'] for m in ue_kpms]) if ue_kpms else 0.0
             step_loss = np.mean([m['packet_loss'] for m in ue_kpms]) if ue_kpms else 0.0
+            step_sinr = np.mean([m['sinr'] for m in ue_kpms]) if ue_kpms else -10.0
+            step_rsrp = np.mean([m['rsrp'] for m in ue_kpms]) if ue_kpms else -140.0
+            
+            # New: Collect Congestion Stats
+            avg_queue = np.mean([c['queue_length'] for c in cell_kpms]) if cell_kpms else 0.0
+            avg_rb = np.mean([c['rb_utilization'] for c in cell_kpms]) if cell_kpms else 0.0
             
             throughputs.append(step_tput)
             delays.append(step_delay)
             losses.append(step_loss)
+            sinrs.append(step_sinr)
+            rsrps.append(step_rsrp)
+            queue_lengths.append(avg_queue)
+            rb_utils.append(avg_rb)
+            
+            # New: Collect Per-UE Stats for User Satisfaction
+            for ue_id, m in e2_msg.ue_metrics.items():
+                if ue_id not in per_ue_stats:
+                    per_ue_stats[ue_id] = {'tput': [], 'delay': []}
+                per_ue_stats[ue_id]['tput'].append(m['throughput'])
+                per_ue_stats[ue_id]['delay'].append(m['delay'])
             
             state = next_state
         
+        pbar.close()
+        
         # Calculate aggregate metrics
-        metrics = self._calculate_metrics(throughputs, delays, losses)
+        metrics = self._calculate_metrics(throughputs, delays, losses, queue_lengths, rb_utils, per_ue_stats, sinrs, rsrps, total_handovers)
         
         print(f"  Avg Throughput: {metrics.avg_throughput:.2f} Mbps")
         print(f"  Avg Packet Loss: {metrics.avg_packet_loss:.2%}")
-        print(f"  Fairness Index: {metrics.jains_fairness:.3f}")
+        print(f"  Satisfied Users: {metrics.satisfied_user_ratio:.1%}")
+        print(f"  Congestion Intensity: {metrics.congestion_intensity:.1%}")
+        print(f"  Avg Jitter: {metrics.avg_jitter:.2f} ms")
+        print(f"  Avg SINR: {metrics.avg_sinr:.2f} dB")
+        print(f"  Avg PDR: {metrics.avg_pdr:.1%}")
         
         return metrics
-    
+
     def _parse_state(self, state_arr, config) -> Dict:
         """Convert flattened numpy state back to dict for heuristic controllers"""
         state_dict = {}
@@ -214,48 +279,73 @@ class EvaluationRunner:
 
     def _dict_to_action(self, action_dict, action_space) -> np.ndarray:
         """Convert controller action dict to numpy array"""
-        # Action: [tx_power, scheduler, harq, hyster] per cell
+        # Action: [tx_power, scheduler, harq, hyster, mac_delay, noise, weight] per cell
         # defaults
         flat_action = []
         num_cells = len(action_dict['tx_power'])
         
         for i in range(num_cells):
-             # Tx Power
+             # 1. Tx Power
              flat_action.append(action_dict['tx_power'][i])
              
-             # Scheduler
+             # 2. Scheduler
              sched = action_dict['scheduler'][i]
              sched_val = 0.0 if sched == 'PF' else 1.0 # Simple map
              flat_action.append(sched_val)
              
-             # HARQ
+             # 3. HARQ
              flat_action.append(float(action_dict['harq_retx'][i]))
              
-             # Hysteresis (default 3.0)
+             # 4. Hysteresis (default 3.0)
              flat_action.append(3.0)
              
-        return np.array(flat_action, dtype=np.float32)
-    
+             # 5. MacChDelay (default 0.0)
+             flat_action.append(0.0)
+             
+             # 6. NoiseFigure (default 5.0)
+             flat_action.append(5.0)
+             
+             # 7. SchedulerWeight (default 1.0)
+             flat_action.append(1.0)
+             
+        # Pad for UE priority weights (oran_ns3_env expects these)
+        # We need to know num_ues. accessing env config would be better but pass it via argument?
+        # Or just pad with zeros to match action_space size.
+        current_len = len(flat_action)
+        target_len = action_space.shape[0]
+        if current_len < target_len:
+            flat_action.extend([1.0] * (target_len - current_len))
 
-    
+        return np.array(flat_action, dtype=np.float32)
+
     def _calculate_metrics(
         self,
         throughputs: List[float],
         delays: List[float],
-        losses: List[float]
+        losses: List[float],
+        queue_lengths: List[float],
+        rb_utils: List[float],
+        per_ue_stats: Dict,
+        sinrs: List[float],
+        rsrps: List[float],
+        total_handovers: int
     ) -> EvaluationMetrics:
-        """Compute evaluation metrics"""
+        """Compute evaluation metrics including advanced congestion stats"""
         
         # Basic statistics
         avg_throughput = np.mean(throughputs)
         avg_delay = np.mean(delays)
         avg_packet_loss = np.mean(losses)
         
-        # Percentiles
-        p95_delay = np.percentile(delays, 95)
-        max_packet_loss = np.max(losses)
+        # New: PDR and RSRP
+        avg_pdr = 1.0 - avg_packet_loss
+        avg_rsrp = np.mean(rsrps) if rsrps else -140.0
         
-        # Fairness (Jain's index)
+        # Percentiles
+        p95_delay = np.percentile(delays, 95) if delays else 0.0
+        max_packet_loss = np.max(losses) if losses else 0.0
+        
+        # Fairness
         if sum(throughputs) > 0:
             jains_fairness = (sum(throughputs) ** 2) / (
                 len(throughputs) * sum([t**2 for t in throughputs])
@@ -263,17 +353,105 @@ class EvaluationRunner:
         else:
             jains_fairness = 0.0
         
-        # QoS violations (delay > 100ms or loss > 5%)
+        # QoS violations
         qos_violations = sum(
             1 for d, l in zip(delays, losses)
             if d > 100 or l > 0.05
         )
         
-        # Recovery time (time until metrics return to normal)
+        # Recovery time
         recovery_time = self._calculate_recovery_time(losses)
         
-        # Total downtime (time with >20% packet loss)
-        total_downtime = sum(1 for l in losses if l > 0.2) * 0.1  # 100ms per sample
+        # Total downtime
+        total_downtime = sum(1 for l in losses if l > 0.2) * 0.1
+        
+        # --- Advanced Metrics ---
+        
+        # 1. Congestion Intensity (% time where Queue > 10 pkts OR RB > 90%)
+        # Note: queue_length from KPM is bytes or packets? Check oran_ns3_env. usually bytes.
+        # Assuming normalized [0,1] or raw. In metrics check it was / 1000.
+        # Let's assume RB Utilization is the main indicator.
+        congested_steps = sum(1 for rb in rb_utils if rb > 0.9)
+        congestion_intensity = congested_steps / len(rb_utils) if rb_utils else 0.0
+        
+        # 2. Satisfied User Ratio (Capacity Proxy)
+        # SLA: Avg Tput > 1 Mbps AND Avg Delay < 100ms
+        satisfied_count = 0
+        total_ues = len(per_ue_stats)
+        ue_avg_tputs = []
+        
+        for ue_id, stats in per_ue_stats.items():
+            u_tput = np.mean(stats['tput'])
+            u_delay = np.mean(stats['delay'])
+            ue_avg_tputs.append(u_tput)
+            
+            if u_tput >= 1.0 and u_delay <= 100.0:
+                satisfied_count += 1
+                
+        satisfied_user_ratio = satisfied_count / total_ues if total_ues > 0 else 0.0
+        
+        # 3. Peak Burst Loss (Max loss in 1s sliding window)
+        window_size = 10 # 10 * 100ms = 1s
+        peak_burst_loss = 0.0
+        if len(losses) >= window_size:
+            # simple sliding window average or max? User asked for "% packets lost in a time" imply rate.
+            # Let's take stats over window.
+            # Running average of loss over 1s.
+            running_avg_loss = np.convolve(losses, np.ones(window_size)/window_size, mode='valid')
+            peak_burst_loss = np.max(running_avg_loss)
+        else:
+            peak_burst_loss = max_packet_loss
+            
+        # 4. Cell Edge Throughput (5th percentile user throughput)
+        cell_edge_tput = np.percentile(ue_avg_tputs, 5) if ue_avg_tputs else 0.0
+        
+        # 5. Jitter (Standard Deviation of Delay)
+        # Using step-averaged delay variation as a proxy for network jitter
+        avg_jitter = np.std(delays) if delays else 0.0
+        
+        # 6. Avg SINR
+        avg_sinr = np.mean(sinrs) if sinrs else -10.0
+        
+        # 7. Avg Handover Count
+        avg_handover_count = total_handovers / self.num_ues if self.num_ues > 0 else 0.0
+        
+        # --- Composite Scores (for Radar Chart) ---
+        
+        # 1. QoS Score: Weighted mix of Tput, Delay, Jitter, and Satisfied User Ratio
+        # Target: Tput=10Mbps, Delay=20ms, Jitter=10ms
+        norm_tput = min(avg_throughput / 10.0, 1.0)
+        norm_delay = max(0.0, 1.0 - (avg_delay / 100.0)) # 0 score if delay > 100ms
+        norm_jitter = max(0.0, 1.0 - (avg_jitter / 50.0))
+        qos_score = (0.25 * norm_tput + 0.25 * norm_delay + 0.15 * norm_jitter + 0.35 * satisfied_user_ratio) * 100
+        
+        # 2. Reliability Score: Mix of Avg Packet Loss, Peak Burst Loss, and Handover Stability
+        norm_loss = max(0.0, 1.0 - (avg_packet_loss * 10)) # 0 score if loss > 10%
+        norm_burst = max(0.0, 1.0 - (peak_burst_loss * 5)) # 0 score if burst > 20%
+        # Handover Stability: Penalize frequent handovers (Ping-Pong)
+        # Assuming > 3 handovers per UE in 10s is "unstable"
+        norm_ho = max(0.0, 1.0 - (avg_handover_count / 3.0))
+        reliability_score = (0.4 * norm_loss + 0.3 * norm_burst + 0.3 * norm_ho) * 100
+        
+        # 3. Resource Score (Efficiency & Fairness): Usage vs Congestion vs Edge Experience
+        # High Score = High Utilization without Congestion AND good Cell Edge performance AND Fairness
+        avg_util = np.mean(rb_utils) if rb_utils else 0.0
+        norm_edge = min(cell_edge_tput / 2.0, 1.0) # Target 2Mbps edge
+        # "Resource Usage" roughly equates to utilization in simulation context, 
+        # but "Efficiency" better captures network health.
+        # Let's simple combine Utilization (activity), Edge Tput, and Fairness
+        resource_score = (0.5 * min(avg_util * 100, 100.0) + 0.2 * (norm_edge * 100) + 0.3 * (jains_fairness * 100))
+        
+        # 4. Buffer Score: Buffer Health (Low Queues & Low Congestion Spikes)
+        avg_q = np.mean(queue_lengths) if queue_lengths else 0.0
+        norm_q = max(0.0, 1.0 - (avg_q / 100.0)) * 100 # Assuming 100 pkts is bad
+        norm_cong = max(0.0, 1.0 - congestion_intensity) * 100 # 0% congestion is best
+        buffer_score = 0.6 * norm_q + 0.4 * norm_cong
+        
+        # 5. PHY Score: Signal Quality (SINR + RSRP)
+        # SINR -10 to 30. Map to 0-100. And include RSRP (-120 to -60)
+        norm_sinr = min(max((avg_sinr + 10.0) / 40.0, 0.0), 1.0)
+        norm_rsrp = min(max((avg_rsrp + 120.0) / 60.0, 0.0), 1.0) # -120dBm=0, -60dBm=1
+        phy_score = (0.6 * norm_sinr + 0.4 * norm_rsrp) * 100
         
         return EvaluationMetrics(
             avg_throughput=avg_throughput,
@@ -284,7 +462,22 @@ class EvaluationRunner:
             jains_fairness=jains_fairness,
             qos_violations=qos_violations,
             recovery_time=recovery_time,
-            total_downtime=total_downtime
+            total_downtime=total_downtime,
+            congestion_intensity=congestion_intensity,
+            satisfied_user_ratio=satisfied_user_ratio,
+            peak_burst_loss=peak_burst_loss,
+            cell_edge_tput=cell_edge_tput,
+            avg_jitter=avg_jitter,
+            avg_sinr=avg_sinr,
+            avg_pdr=avg_pdr,
+            avg_rsrp=avg_rsrp,
+            avg_handover_count=avg_handover_count,
+            
+            qos_score=qos_score,
+            reliability_score=reliability_score,
+            resource_score=resource_score,
+            buffer_score=buffer_score,
+            phy_score=phy_score
         )
     
     def _calculate_recovery_time(self, losses: List[float]) -> float:
@@ -319,63 +512,52 @@ class VisualizationSuite:
         save_path: str = None
     ):
         """Create comparison bar charts"""
-        fig, axes = plt.subplots(2, 3, figsize=(15, 10))
+        # Increased grid size to accommodate new metrics
+        fig, axes = plt.subplots(4, 4, figsize=(20, 20))
         fig.suptitle(f'Radio-Cortex Performance: {scenario_name}', fontsize=16)
         
         controllers = list(results.keys())
+        colors = ['gray', 'orange', 'green'][:len(controllers)]
         
-        # Plot 1: Throughput
-        ax = axes[0, 0]
-        throughputs = [results[c].avg_throughput for c in controllers]
-        ax.bar(controllers, throughputs, color=['gray', 'orange', 'green'])
-        ax.set_ylabel('Throughput (Mbps)')
-        ax.set_title('Average Throughput')
-        ax.grid(axis='y', alpha=0.3)
+        # Helper to plot bar chart
+        def plot_metric(ax_idx, metric_attr, title, ylabel, scale=1.0):
+            row, col = ax_idx
+            ax = axes[row, col]
+            values = [getattr(results[c], metric_attr) * scale for c in controllers]
+            ax.bar(controllers, values, color=colors)
+            ax.set_ylabel(ylabel)
+            ax.set_title(title)
+            ax.grid(axis='y', alpha=0.3)
+
+        # Row 1: Core Performance
+        plot_metric((0,0), 'avg_throughput', 'Average Throughput', 'Mbps')
+        plot_metric((0,1), 'avg_packet_loss', 'Average Packet Loss', '%', scale=100)
+        plot_metric((0,2), 'avg_delay', 'Average Delay', 'ms')
+        plot_metric((0,3), 'jains_fairness', 'Fairness Index', 'Index')
         
-        # Plot 2: Packet Loss
-        ax = axes[0, 1]
-        losses = [results[c].avg_packet_loss * 100 for c in controllers]
-        ax.bar(controllers, losses, color=['gray', 'orange', 'green'])
-        ax.set_ylabel('Packet Loss (%)')
-        ax.set_title('Average Packet Loss')
-        ax.grid(axis='y', alpha=0.3)
+        # Row 2: Stability & Reliability
+        plot_metric((1,0), 'recovery_time', 'Recovery Time', 'Seconds')
+        plot_metric((1,1), 'qos_violations', 'QoS Violations', 'Count')
+        plot_metric((1,2), 'total_downtime', 'Total Downtime', 'Seconds')
+        plot_metric((1,3), 'max_packet_loss', 'Max Packet Loss', '%', scale=100)
+
+        # Row 3: Advanced Capacity & User Experience
+        plot_metric((2,0), 'satisfied_user_ratio', 'Satisfied User Ratio', '%', scale=100)
+        plot_metric((2,1), 'congestion_intensity', 'Congestion Intensity', '%', scale=100)
+        plot_metric((2,2), 'peak_burst_loss', 'Peak Burst Loss (1s)', '%', scale=100)
+        plot_metric((2,3), 'cell_edge_tput', 'Cell Edge Throughput (5th %)', 'Mbps')
         
-        # Plot 3: Delay
-        ax = axes[0, 2]
-        delays = [results[c].avg_delay for c in controllers]
-        ax.bar(controllers, delays, color=['gray', 'orange', 'green'])
-        ax.set_ylabel('Delay (ms)')
-        ax.set_title('Average Delay')
-        ax.grid(axis='y', alpha=0.3)
-        
-        # Plot 4: Fairness
-        ax = axes[1, 0]
-        fairness = [results[c].jains_fairness for c in controllers]
-        ax.bar(controllers, fairness, color=['gray', 'orange', 'green'])
-        ax.set_ylabel("Jain's Fairness Index")
-        ax.set_title('Fairness')
-        ax.set_ylim([0, 1])
-        ax.grid(axis='y', alpha=0.3)
-        
-        # Plot 5: Recovery Time
-        ax = axes[1, 1]
-        recovery = [results[c].recovery_time for c in controllers]
-        ax.bar(controllers, recovery, color=['gray', 'orange', 'green'])
-        ax.set_ylabel('Time (seconds)')
-        ax.set_title('Recovery Time')
-        ax.grid(axis='y', alpha=0.3)
-        
-        # Plot 6: QoS Violations
-        ax = axes[1, 2]
-        violations = [results[c].qos_violations for c in controllers]
-        ax.bar(controllers, violations, color=['gray', 'orange', 'green'])
-        ax.set_ylabel('Count')
-        ax.set_title('QoS Violations')
-        ax.grid(axis='y', alpha=0.3)
-        
-        plt.tight_layout()
+        # Row 4: PHY & Jitter (New)
+        plot_metric((3,0), 'avg_jitter', 'Avg Jitter', 'ms')
+        plot_metric((3,1), 'avg_sinr', 'Avg SINR', 'dB')
+        plot_metric((3,2), 'avg_pdr', 'Avg PDR', '%', scale=100)
+        plot_metric((3,3), 'avg_rsrp', 'Avg RSRP', 'dBm')
+
+        plt.tight_layout(rect=[0, 0.03, 1, 0.95])
         
         if save_path:
+            # Ensure directory exists
+            os.makedirs(os.path.dirname(save_path), exist_ok=True)
             plt.savefig(save_path, dpi=300, bbox_inches='tight')
             print(f"Saved plot to {save_path}")
         else:
@@ -435,7 +617,64 @@ class VisualizationSuite:
         plt.tight_layout()
         
         if save_path:
+            # Ensure directory exists
+            os.makedirs(os.path.dirname(save_path), exist_ok=True)
             plt.savefig(save_path, dpi=300, bbox_inches='tight')
+        else:
+            plt.show()
+
+    @staticmethod
+    def plot_radar(
+        results: Dict[str, EvaluationMetrics],
+        scenario_name: str,
+        save_path: str = None
+    ):
+        """Generate Radar Chart for Grouped Metrics"""
+        labels = ['QoS', 'Reliability', 'Resource', 'Buffer', 'PHY']
+        num_vars = len(labels)
+        
+        # Compute angle for each axis
+        angles = np.linspace(0, 2 * np.pi, num_vars, endpoint=False).tolist()
+        angles += angles[:1] # Close the circle
+        
+        fig, ax = plt.subplots(figsize=(8, 8), subplot_kw=dict(polar=True))
+        fig.suptitle(f'Network Health Profile: {scenario_name}', fontsize=16)
+        
+        controllers = list(results.keys())
+        colors = ['gray', 'orange', 'green'][:len(controllers)]
+        
+        for i, controller in enumerate(controllers):
+            metrics = results[controller]
+            values = [
+                metrics.qos_score,
+                metrics.reliability_score,
+                metrics.resource_score,
+                metrics.buffer_score,
+                metrics.phy_score
+            ]
+            values += values[:1]
+            
+            ax.plot(angles, values, color=colors[i], linewidth=2, label=controller)
+            ax.fill(angles, values, color=colors[i], alpha=0.1)
+        
+        ax.set_theta_offset(np.pi / 2)
+        ax.set_theta_direction(-1)
+        
+        # Draw axis labels
+        ax.set_xticks(angles[:-1])
+        ax.set_xticklabels(labels)
+        
+        # Draw y-labels
+        ax.set_rlabel_position(0)
+        plt.yticks([20, 40, 60, 80], ["20", "40", "60", "80"], color="grey", size=7)
+        plt.ylim(0, 100)
+        
+        plt.legend(loc='upper right', bbox_to_anchor=(1.1, 1.1))
+        
+        if save_path:
+            os.makedirs(os.path.dirname(save_path), exist_ok=True)
+            plt.savefig(save_path, dpi=300, bbox_inches='tight')
+            print(f"Saved radar chart to {save_path}")
         else:
             plt.show()
     
@@ -448,10 +687,10 @@ class VisualizationSuite:
         latex = "\\begin{table}[h]\n"
         latex += "\\centering\n"
         latex += "\\caption{Radio-Cortex Performance Comparison}\n"
-        latex += "\\begin{tabular}{|l|c|c|c|c|}\n"
+        latex += "\\begin{tabular}{|l|c|c|c|c|c|c|}\n"
         latex += "\\hline\n"
-        latex += "\\textbf{Scenario} & \\textbf{Controller} & \\textbf{Throughput} & \\textbf{Packet Loss} & \\textbf{Recovery Time} \\\\\n"
-        latex += "& & (Mbps) & (\\%) & (s) \\\\\n"
+        latex += "\\textbf{Scenario} & \\textbf{Controller} & \\textbf{T-put} & \\textbf{Loss} & \\textbf{Congest} & \\textbf{Satisf} & \\textbf{Edge} & \\textbf{Jitr} & \\textbf{SINR} & \\textbf{PDR} & \\textbf{RSRP} & \\textbf{HO/UE} \\\\\n"
+        latex += "& & (Mbps) & (\\%) & (\\%) & (\\%) & (Mbps) & (ms) & (dB) & (\\%) & (dBm) & (Count) \\\\\n"
         latex += "\\hline\n"
         
         for scenario, controllers in results.items():
@@ -464,13 +703,18 @@ class VisualizationSuite:
                     latex += " "
                 
                 latex += f"& {controller} & {metrics.avg_throughput:.1f} & "
-                latex += f"{metrics.avg_packet_loss*100:.2f} & {metrics.recovery_time:.2f} \\\\\n"
+                latex += f"{metrics.avg_packet_loss*100:.2f} & {metrics.congestion_intensity*100:.1f} & "
+                latex += f"{metrics.satisfied_user_ratio*100:.1f} & {metrics.cell_edge_tput:.2f} & "
+                latex += f"{metrics.avg_jitter:.2f} & {metrics.avg_sinr:.1f} & "
+                latex += f"{metrics.avg_pdr*100:.1f} & {metrics.avg_rsrp:.1f} & {metrics.avg_handover_count:.1f} \\\\\n"
             latex += "\\hline\n"
         
         latex += "\\end{tabular}\n"
         latex += "\\end{table}\n"
         
         if save_path:
+            # Ensure directory exists
+            os.makedirs(os.path.dirname(save_path), exist_ok=True)
             with open(save_path, 'w') as f:
                 f.write(latex)
             print(f"Saved LaTeX table to {save_path}")
@@ -478,10 +722,3 @@ class VisualizationSuite:
             print(latex)
         
         return latex
-
-
-# ============================================================================
-# Main Evaluation Script
-# ============================================================================
-
-

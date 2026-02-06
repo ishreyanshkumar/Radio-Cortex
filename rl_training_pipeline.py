@@ -15,14 +15,14 @@ import json
 from pathlib import Path
 from datetime import datetime
 import dataclasses
-import torch
+from tqdm import tqdm
 
 
 # ============================================================================
 # Neural Network Architectures
 # ============================================================================
 
-from neural_networks import ActorCritic, SACAgent
+from neural_networks import ActorCritic
 
 
 # ============================================================================
@@ -126,14 +126,17 @@ class PPOTrainer:
         
         return torch.tensor(advantages, dtype=torch.float32)
     
-    def collect_rollout(self, num_steps: int):
+    def collect_rollout(self, num_steps: int, pbar: Optional[tqdm] = None):
         """Collect experience from environment"""
         states, actions, rewards, dones, values, log_probs = [], [], [], [], [], []
         
         state, _ = self.env.reset()
-        print(f"[debug] collect_rollout start: num_steps={num_steps}, state_shape={np.shape(state)}")
+        # print(f"[debug] collect_rollout start: num_steps={num_steps}, state_shape={np.shape(state)}")
         
         for step_i in range(num_steps):
+            if pbar:
+                pbar.update(1)
+            
             state_tensor = torch.FloatTensor(state).unsqueeze(0).to(self.device)
             
             with torch.no_grad():
@@ -296,28 +299,35 @@ class PPOTrainer:
     def train(self, total_timesteps: int, rollout_steps: int = 20, log_interval: int = 1, batch_size: int = 64):
         """Main training loop"""
         num_updates = total_timesteps // rollout_steps
+        if num_updates == 0:
+            print(f"ERROR: Total timesteps ({total_timesteps}) is less than rollout steps ({rollout_steps}).")
+            print("       PPO requires at least one full rollout to update.")
+            print("       Adjust arguments: Increase --total-timesteps or decrease --rollout-steps.")
+            return
         
         print(f"Starting PPO training for {total_timesteps} timesteps")
         print(f"Device: {self.device}")
         
-        for update in range(num_updates):
-            # Collect rollout
-            print(f"[debug] train: starting rollout {update+1}/{num_updates}")
-            rollout = self.collect_rollout(rollout_steps)
+        update = 0
+        with tqdm(total=total_timesteps, desc="Training Steps", unit="step") as pbar:
+            for update in range(num_updates):
+                # Collect rollout
+                # print(f"[debug] train: starting rollout {update+1}/{num_updates}")
+                rollout = self.collect_rollout(rollout_steps, pbar=pbar)
             
-            # Update policy
-            print(f"[debug] train: starting policy update for rollout {update+1}")
-            metrics = self.update_policy(rollout, batch_size=batch_size)
-            print(f"[debug] train: completed policy update for rollout {update+1}")
-            # Logging
-            if update % log_interval == 0:
-                avg_reward = rollout['returns'].mean().item()
-                print(f"\nUpdate {update}/{num_updates}")
-                print(f"  Total steps: {self.total_steps}")
-                print(f"  Avg return: {avg_reward:.3f}")
-                print(f"  Policy loss: {metrics['policy_loss']:.4f}")
-                print(f"  Value loss: {metrics['value_loss']:.4f}")
-                print(f"  Entropy: {metrics['entropy']:.4f}")
+                # Update policy
+                print(f"[debug] train: starting policy update for rollout {update+1}")
+                metrics = self.update_policy(rollout, batch_size=batch_size)
+                print(f"[debug] train: completed policy update for rollout {update+1}")
+                # Logging
+                if update % log_interval == 0:
+                    avg_reward = rollout['returns'].mean().item()
+                    print(f"\nUpdate {update}/{num_updates}")
+                    print(f"  Total steps: {self.total_steps}")
+                    print(f"  Avg return: {avg_reward:.3f}")
+                    print(f"  Policy loss: {metrics['policy_loss']:.4f}")
+                    print(f"  Value loss: {metrics['value_loss']:.4f}")
+                    print(f"  Entropy: {metrics['entropy']:.4f}")
         
         print("\n✓ Training complete")
     
@@ -414,62 +424,9 @@ def evaluate_policy(
 
 
 # ============================================================================
-# Main Training Script
+# Main Training Script (Legacy - Use radio_cortex_complete.py)
 # ============================================================================
 
-if __name__ == "__main__":
-    from oran_ns3_env import create_oran_env, NS3Config
-    
-    # Create environment
-    config = NS3Config(
-        num_ues=20,
-        num_cells=3,
-        sim_time=5.0,  # 5 seconds per episode
-        kpm_interval_ms=100,
-        seed=42
-    )
-    
-    env = create_oran_env(config)
-    
-    # Create trainer
-    trainer = PPOTrainer(
-        env=env,
-        hidden_dim=256,
-        lr=3e-4,
-        gamma=0.99,
-        clip_epsilon=0.2,
-    )
-    
-    # Train
-    trainer.train(
-        total_timesteps=50000,  # 50k steps
-        rollout_steps=2048,
-        log_interval=5
-    )
-    
-    # Save model
-    save_dir = Path("models")
-    save_dir.mkdir(exist_ok=True)
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    trainer.save(f"models/radio_cortex_ppo_{timestamp}.pt")
-    
-    # Evaluate
-    print("\n" + "="*50)
-    print("Evaluating trained policy...")
-    print("="*50)
-    
-    results = evaluate_policy(
-        env=env,
-        policy=trainer.policy,
-        num_episodes=10,
-        device=trainer.device,
-        render=True
-    )
-    
-    print(f"\nEvaluation Results:")
-    print(f"  Mean reward: {results['mean_reward']:.3f} ± {results['std_reward']:.3f}")
-    print(f"  Mean throughput: {results['mean_throughput']:.2f} Mbps")
-    print(f"  Mean delay: {results['mean_delay']:.2f} ms")
-    print(f"  Mean packet loss: {results['mean_loss']:.4f}")
-    
-    env.close()
+# if __name__ == "__main__":
+#     # Legacy training code removed.
+#     pass

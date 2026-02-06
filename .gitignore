@@ -24,6 +24,7 @@ kafka_*/
 # Simulation artifacts and model checkpoints
 simulation/
 models/
+results/
 
 # IDE files
 .vscode/
