@@ -35,7 +35,9 @@ class NS3Config:
     e2_port: int = 36421
     kpm_interval_ms: int = 100  # E2SM-KPM reporting interval
     system_bandwidth_mhz: float = 10.0 # System Bandwidth
-    scenario: str = "flash_crowd"  # Scenario to run
+    # Scenario to run (12 available: flash_crowd, mobility_storm, traffic_burst, handover_ping_pong, 
+    # sleepy_campus, ambulance, adversarial, commuter_rush, mixed_reality, urban_canyon, iot_tsunami, spectrum_crunch)
+    scenario: str = "flash_crowd" 
 
 
 @dataclass
@@ -92,7 +94,8 @@ class NS3Interface:
             f'--kpmInterval={self.config.kpm_interval_ms}',
 
             '--enableE2=true',
-            f'--scenario={self.config.scenario}'
+            f'--scenario={self.config.scenario}',
+            f'--bandwidthRbs={int(self.config.system_bandwidth_mhz * 5)}' # 10MHz * 5 = 50 RBs
         ]
         
         # Start ns-3 in subprocess
@@ -548,24 +551,21 @@ class ORANns3Env(gym.Env):
         if not e2_msg.ue_metrics:
             return 0.0
         
-        # Print formatted UE metrics table (ALL 15 parameters)
+        # Print formatted UE metrics table (Simplified)
         num_ues = len(e2_msg.ue_metrics)
-        print(f"\n  ╔{'═'*120}╗")
-        print(f"  ║  UE Metrics - {num_ues} UEs {'':>90}║")
-        print(f"  ╠{'═'*120}╣")
-        print(f"  ║ {'UE':>2} │ {'Tput':>6} │ {'Delay':>6} │ {'Loss':>5} │ {'SINR':>6} │ {'RSRP':>7} │ {'RSRQ':>6} │ {'CQI':>3} │ {'Cell':>4} │ {'DL RBs':>6} │ {'UL RBs':>6} │ {'Buffer':>6} │ {'HO A/S':>6} ║")
-        print(f"  ╠{'═'*120}╣")
+        print(f"\n  ╔{'═'*90}╗")
+        print(f"  ║  UE Metrics - {num_ues} UEs {'':>60}║")
+        print(f"  ╠{'═'*90}╣")
+        print(f"  ║ {'UE':>2} │ {'Tput':>6} │ {'Delay':>6} │ {'Loss':>5} │ {'SINR':>6} │ {'RSRP':>7} │ {'Cell':>4} │ {'Buffer':>6} ║")
+        print(f"  ╠{'═'*90}╣")
         for ue_id, m in e2_msg.ue_metrics.items():
             # Handle default values with indicators
             rsrp_str = f"{m['rsrp']:.0f}" if m['rsrp'] != -140 else "  --"
-            rsrq_str = f"{m['rsrq']:.0f}" if m['rsrq'] != -20 else " --"
             cell_str = f"{m['serving_cell']}" if m['serving_cell'] != -1 else "--"
-            ho_str = f"{m['handover_attempts']}/{m['handover_successes']}" if m['handover_attempts'] > 0 else " -/-"
             buffer_str = f"{m['buffer_occupancy']:.0f}" if m['buffer_occupancy'] > 0 else "  0"
-            ul_rbs_str = f"{m['ul_rbs']:.0f}" if m['ul_rbs'] > 0 else "  0"
             
-            print(f"  ║ {ue_id:>2} │ {m['throughput']:>5.2f}M │ {m['delay']:>5.0f}ms │ {m['packet_loss']*100:>4.1f}% │ {m['sinr']:>5.1f}dB │ {rsrp_str:>6}dB │ {rsrq_str:>5}dB │ {m['cqi']:>3.0f} │ {cell_str:>4} │ {m['rb_allocated']:>6} │ {ul_rbs_str:>6} │ {buffer_str:>6} │ {ho_str:>6} ║")
-        print(f"  ╚{'═'*120}╝")
+            print(f"  ║ {ue_id:>2} │ {m['throughput']:>5.2f}M │ {m['delay']:>5.0f}ms │ {m['packet_loss']*100:>4.1f}% │ {m['sinr']:>5.1f}dB │ {rsrp_str:>6}dB │ {cell_str:>4} │ {buffer_str:>6} ║")
+        print(f"  ╚{'═'*90}╝")
         
         # Print variance summary if any UE has non-zero variance
         rsrp_vars = [(ue_id, m['rsrp_var']) for ue_id, m in e2_msg.ue_metrics.items() if m['rsrp_var'] > 0]

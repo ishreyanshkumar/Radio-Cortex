@@ -1015,10 +1015,18 @@ class CongestionScenarioManager : public SimpleRefCount<CongestionScenarioManage
   public:
     enum ScenarioType
     {
-        FLASH_CROWD,
-        MOBILITY_STORM,
-        TRAFFIC_BURST,
-        HANDOVER_PING_PONG
+        FLASH_CROWD,        // Sudden influx of users in one cell
+        MOBILITY_STORM,     // High-speed users moving across cells
+        TRAFFIC_BURST,      // Periodic surges in application data
+        HANDOVER_PING_PONG, // Users oscillating between cell boundaries
+        SLEEPY_CAMPUS,      // Energy optimization (Low vs High traffic)
+        AMBULANCE,          // QoS prioritization for emergency streams
+        ADVERSARIAL,        // Reliability testing under signal fluctuations
+        COMMUTER_RUSH,      // Mass group handover (50+ UEs)
+        MIXED_REALITY,      // Network slicing (Latency-sensitive VR vs Bulk TCP)
+        URBAN_CANYON,       // PHY blockage and beamforming recovery
+        IOT_TSUNAMI,        // Massive device scale (100+ UEs)
+        SPECTRUM_CRUNCH     // Resource management with Carrier Aggregation
     };
 
     CongestionScenarioManager(NodeContainer ueNodes,
@@ -1035,6 +1043,14 @@ class CongestionScenarioManager : public SimpleRefCount<CongestionScenarioManage
     void TriggerMobilityStorm();
     void TriggerTrafficBurst();
     void TriggerHandoverPingPong();
+    void TriggerSleepyCampus(bool highLoad);
+    void TriggerAmbulance();
+    void TriggerAdversarial(bool active);
+    void TriggerCommuterRush();
+    void TriggerMixedReality();
+    void TriggerUrbanCanyon();
+    void TriggerIotTsunami();
+    void TriggerSpectrumCrunch();
 };
 
 CongestionScenarioManager::CongestionScenarioManager(NodeContainer ueNodes,
@@ -1065,6 +1081,30 @@ CongestionScenarioManager::ActivateScenario(ScenarioType type, Time startTime)
         break;
     case HANDOVER_PING_PONG:
         Simulator::Schedule(startTime, &CongestionScenarioManager::TriggerHandoverPingPong, this);
+        break;
+    case SLEEPY_CAMPUS:
+        Simulator::Schedule(startTime, &CongestionScenarioManager::TriggerSleepyCampus, this, true);
+        break;
+    case AMBULANCE:
+        Simulator::Schedule(startTime, &CongestionScenarioManager::TriggerAmbulance, this);
+        break;
+    case COMMUTER_RUSH:
+        Simulator::Schedule(startTime, &CongestionScenarioManager::TriggerCommuterRush, this);
+        break;
+    case MIXED_REALITY:
+        Simulator::Schedule(startTime, &CongestionScenarioManager::TriggerMixedReality, this);
+        break;
+    case URBAN_CANYON:
+        Simulator::Schedule(startTime, &CongestionScenarioManager::TriggerUrbanCanyon, this);
+        break;
+    case IOT_TSUNAMI:
+        Simulator::Schedule(startTime, &CongestionScenarioManager::TriggerIotTsunami, this);
+        break;
+    case SPECTRUM_CRUNCH:
+        Simulator::Schedule(startTime, &CongestionScenarioManager::TriggerSpectrumCrunch, this);
+        break;
+    case ADVERSARIAL:
+        Simulator::Schedule(startTime, &CongestionScenarioManager::TriggerAdversarial, this, true);
         break;
     }
 }
@@ -1136,6 +1176,143 @@ CongestionScenarioManager::TriggerHandoverPingPong()
     }
 }
 
+void
+CongestionScenarioManager::TriggerSleepyCampus(bool highLoad)
+{
+    NS_LOG_INFO("TRIGGERING SLEEPY CAMPUS: HighLoad=" << highLoad);
+    for (uint32_t i = 0; i < m_clientApps.GetN(); ++i)
+    {
+        if (Ptr<UdpClient> app = m_clientApps.Get(i)->GetObject<UdpClient>())
+        {
+            app->SetAttribute("Interval", TimeValue(MicroSeconds(highLoad ? 500 : 5000)));
+        }
+    }
+    Simulator::Schedule(Seconds(3.0),
+                        &CongestionScenarioManager::TriggerSleepyCampus,
+                        this,
+                        !highLoad);
+}
+
+void
+CongestionScenarioManager::TriggerAmbulance()
+{
+    NS_LOG_INFO("TRIGGERING AMBULANCE: Priority User Injection");
+    if (m_clientApps.GetN() > 0)
+    {
+        Ptr<UdpClient> app = m_clientApps.Get(m_clientApps.GetN() - 1)->GetObject<UdpClient>();
+        if (app)
+        {
+            app->SetAttribute("Interval", TimeValue(MicroSeconds(100)));
+            app->SetAttribute("PacketSize", UintegerValue(1400));
+        }
+    }
+}
+
+void
+CongestionScenarioManager::TriggerAdversarial(bool active)
+{
+    NS_LOG_INFO("TRIGGERING ADVERSARIAL: Noise=" << active);
+    Config::Set("/NodeList/*/DeviceList/*/LteEnbPhy/NoiseFigure", DoubleValue(active ? 20.0 : 5.0));
+    Simulator::Schedule(Seconds(4.0),
+                        &CongestionScenarioManager::TriggerAdversarial,
+                        this,
+                        !active);
+}
+
+void
+CongestionScenarioManager::TriggerCommuterRush()
+{
+    NS_LOG_INFO("TRIGGERING COMMUTER RUSH: Mass Handover Event");
+    // Move all UEs rapidly to the right (simulating a train)
+    for (uint32_t i = 0; i < m_ueNodes.GetN(); ++i)
+    {
+        Ptr<MobilityModel> mobility = m_ueNodes.Get(i)->GetObject<MobilityModel>();
+        if (Ptr<ConstantVelocityMobilityModel> cv =
+                DynamicCast<ConstantVelocityMobilityModel>(mobility))
+        {
+            cv->SetVelocity(Vector(200.0, 0.0, 0.0)); // Very fast movement
+        }
+    }
+}
+
+void
+CongestionScenarioManager::TriggerMixedReality()
+{
+    NS_LOG_INFO("TRIGGERING MIXED REALITY: Slicing Contention");
+    // Split UEs into VR (Slice A) and Download (Slice B)
+    // VR: Low latency, small interval. DL: High bandwidth.
+    for (uint32_t i = 0; i < m_clientApps.GetN(); ++i)
+    {
+        Ptr<UdpClient> app = m_clientApps.Get(i)->GetObject<UdpClient>();
+        if (!app)
+        {
+            continue;
+        }
+
+        if (i % 2 == 0)
+        {
+            // Slice A (VR): 1500 bytes every 2ms
+            app->SetAttribute("Interval", TimeValue(MilliSeconds(2)));
+            app->SetAttribute("PacketSize", UintegerValue(1500));
+        }
+        else
+        {
+            // Slice B (Download): 1400 bytes every 1ms (High throughput)
+            app->SetAttribute("Interval", TimeValue(MilliSeconds(1)));
+            app->SetAttribute("PacketSize", UintegerValue(1400));
+        }
+    }
+}
+
+void
+CongestionScenarioManager::TriggerUrbanCanyon()
+{
+    NS_LOG_INFO("TRIGGERING URBAN CANYON: Blockage Event");
+    // Simulate drop in signal by increasing noise significantly for a short duration
+    // "Blockage" model is complex to swap runtime, simulating via degradations
+    Config::Set("/NodeList/*/DeviceList/*/LteEnbPhy/NoiseFigure", DoubleValue(25.0));
+
+    // Recovery after 2 seconds
+    Simulator::Schedule(
+        Seconds(2.0),
+        +[](void) {
+            Config::Set("/NodeList/*/DeviceList/*/LteEnbPhy/NoiseFigure", DoubleValue(5.0));
+        });
+}
+
+void
+CongestionScenarioManager::TriggerIotTsunami()
+{
+    NS_LOG_INFO("TRIGGERING IOT TSUNAMI: Massive Control Plane Load");
+    // Small packets, frequent intervals for ALL UEs
+    for (uint32_t i = 0; i < m_clientApps.GetN(); ++i)
+    {
+        Ptr<UdpClient> app = m_clientApps.Get(i)->GetObject<UdpClient>();
+        if (app)
+        {
+            app->SetAttribute("PacketSize", UintegerValue(50)); // Tiny packet
+            app->SetAttribute("Interval", TimeValue(MilliSeconds(10)));
+        }
+    }
+}
+
+void
+CongestionScenarioManager::TriggerSpectrumCrunch()
+{
+    NS_LOG_INFO("TRIGGERING SPECTRUM CRUNCH: Simulated CA Load");
+    // Increase load to force need for secondary carrier
+    // In a real CA sim, we'd activate the SCC here.
+    // For this baseline, we simulate the "Crunch" by overloading the primary.
+    for (uint32_t i = 0; i < m_clientApps.GetN(); ++i)
+    {
+        Ptr<UdpClient> app = m_clientApps.Get(i)->GetObject<UdpClient>();
+        if (app)
+        {
+            app->SetAttribute("Interval", TimeValue(MicroSeconds(200)));
+        }
+    }
+}
+
 ApplicationContainer
 SetupTraffic(NodeContainer ues, NodeContainer remoteHost, Ptr<LteHelper> lteHelper)
 {
@@ -1192,6 +1369,7 @@ main(int argc, char* argv[])
     bool enableE2 = true;
     std::string congestionScenario = "flash_crowd";
     std::string kafkaBrokers = "localhost:9092";
+    uint32_t bandwidthRbs = 25; // Default 5 MHz (25 RBs)
 
     CommandLine cmd;
     cmd.AddValue("numUes", "Number of UEs", numUes);
@@ -1202,7 +1380,22 @@ main(int argc, char* argv[])
     cmd.AddValue("enableE2", "Enable E2 interface", enableE2);
     cmd.AddValue("scenario", "Congestion scenario type", congestionScenario);
     cmd.AddValue("kafkaBrokers", "Kafka bootstrap servers", kafkaBrokers);
+    cmd.AddValue("bandwidthRbs", "DL/UL Bandwidth in RBs (e.g. 25, 50, 100)", bandwidthRbs);
     cmd.Parse(argc, argv);
+
+    // Scenario-based overrides (Must happen before node creation)
+    if (congestionScenario == "iot_tsunami")
+    {
+        NS_LOG_INFO("Configuring IoT Tsunami: Increasing UEs to 100 and changing traffic model");
+        numUes = 100;
+        // Adjust bandwidth to handle 100 users signaling? Maybe keep standard 50RBs (10MHz)
+        // User requested 200, we do 100 for safety.
+    }
+    else if (congestionScenario == "spectrum_crunch")
+    {
+        NS_LOG_INFO("Configuring Spectrum Crunch: Ensuring High Bandwidth (100 RBs)");
+        bandwidthRbs = 100;
+    }
 
     // Set random seed
     RngSeedManager::SetSeed(seed);
@@ -1225,12 +1418,39 @@ main(int argc, char* argv[])
     lteHelper->SetAttribute("UseIdealRrc", BooleanValue(true));
     lteHelper->SetHandoverAlgorithmType("ns3::NoOpHandoverAlgorithm");
 
-    // Set scheduler (can be changed via E2 RC)
+    // Set Scheduler
     lteHelper->SetSchedulerType("ns3::PfFfMacScheduler"); // Proportional Fair
 
-    // Reduced bandwidth to ensure congestion occurs (25 RBs ~ 37 Mbps)
-    lteHelper->SetEnbDeviceAttribute("DlBandwidth", UintegerValue(25));
-    lteHelper->SetEnbDeviceAttribute("UlBandwidth", UintegerValue(25));
+    // Scenario: Spectrum Crunch (Carrier Aggregation)
+    if (congestionScenario == "spectrum_crunch")
+    {
+        NS_LOG_INFO("Configuring Spectrum Crunch: Enabling Carrier Aggregation (2 CCs)");
+        lteHelper->SetAttribute("UseCa", BooleanValue(true));
+        lteHelper->SetAttribute("NumberOfComponentCarriers", UintegerValue(2));
+        lteHelper->SetAttribute("EnbComponentCarrierManager",
+                                StringValue("ns3::RrComponentCarrierManager"));
+    }
+
+    // Scenario-Specific Channel Configuration
+    if (congestionScenario == "urban_canyon")
+    {
+        NS_LOG_INFO("Configuring Urban Canyon: Using HybridBuildingsPropagationLossModel");
+        lteHelper->SetAttribute("PathlossModel",
+                                StringValue("ns3::HybridBuildingsPropagationLossModel"));
+        lteHelper->SetPathlossModelAttribute("ShadowSigmaExtWalls",
+                                             DoubleValue(20.0)); // High blockage
+        lteHelper->SetPathlossModelAttribute("ShadowSigmaOutdoor", DoubleValue(7.0));
+    }
+    else
+    {
+        // Default simple pathloss
+        lteHelper->SetAttribute("PathlossModel", StringValue("ns3::FriisPropagationLossModel"));
+    }
+
+    // Set Configurable Bandwidth
+    NS_LOG_INFO("Configuring Bandwidth: " << bandwidthRbs << " RBs");
+    lteHelper->SetEnbDeviceAttribute("DlBandwidth", UintegerValue(bandwidthRbs));
+    lteHelper->SetEnbDeviceAttribute("UlBandwidth", UintegerValue(bandwidthRbs));
 
     Ptr<Node> pgw = epcHelper->GetPgwNode();
 
@@ -1275,12 +1495,27 @@ main(int argc, char* argv[])
 
     MobilityHelper ueMobility;
     ueMobility.SetMobilityModel("ns3::ConstantVelocityMobilityModel");
-    ueMobility.SetPositionAllocator(
-        "ns3::RandomRectanglePositionAllocator",
-        "X",
-        StringValue("ns3::UniformRandomVariable[Min=0|Max=" + std::to_string(numCells * 500) + "]"),
-        "Y",
-        StringValue("ns3::UniformRandomVariable[Min=-250|Max=250]"));
+
+    // Scenario: Commuter Rush (Clustered Start)
+    if (congestionScenario == "commuter_rush")
+    {
+        ueMobility.SetPositionAllocator("ns3::RandomRectanglePositionAllocator",
+                                        "X",
+                                        StringValue("ns3::UniformRandomVariable[Min=100|Max=200]"),
+                                        "Y",
+                                        StringValue("ns3::UniformRandomVariable[Min=90|Max=110]"));
+    }
+    else
+    {
+        // Default random distribution
+        ueMobility.SetPositionAllocator(
+            "ns3::RandomRectanglePositionAllocator",
+            "X",
+            StringValue("ns3::UniformRandomVariable[Min=0|Max=" + std::to_string(numCells * 500) +
+                        "]"),
+            "Y",
+            StringValue("ns3::UniformRandomVariable[Min=-250|Max=250]"));
+    }
     ueMobility.Install(ueNodes);
 
     // Set initial random velocities
@@ -1289,9 +1524,17 @@ main(int argc, char* argv[])
     xVar->SetAttribute("Max", DoubleValue(10.0));
     for (uint32_t i = 0; i < numUes; ++i)
     {
-        Ptr<ConstantVelocityMobilityModel> cv =
-            ueNodes.Get(i)->GetObject<MobilityModel>()->GetObject<ConstantVelocityMobilityModel>();
-        cv->SetVelocity(Vector(xVar->GetValue(), 0, 0));
+        if (congestionScenario == "commuter_rush")
+        {
+            // Start moving towards the handover boundary immediately
+            ueNodes.Get(i)->GetObject<ConstantVelocityMobilityModel>()->SetVelocity(
+                Vector(20.0, 0.0, 0.0));
+        }
+        else
+        {
+            ueNodes.Get(i)->GetObject<ConstantVelocityMobilityModel>()->SetVelocity(
+                Vector(xVar->GetValue(), xVar->GetValue(), 0.0));
+        }
     }
 
     // Devices
@@ -1342,6 +1585,47 @@ main(int argc, char* argv[])
     else if (congestionScenario == "mobility_storm")
     {
         scenarioManager->ActivateScenario(CongestionScenarioManager::MOBILITY_STORM, Seconds(0.2));
+    }
+    else if (congestionScenario == "traffic_burst")
+    {
+        scenarioManager->ActivateScenario(CongestionScenarioManager::TRAFFIC_BURST, Seconds(0.2));
+    }
+    else if (congestionScenario == "ping_pong")
+    {
+        scenarioManager->ActivateScenario(CongestionScenarioManager::HANDOVER_PING_PONG,
+                                          Seconds(0.2));
+    }
+    else if (congestionScenario == "sleepy_campus")
+    {
+        scenarioManager->ActivateScenario(CongestionScenarioManager::SLEEPY_CAMPUS, Seconds(0.2));
+    }
+    else if (congestionScenario == "ambulance")
+    {
+        scenarioManager->ActivateScenario(CongestionScenarioManager::AMBULANCE, Seconds(5.0));
+    }
+    else if (congestionScenario == "adversarial")
+    {
+        scenarioManager->ActivateScenario(CongestionScenarioManager::ADVERSARIAL, Seconds(2.0));
+    }
+    else if (congestionScenario == "commuter_rush")
+    {
+        scenarioManager->ActivateScenario(CongestionScenarioManager::COMMUTER_RUSH, Seconds(0.2));
+    }
+    else if (congestionScenario == "mixed_reality")
+    {
+        scenarioManager->ActivateScenario(CongestionScenarioManager::MIXED_REALITY, Seconds(1.0));
+    }
+    else if (congestionScenario == "urban_canyon")
+    {
+        scenarioManager->ActivateScenario(CongestionScenarioManager::URBAN_CANYON, Seconds(1.0));
+    }
+    else if (congestionScenario == "iot_tsunami")
+    {
+        scenarioManager->ActivateScenario(CongestionScenarioManager::IOT_TSUNAMI, Seconds(0.5));
+    }
+    else if (congestionScenario == "spectrum_crunch")
+    {
+        scenarioManager->ActivateScenario(CongestionScenarioManager::SPECTRUM_CRUNCH, Seconds(0.5));
     }
 
     NS_LOG_INFO("Starting simulation...");

@@ -163,26 +163,35 @@ def evaluate_radio_cortex(
     config: NS3Config,
     model_path: str = 'models/radio_cortex.pt'
 ):
-    """
-    Evaluate Radio-Cortex against baselines
-    
-    Scenarios:
-    1. Flash crowd
-    2. Cell failure
-    3. Mobility storm
-    4. Black swan
-    """
     print("="*60)
     print("EVALUATING RADIO-CORTEX")
     print("="*60)
     
-    # Define REAL scenarios supported by C++ simulation
-    scenarios = [
-        "flash_crowd",
-        "mobility_storm",
-        "traffic_burst",
-        "handover_ping_pong"
+    # Scenario to run (12 available: flash_crowd, mobility_storm, traffic_burst, handover_ping_pong, 
+    # sleepy_campus, ambulance, adversarial, commuter_rush, mixed_reality, urban_canyon, iot_tsunami, spectrum_crunch)
+    all_scenarios = [
+        "flash_crowd",        # Sudden surge in usage
+        "mobility_storm",     # Rapid handovers
+        "traffic_burst",      # Application data spikes
+        "handover_ping_pong", # Boundary oscillations
+        "sleepy_campus",      # Night/Day load cycles
+        "ambulance",          # High-priority stream
+        "adversarial",        # Rapid signal fluctuations
+        "commuter_rush",      # Mass group mobility
+        "mixed_reality",      # Interactive vs Bulk slices
+        "urban_canyon",       # Signal blockage
+        "iot_tsunami",        # Massive device scale
+        "spectrum_crunch"     # Multi-band management
     ]
+    
+    # If a specific scenario was requested, just run that one.
+    # Otherwise, run all if scenario is None or 'all'.
+    if config.scenario and config.scenario in all_scenarios:
+        scenarios = [config.scenario]
+        print(f"Running single scenario evaluation: {config.scenario}")
+    else:
+        scenarios = all_scenarios
+        print(f"Running full benchmark on all {len(all_scenarios)} scenarios...")
     
     # Initialize Baseline controller (static RAN, no AI)
     baseline = BaselineController(num_cells=config.num_cells)
@@ -218,16 +227,47 @@ def evaluate_radio_cortex(
         
         # Load real policy from models/
         from neural_networks import ActorCritic
-        state_dim = config.num_ues * 12 + config.num_cells * 5
-        action_dim = config.num_cells * 7 + config.num_ues
-        policy = ActorCritic(state_dim, action_dim).to('cpu')
         
         try:
             checkpoint = torch.load(model_path, map_location='cpu')
-            policy.load_state_dict(checkpoint['policy_state_dict'])
+            state_dict = checkpoint['policy_state_dict']
+            
+            # Detect dimensions from state_dict
+            # feature_net.0.weight shape is [hidden_dim, state_dim]
+            # actor_mean.0.bias shape is [action_dim]
+            stored_action_dim = state_dict['actor_mean.0.bias'].shape[0]
+            stored_state_dim = state_dict['feature_net.0.weight'].shape[1]
+            
+            # Verify if it matches current config
+            expected_state_dim = config.num_ues * 12 + config.num_cells * 5
+            expected_action_dim = config.num_cells * 7 + config.num_ues
+            
+            if stored_action_dim != expected_action_dim or stored_state_dim != expected_state_dim:
+                # Calculate what the model expects
+                # action_dim = cells * 7 + ues => ues = action_dim - cells * 7
+                detected_ues = stored_action_dim - (config.num_cells * 7)
+                print(f"      [WARNING] Model dimension mismatch!")
+                print(f"      Current Config: {config.num_ues} UEs ({expected_action_dim} actions)")
+                print(f"      Model Weights : {detected_ues} UEs ({stored_action_dim} actions)")
+                print(f"      -> Re-initializing policy with {detected_ues} UEs to match weights...")
+                
+                # Force config to match model for evaluation to work
+                config.num_ues = detected_ues
+                state_dim = stored_state_dim
+                action_dim = stored_action_dim
+            else:
+                state_dim = expected_state_dim
+                action_dim = expected_action_dim
+
+            policy = ActorCritic(state_dim, action_dim).to('cpu')
+            policy.load_state_dict(state_dict)
             print(f"      Model loaded: {model_path}")
+            
         except FileNotFoundError:
             print(f"      [ERROR] Model {model_path} not found! Run with --mode train first.")
+            raise
+        except KeyError as e:
+            print(f"      [ERROR] Invalid model checkpoint format: {e}")
             raise
             
         rc_agent = RadioCortexAgent(config.num_ues, config.num_cells, policy_model=policy)
@@ -259,6 +299,12 @@ def evaluate_radio_cortex(
             {scenario_name: results},
             save_path=f'results/{scenario_name}_metrics.tex'
         )
+
+        # Generate CSV Report
+        VisualizationSuite.generate_csv(
+            {scenario_name: results},
+            save_path=f'results/{scenario_name}_metrics.csv'
+        )
     
     # Summary
     print("\n" + "="*60)
@@ -267,11 +313,12 @@ def evaluate_radio_cortex(
     
     for scenario_name, results in all_results.items():
         print(f"\n{scenario_name}:")
+        print(f"{'Controller':<15} | {'Tput':<6} | {'Loss%':<6} | {'Satisf%':<7} | {'SpecEff':<7} | {'Score':<5}")
+        print("-" * 60)
         for controller, metrics in results.items():
-            print(f"  {controller}:")
-            print(f"    Throughput: {metrics.avg_throughput:.2f} Mbps")
-            print(f"    Packet Loss: {metrics.avg_packet_loss:.2%}")
-            print(f"    Recovery Time: {metrics.recovery_time:.2f}s")
+            avg_score = (metrics.qos_score + metrics.reliability_score + metrics.resource_score + 
+                         metrics.buffer_score + metrics.phy_score + metrics.ric_score) / 6.0
+            print(f"{controller:<15} | {metrics.avg_throughput:>6.2f} | {metrics.avg_packet_loss*100:>6.2f} | {metrics.satisfied_user_ratio*100:>7.1f} | {metrics.spectral_efficiency:>7.2f} | {avg_score:>5.1f}")
     
     return all_results
 
@@ -306,7 +353,7 @@ def main():
     # Environment configs
     parser.add_argument('--num-ues', type=int, default=20, help='Number of UEs')
     parser.add_argument('--num-cells', type=int, default=3, help='Number of cells')
-    parser.add_argument('--scenario', type=str, default='flash_crowd', help='ns-3 Scenario (flash_crowd, mobility_storm)')
+    parser.add_argument('--scenario', type=str, default=None, help='ns-3 Scenario (flash_crowd, mobility_storm, etc.). If omitted in eval mode, runs all scenarios.')
     parser.add_argument('--kpm-interval', type=int, default=100, help='KPM Reporting Interval (ms)')
     
     # Training configs
@@ -354,6 +401,10 @@ def main():
     
     # Execute mode
     if args.mode == 'train':
+        # Training requires a specific scenario, default to flash_crowd if not specified
+        if config.scenario is None:
+            config.scenario = "flash_crowd"
+            
         trainer = train_radio_cortex(
             config=config,
             total_timesteps=args.total_timesteps,

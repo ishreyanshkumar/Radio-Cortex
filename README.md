@@ -58,13 +58,42 @@ You can customize the training hyperparameters and environment settings via comm
 | `--learning-rate` | 3e-4 | Learning rate for PPO |
 | `--batch-size` | 64 | Batch size for optimization |
 | `--gamma` | 0.99 | Discount factor |
-| `--scenario` | flash_crowd | Simulation scenario (flash_crowd, mobility_storm) |
-| `--kpm-interval` | 100 | KPM Reporting Interval in ms (100 = Fast Training, 10 = High Freq Control) |
+| `--scenario` | flash_crowd | Simulation scenario (flash_crowd, mobility_storm, sleepy_campus, ambulance, traffic_burst, ping_pong, adversarial, commuter_rush, mixed_reality, urban_canyon, iot_tsunami, spectrum_crunch) |
+| `--kpm-interval` | 100 | KPM Reporting Interval in ms |
 | `--config` | None | Path to JSON config file to override args |
+| `--system_bandwidth_mhz` | 10.0 | System Bandwidth in MHz (e.g. 5.0, 10.0, 20.0). Affects capacity. |
+| `--eval-steps` | 100 | Number of steps per scenario in eval mode. |
 
-**Examples:**
+### 🌍 Simulation Scenarios
 
-**Challenging Scenario:**
+Radio-Cortex supports 12 diverse scenarios that stress-test different aspects of RAN intelligence.
+
+| Scenario | Type | Description | Key Metric |
+| :--- | :--- | :--- | :--- |
+| `flash_crowd` | Traffic | Sudden influx of users in one cell. | Congestion Intensity |
+| `mobility_storm` | Mobility | High-speed users moving across cells. | HO Success Rate |
+| `traffic_burst` | Traffic | Periodic surges in application data. | Peak Burst Loss |
+| `handover_ping_pong` | Mobility | Users oscillating between cell boundaries. | HO Count per UE |
+| `sleepy_campus` | Energy | Low-traffic night-time vs high-traffic day-time. | Energy Efficiency |
+| `ambulance` | QoS | High-priority emergency stream in congested RAN. | Priority UE Delay |
+| `adversarial` | Reliability | Rapid fluctuation in signal (shadowing). | Stability Score |
+| `commuter_rush` | Scaled Mobility | Mass group handover (50+ UEs moving together). | RACH Failure Rate |
+| `mixed_reality` | Slicing | Concurrent VR (Latent) and TCP (Bulk) users. | Slice Isolation |
+| `urban_canyon` | PHY | Sudden signal blockage behind buildings. | Recovery Time |
+| `iot_tsunami` | Scale | Massive device count (100+ UEs, small packets). | Scheduling Delay |
+| `spectrum_crunch` | Resources | Multi-band management (Carrier Aggregation). | Spectral Efficiency |
+
+
+**Example: Run a custom scenario**
+```bash
+python3 radio_cortex_complete.py --mode train --scenario iot_tsunami
+```
+
+**Example: Run full benchmark suite**
+```bash
+python3 radio_cortex_complete.py --mode eval
+```
+
 ```bash
 python3 radio_cortex_complete.py --mode train --num-ues 50 --num-cells 10 --scenario mobility_storm
 ```
@@ -95,8 +124,8 @@ python3 radio_cortex_complete.py --mode eval --model-path models/radio_cortex.pt
 | | SINR | Average Signal-to-Interference-plus-Noise Ratio (dB) |
 | **Capacity** | Satisfied Users | % of UEs meeting SLA (Tput > 1Mbps, Delay < 100ms) |
 | | Congestion Intensity | % of time RB utilization > 90% |
-| **Network** | Spectral Efficiency | Throughput / Bandwidth (bits/sec/Hz) |
-| | Handover Success Rate | Successful / Attempted handovers |
+| | Congestion Intensity | % of time RB utilization > 90% |
+| **Network** | Handover Success Rate | Successful / Attempted handovers |
 | **RIC Performance** | E2 Loop Latency | Time from KPM reception to Control transmission (ms) |
 | | Message Overhead | E2 messages per second (Hz) |
 

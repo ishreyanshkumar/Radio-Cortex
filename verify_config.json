@@ -1,0 +1,8 @@
+{
+    "scenario": "sleepy_campus",
+    "system_bandwidth_mhz": 20.0,
+    "num_ues": 5,
+    "sim_time": 5.0,
+    "kpm_interval_ms": 100,
+    "num_evaluation_steps": 10
+}
