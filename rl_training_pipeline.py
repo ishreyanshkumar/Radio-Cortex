@@ -156,9 +156,17 @@ class PPOTrainer:
                 if e2_metrics and e2_metrics.ue_metrics:
                     avg_tput = np.mean([m['throughput'] for m in e2_metrics.ue_metrics.values()])
                 
-                # Format action for display (first 3 dims)
-                action_str = f"[{', '.join(f'{x:.2f}' for x in action_denorm[:3])}...]"
-                print(f"[{self.total_steps}] Action={action_str} | Reward={reward:.3f} | Tput={avg_tput:.2f} Mbps", flush=True)
+                # Format detailed action summary for display
+                # Per cell: [Power, Sched, Harq, Hyst, Delay, NF, Weight]
+                num_cells = (len(action_denorm) - self.env.config.num_ues) // 7
+                if num_cells > 0:
+                    c0_actions = action_denorm[:7]
+                    ue_priorities = action_denorm[num_cells*7:]
+                    avg_ue_prio = np.mean(ue_priorities) if len(ue_priorities) > 0 else 0
+                    
+                    print(f"\n[Step {self.total_steps}] 🤖 RIC Decision (Cell 0): Power={c0_actions[0]:.1f}dBm | Sched={int(c0_actions[1])} | Avg UE Prio={avg_ue_prio:.2f}")
+                
+                print(f"[{self.total_steps}] Reward={reward:.3f} | Total Tput={avg_tput * self.env.config.num_ues:.2f} Mbps", flush=True)
 
             # File logging
             try:

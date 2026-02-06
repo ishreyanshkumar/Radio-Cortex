@@ -80,10 +80,25 @@ python3 radio_cortex_complete.py --mode train --config experiments/exp1_config.j
 ```
 
 ### Evaluation
-Evaluate a trained model against baselines.
+Evaluate a trained model against a static baseline (no AI control).
 ```bash
 python3 radio_cortex_complete.py --mode eval --model-path models/radio_cortex.pt
 ```
+
+**Metrics Tracked:**
+
+| Category | Metric | Description |
+|:---|:---|:---|
+| **Core QoS** | Throughput | Average downlink throughput (Mbps) |
+| | Packet Loss | Ratio of lost packets |
+| | Delay | Average end-to-end latency (ms) |
+| | SINR | Average Signal-to-Interference-plus-Noise Ratio (dB) |
+| **Capacity** | Satisfied Users | % of UEs meeting SLA (Tput > 1Mbps, Delay < 100ms) |
+| | Congestion Intensity | % of time RB utilization > 90% |
+| **Network** | Spectral Efficiency | Throughput / Bandwidth (bits/sec/Hz) |
+| | Handover Success Rate | Successful / Attempted handovers |
+| **RIC Performance** | E2 Loop Latency | Time from KPM reception to Control transmission (ms) |
+| | Message Overhead | E2 messages per second (Hz) |
 
 ### Quick Logic Verification
 To test the RL pipeline without the overhead of the full ns-3 simulation (no Kafka required):

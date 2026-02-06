@@ -34,6 +34,7 @@ class NS3Config:
 
     e2_port: int = 36421
     kpm_interval_ms: int = 100  # E2SM-KPM reporting interval
+    system_bandwidth_mhz: float = 10.0 # System Bandwidth
     scenario: str = "flash_crowd"  # Scenario to run
 
 
@@ -58,6 +59,13 @@ class NS3Interface:
         self.kafka_producer = None
         self.current_step = 0
         self.last_kpm_ts = None
+        
+        # Phase 2 Metrics
+        self.kpm_msg_count = 0
+        self.rc_msg_count = 0
+        self.e2_loop_latencies = []
+        self.start_time = time.time()
+        self.last_kpm_rx_time = 0.0
         
     def start_simulation(self):
         """Launch ns-3 simulation with O-RAN E2 interface enabled"""
@@ -178,6 +186,9 @@ class NS3Interface:
                 if getattr(self, '_debug_kpm_count', 0) < 5:
                     #print(f"DEBUG: Received KPM keys: {list(kpm_data.keys())} Sample: {kpm_data}")
                     self._debug_kpm_count = getattr(self, '_debug_kpm_count', 0) + 1
+                
+                self.last_kpm_rx_time = time.time() # Timestamp for E2 Latency
+                self.kpm_msg_count += 1
                 return self._parse_kpm(kpm_data)
             else:
                 return self._get_default_metrics()
@@ -189,23 +200,51 @@ class NS3Interface:
     def _parse_kpm(self, kpm_data):
         # Parse KPM metrics
         ue_metrics = {}
-      #  print(kpm_data.keys())
+        
+        # Track how many UEs got non-default values for key metrics
+        rsrp_real_count = 0
+        cell_real_count = 0
+        ho_real_count = 0
+        
         for ue_id in range(self.config.num_ues):
+            rsrp_val = kpm_data.get(f'ue_{ue_id}_rsrp', -140.0)
+            rsrq_val = kpm_data.get(f'ue_{ue_id}_rsrq', -20.0)
+            cell_val = kpm_data.get(f'ue_{ue_id}_cell', -1)
+            ho_att = kpm_data.get(f'ue_{ue_id}_ho_att', 0)
+            
+            # Track non-default counts
+            if rsrp_val != -140.0:
+                rsrp_real_count += 1
+            if cell_val != -1:
+                cell_real_count += 1
+            if ho_att > 0:
+                ho_real_count += 1
+            
             ue_metrics[ue_id] = {
                 'throughput': kpm_data.get(f'ue_{ue_id}_tput', 0.0),  # Mbps
                 'delay': kpm_data.get(f'ue_{ue_id}_delay', 0.0),  # ms
                 'packet_loss': kpm_data.get(f'ue_{ue_id}_loss', 0.0),  # ratio
                 'sinr': kpm_data.get(f'ue_{ue_id}_sinr', 0.0),  # dB
-                'rsrp': kpm_data.get(f'ue_{ue_id}_rsrp', -140.0),  # dBm
-                'rsrq': kpm_data.get(f'ue_{ue_id}_rsrq', -20.0),  # dB
+                'rsrp': rsrp_val,  # dBm
+                'rsrq': rsrq_val,  # dB
                 'ul_rbs': kpm_data.get(f'ue_{ue_id}_ul_rbs', 0.0),  # avg RBs
                 'rb_allocated': kpm_data.get(f'ue_{ue_id}_rbs', 0),
                 'cqi': kpm_data.get(f'ue_{ue_id}_cqi', 0.0),
                 'rsrp_var': kpm_data.get(f'ue_{ue_id}_rsrp_var', 0.0),
                 'rsrq_var': kpm_data.get(f'ue_{ue_id}_rsrq_var', 0.0),
                 'buffer_occupancy': kpm_data.get(f'ue_{ue_id}_buffer', 0.0),
-                'serving_cell': kpm_data.get(f'ue_{ue_id}_cell', -1),
+                'serving_cell': cell_val,
+                'handover_attempts': ho_att,
+                'handover_successes': kpm_data.get(f'ue_{ue_id}_ho_succ', 0),
             }
+        
+        # Print data quality summary every 10 KPM reports
+        if not hasattr(self, '_kpm_parse_count'):
+            self._kpm_parse_count = 0
+        self._kpm_parse_count += 1
+        if self._kpm_parse_count % 50 == 1:
+            num_ues = self.config.num_ues
+            print(f"\n  [Data Quality] RSRP: {rsrp_real_count}/{num_ues} real | Cell: {cell_real_count}/{num_ues} real | HO: {ho_real_count}/{num_ues} with events")
         
         cell_metrics = {}
         for cell_id in range(self.config.num_cells):
@@ -238,6 +277,11 @@ class NS3Interface:
         try:
             self.kafka_producer.send('e2_rc_control', rc_message)
             self.kafka_producer.flush()
+            
+            self.rc_msg_count += 1
+            if hasattr(self, 'last_kpm_rx_time') and self.last_kpm_rx_time > 0:
+                latency = (time.time() - self.last_kpm_rx_time) * 1000.0 # ms
+                self.e2_loop_latencies.append(latency)
         except Exception as e:
             # print(f"Error sending RC control: {e}")
             pass 
@@ -246,10 +290,14 @@ class NS3Interface:
         """Fallback metrics if E2 connection fails"""
         return E2Message(
             timestamp=time.time(),
-            ue_metrics={i: {'throughput': 0, 'delay': 0, 'packet_loss': 0, 'sinr': -10,
-                            'rsrp': -140, 'rsrq': -20, 'ul_rbs': 0.0, 'rb_allocated': 0}
-                       for i in range(self.config.num_ues)},
-            cell_metrics={i: {'queue_length': 0, 'rb_utilization': 0, 'tx_power': 23, 'num_connected_ues': 0}
+            ue_metrics={i: {
+                'throughput': 0, 'delay': 0, 'packet_loss': 0, 'sinr': -10,
+                'rsrp': -140, 'rsrq': -20, 'ul_rbs': 0.0, 'rb_allocated': 0,
+                'cqi': 0, 'rsrp_var': 0, 'rsrq_var': 0, 'buffer_occupancy': 0,
+                'serving_cell': -1, 'handover_attempts': 0, 'handover_successes': 0
+            } for i in range(self.config.num_ues)},
+            cell_metrics={i: {'queue_length': 0, 'rb_utilization': 0, 'tx_power': 23, 
+                             'num_connected_ues': 0, 'cell_load': 0, 'avg_rb_request': 0}
                          for i in range(self.config.num_cells)}
         )
     
@@ -499,9 +547,32 @@ class ORANns3Env(gym.Env):
         """
         if not e2_msg.ue_metrics:
             return 0.0
+        
+        # Print formatted UE metrics table (ALL 15 parameters)
+        num_ues = len(e2_msg.ue_metrics)
+        print(f"\n  ╔{'═'*120}╗")
+        print(f"  ║  UE Metrics - {num_ues} UEs {'':>90}║")
+        print(f"  ╠{'═'*120}╣")
+        print(f"  ║ {'UE':>2} │ {'Tput':>6} │ {'Delay':>6} │ {'Loss':>5} │ {'SINR':>6} │ {'RSRP':>7} │ {'RSRQ':>6} │ {'CQI':>3} │ {'Cell':>4} │ {'DL RBs':>6} │ {'UL RBs':>6} │ {'Buffer':>6} │ {'HO A/S':>6} ║")
+        print(f"  ╠{'═'*120}╣")
+        for ue_id, m in e2_msg.ue_metrics.items():
+            # Handle default values with indicators
+            rsrp_str = f"{m['rsrp']:.0f}" if m['rsrp'] != -140 else "  --"
+            rsrq_str = f"{m['rsrq']:.0f}" if m['rsrq'] != -20 else " --"
+            cell_str = f"{m['serving_cell']}" if m['serving_cell'] != -1 else "--"
+            ho_str = f"{m['handover_attempts']}/{m['handover_successes']}" if m['handover_attempts'] > 0 else " -/-"
+            buffer_str = f"{m['buffer_occupancy']:.0f}" if m['buffer_occupancy'] > 0 else "  0"
+            ul_rbs_str = f"{m['ul_rbs']:.0f}" if m['ul_rbs'] > 0 else "  0"
             
-        for m in e2_msg.ue_metrics.values():
-            print(m)
+            print(f"  ║ {ue_id:>2} │ {m['throughput']:>5.2f}M │ {m['delay']:>5.0f}ms │ {m['packet_loss']*100:>4.1f}% │ {m['sinr']:>5.1f}dB │ {rsrp_str:>6}dB │ {rsrq_str:>5}dB │ {m['cqi']:>3.0f} │ {cell_str:>4} │ {m['rb_allocated']:>6} │ {ul_rbs_str:>6} │ {buffer_str:>6} │ {ho_str:>6} ║")
+        print(f"  ╚{'═'*120}╝")
+        
+        # Print variance summary if any UE has non-zero variance
+        rsrp_vars = [(ue_id, m['rsrp_var']) for ue_id, m in e2_msg.ue_metrics.items() if m['rsrp_var'] > 0]
+        if rsrp_vars:
+            var_str = ", ".join([f"UE{ue}:{var:.1f}" for ue, var in rsrp_vars[:5]])
+            print(f"  [Variance] RSRP: {var_str}")
+        
         tputs = [m['throughput'] for m in e2_msg.ue_metrics.values()]
         delays = [m['delay'] for m in e2_msg.ue_metrics.values()]
         sinrs = [m['sinr'] for m in e2_msg.ue_metrics.values()]

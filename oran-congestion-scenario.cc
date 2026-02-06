@@ -66,6 +66,8 @@ struct UeMetricAccumulator
     uint32_t packetsLost{0};
     uint64_t rbsAllocated{0}; // Estimated
     int32_t servingCellId{-1};
+    uint32_t handoverAttempts{0};
+    uint32_t handoverSuccesses{0};
 
     void Reset()
     {
@@ -85,6 +87,8 @@ struct UeMetricAccumulator
         packetsLost = 0;
         rbsAllocated = 0;
         servingCellId = -1;
+        handoverAttempts = 0;
+        handoverSuccesses = 0;
     }
 };
 
@@ -113,7 +117,10 @@ class MetricCollector : public SimpleRefCount<MetricCollector>
     void ReportUlPhyResourceBlocks(uint16_t rnti, const std::vector<int>& rbs);
     void ReportDlScheduling(DlSchedulingCallbackInfo info);
     void ReportAppRx(uint32_t ueIndex, Ptr<const Packet> packet);
-    // void ReportUeRxPdu(uint16_t rnti, uint32_t pduLen, uint64_t delayNs);
+
+    // Handover Callbacks
+    void ReportHandoverStart(uint64_t imsi, uint16_t cellId, uint16_t rnti, uint16_t targetCellId);
+    void ReportHandoverEndOk(uint64_t imsi, uint16_t cellId, uint16_t rnti);
 
     // Accessors
     std::map<uint32_t, UeMetricAccumulator> GetAndResetUeMetrics();
@@ -209,6 +216,18 @@ MetricCollector::RegisterUeTraces(NodeContainer ues)
                         "ReportUlPhyResourceBlocks",
                         MakeCallback(&MetricCollector::ReportUlPhyResourceBlocks, this));
                 }
+
+                // RRC Traces for Handover
+                Ptr<LteUeRrc> rrc = lteDev->GetRrc();
+                if (rrc)
+                {
+                    rrc->TraceConnectWithoutContext(
+                        "HandoverStart",
+                        MakeCallback(&MetricCollector::ReportHandoverStart, this));
+                    rrc->TraceConnectWithoutContext(
+                        "HandoverEndOk",
+                        MakeCallback(&MetricCollector::ReportHandoverEndOk, this));
+                }
             }
         }
     }
@@ -286,8 +305,6 @@ MetricCollector::ReportUeMeasurements(uint16_t rnti,
     m_ueMetrics[ueIndex].rsrpSamples++;
     m_ueMetrics[ueIndex].sumRsrq += rsrq;
     m_ueMetrics[ueIndex].sumRsrqSq += rsrq * rsrq;
-    m_ueMetrics[ueIndex].sumRsrq += rsrq;
-    m_ueMetrics[ueIndex].sumRsrqSq += rsrq * rsrq;
     m_ueMetrics[ueIndex].rsrqSamples++;
     m_ueMetrics[ueIndex].servingCellId = cellId;
 }
@@ -349,9 +366,37 @@ MetricCollector::ReportAppRx(uint32_t ueIndex, Ptr<const Packet> packet)
     m_ueMetrics[ueIndex].sumLatency += delay.GetSeconds() * 1000.0; // ms
     m_ueMetrics[ueIndex].packetsRx++;
 
-    // VERIFY: Prove Delay comes from ns-3
     // std::cout << "VERIFY: APP_RX RNTI=" << rnti
     //           << " Delay=" << delay.GetSeconds() * 1000.0 << "ms" << std::endl;
+}
+
+void
+MetricCollector::ReportHandoverStart(uint64_t imsi,
+                                     uint16_t cellId,
+                                     uint16_t rnti,
+                                     uint16_t targetCellId)
+{
+    std::lock_guard<std::mutex> lock(m_mutex);
+    auto it = m_rntiToUeIndex.find(rnti);
+    if (it == m_rntiToUeIndex.end())
+    {
+        return;
+    }
+    uint32_t ueIndex = it->second;
+    m_ueMetrics[ueIndex].handoverAttempts++;
+}
+
+void
+MetricCollector::ReportHandoverEndOk(uint64_t imsi, uint16_t cellId, uint16_t rnti)
+{
+    std::lock_guard<std::mutex> lock(m_mutex);
+    auto it = m_rntiToUeIndex.find(rnti);
+    if (it == m_rntiToUeIndex.end())
+    {
+        return;
+    }
+    uint32_t ueIndex = it->second;
+    m_ueMetrics[ueIndex].handoverSuccesses++;
 }
 
 std::map<uint32_t, UeMetricAccumulator>
@@ -443,6 +488,8 @@ class E2InterfaceManager : public SimpleRefCount<E2InterfaceManager>
         double rsrq_var;
         double bufferOccupancy;
         int32_t servingCellId;
+        uint32_t handoverAttempts;
+        uint32_t handoverSuccesses;
     };
 
     struct CellMetrics
@@ -651,9 +698,10 @@ E2InterfaceManager::CollectUeMetrics()
         ueMetric.cqi = 0.0;
         ueMetric.rsrp_var = 0.0;
         ueMetric.rsrq_var = 0.0;
-        ueMetric.rsrq_var = 0.0;
         ueMetric.bufferOccupancy = 0.0;
         ueMetric.servingCellId = -1;
+        ueMetric.handoverAttempts = 0;
+        ueMetric.handoverSuccesses = 0;
 
         if (realMetrics.count(i))
         {
@@ -712,7 +760,6 @@ E2InterfaceManager::CollectUeMetrics()
 
             ueMetric.rbAllocated = acc.rbsAllocated;
             // Placeholder buffer occupancy (not directly available); keep zero for now
-            // Placeholder buffer occupancy (not directly available); keep zero for now
             ueMetric.bufferOccupancy = 0.0;
             ueMetric.servingCellId = acc.servingCellId;
 
@@ -728,6 +775,10 @@ E2InterfaceManager::CollectUeMetrics()
                 estCqi = 15;
             }
             ueMetric.cqi = static_cast<double>(estCqi);
+
+            // Handover metrics
+            ueMetric.handoverAttempts = acc.handoverAttempts;
+            ueMetric.handoverSuccesses = acc.handoverSuccesses;
         }
 
         metrics[i] = ueMetric;
@@ -799,6 +850,8 @@ E2InterfaceManager::SendKpmReport()
         kpmJson << "\"ue_" << ueId << "_rsrq_var\":" << metrics.rsrq_var << ",";
         kpmJson << "\"ue_" << ueId << "_buffer\":" << metrics.bufferOccupancy << ",";
         kpmJson << "\"ue_" << ueId << "_cell\":" << metrics.servingCellId << ",";
+        kpmJson << "\"ue_" << ueId << "_ho_att\":" << metrics.handoverAttempts << ",";
+        kpmJson << "\"ue_" << ueId << "_ho_succ\":" << metrics.handoverSuccesses << ",";
     }
 
     // Prepare per-cell aggregates (avg rb request, load)

@@ -17,36 +17,50 @@ We categorize metrics based on the network layer they analyze, ensuring a holist
 *   **Packet Loss Ratio (%):** Ratio of lost packets to total sent.
 *   **Peak Burst Loss (%):** Maximum packet loss observed in any rolling 1-second window. High burst loss indicates instability.
 *   **PDR (Packet Delivery Ratio):** `100% - Packet Loss %`.
+*   **Peak Burst Loss (%):** Max packet loss in any 1s window.
+*   **Recovery Time (s):** Time taken to return to < 2% loss after a failure (> 10% loss).
+*   **Handover Success Rate (%):** Successful / Attempted handovers.
 
 ### ⚡ Resource Efficiency (Spectrum & Network)
 *   **Spectrum Utilization (%):** Average usage of Resource Blocks (RBs) across all cells.
 *   **Congestion Intensity (%):** Percentage of time where network utilization > 90%.
 *   **Cell Edge Throughput (Mbps):** 5th Percentile throughput. Indicates how well the network serves users with poor coverage (fairness).
+*   **Jain's Fairness Index (0-1):** Measures how equally resources are shared. 1.0 = perfect equality.
+    *   *Formula:* $(\sum x_i)^2 / (n \cdot \sum x_i^2)$ where $x_i$ is UE throughput.
+*   **Spectral Efficiency (b/s/Hz):** Throughput per unit bandwidth.
 
 ### 📶 PHY / Wireless Layer
 *   **Average SINR (dB):** Signal-to-Interference-plus-Noise Ratio.
 *   **Average RSRP (dBm):** Reference Signal Received Power (Signal Strength).
+*   **Average RSRQ (dB):** Reference Signal Received Quality.
+*   **CQI:** Channel Quality Indicator (0-15).
 
 ### 🚀 Mobility Metrics
 *   **Handover Count:** Number of cell switches per UE.
+*   **Handover Attempts/Successes:** Raw counts of handover events.
+
+### 🖧 RIC / E2 Interface Metrics (Phase 2)
+*   **E2 Loop Latency (ms):** Control loop response time.
+*   **RIC Message Overhead (msg/s):** E2 messages per second.
+*   **Control Stability (%):** 0-100 score measuring AI "jitter". High score means stable decisions; low score means frequent, large action changes.
 
 ---
 
 ## 2. Composite Health Scores (Radar Chart)
 
-To provide a quick "Health Check" of the network, we aggregate metrics into 5 composite scores (0-100).
+To provide a quick "Health Check" of the network, we aggregate metrics into **6 composite scores** (0-100).
 
 ### 🏆 1. QoS Score (User Experience)
 Combines how fast, responsive, and consistent the network felt to users.
 *   **Formula:** `25% Throughput + 25% Delay + 15% Jitter + 35% Satisfied Users`
 
 ### 🛡️ 2. Reliability Score (Stability)
-Penalizes both constant loss, sudden outages, and unstable mobility.
-*   **Formula:** `40% Avg Loss + 30% Peak Burst Loss + 30% Handover Stability`
+Penalizes both constant loss, sudden outages, unstable mobility, and handover failures. Rewards fast recovery.
+*   **Formula:** `30% Avg Loss + 20% Peak Burst Loss + 15% Handover Stability + 20% Handover Success Rate + 15% Recovery Time`
 
 ### 🏗️ 3. Resource Score (Efficiency & Fairness)
-Rewards high spectrum utilization *only* if it is distributed fairly and doesn't starve edge users.
-*   **Formula:** `50% Utilization + 20% Cell Edge Performance + 30% Jain's Fairness`
+Rewards high spectrum utilization *only* if it is distributed fairly and doesn't starve edge users. Includes spectral efficiency.
+*   **Formula:** `30% Utilization + 20% Cell Edge Performance + 25% Jain's Fairness + 25% Spectral Efficiency`
 
 ### 📦 4. Buffer Score (Congestion Health)
 Measures buffer occupancy and congestion spikes.
@@ -56,23 +70,65 @@ Measures buffer occupancy and congestion spikes.
 Combined physical layer conditions.
 *   **Formula:** `60% SINR + 40% RSRP`
 
+### 🖧 6. RIC Score (E2 Interface & AI Stability)
+Measures control loop latency, message overhead, and AI "jitteriness".
+*   **Formula:** `50% E2 Latency + 20% Message Overhead + 30% Control Stability`
+*   High stability, low latency, and reasonable overhead yield high scores.
+
 ---
 
-## 3. Excluded Metrics & Limitations
+## 3. Per-UE Metrics Display
 
-The following metrics were considered but **not implemented** in the current scope due to simulator constraints:
+During evaluation, a formatted table shows **all 13+ metrics per UE**:
+
+```
+  ╔════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════╗
+  ║  UE Metrics - 20 UEs                                                                                                    ║
+  ╠════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════╣
+  ║ UE │   Tput │  Delay │  Loss │   SINR │    RSRP │   RSRQ │ CQI │ Cell │ DL RBs │ UL RBs │ Buffer │  HO A/S ║
+  ╠════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════╣
+  ║  0 │  1.41M │    53ms │  0.0% │  29.1dB │   -100dB │  -13dB │  15 │    2 │    344 │      0 │      0 │    -/- ║
+  ...
+  ╚════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════╝
+```
+
+**Legend:**
+- `--` indicates a default/unavailable value (e.g., RSRP=-140, Cell=-1)
+- `HO A/S` = Handover Attempts / Successes
+- Variance summary printed below table if non-zero
+
+---
+
+## 4. Data Quality Indicator
+
+Every 50 steps, a data quality summary is printed:
+```
+[Data Quality] RSRP: 18/20 real | Cell: 18/20 real | HO: 0/20 with events
+```
+
+| Indicator | Good | Concerning |
+|-----------|------|------------|
+| RSRP | >80% real | <50% after 30s |
+| Cell | >80% real | Persistently 0 |
+| HO | 0 in non-mobility scenarios | 0 in `mobility_storm` |
+
+---
+
+## 5. Excluded Metrics & Limitations
+
+The following metrics were considered but **not implemented** due to simulator constraints:
 
 | Metric | Category | Reason for Exclusion |
 | :--- | :--- | :--- |
-| **Energy Consumption** | Resource | Requires `EnergyModel` and `WifiRadioEnergyModel` helpers enabled in the C++ ns-3 script (`oran-congestion-scenario.cc`). |
-| **Collision Rate** | Reliability | Requires explicit MAC layer tracing (`EnableAscii` or `MacTxDrop` callbacks) which adds significant I/O overhead and is not currently exposed via E2 KPMs. |
-| **Control Overhead** | Resource | Requires deep packet inspection (DPI) of control vs. data planes in PCAP traces, which is not feasible in real-time RL loops. |
+| **Energy Consumption** | Resource | Requires `EnergyModel` helpers enabled in C++ ns-3 script. |
+| **Collision Rate** | Reliability | Requires MAC layer tracing with significant I/O overhead. |
+| **Control Overhead** | Resource | Requires deep packet inspection, not feasible in real-time RL. |
 
 ---
 
-## 3. How to Run Evaluation
+## 6. How to Run Evaluation
 
-Run the evaluation mode of the main script. This will compare the `Radio-Cortex` agent against `Static-RAN` and `Heuristic` baselines.
+Run the evaluation mode comparing `Radio-Cortex` agent against `Static-RAN` baseline:
 
 ```bash
 python3 radio_cortex_complete.py --mode eval
@@ -80,6 +136,6 @@ python3 radio_cortex_complete.py --mode eval
 
 ### Outputs
 Results are saved in the `results/` directory:
-1.  **`*_comparison.png`:** Bar charts comparing raw metrics.
-2.  **`*_radar.png`:** Radar chart comparing the 5 composite health scores.
-3.  **`evaluation_results.tex`:** LaTeX table for paper inclusion.
+1.  **`*_comparison.png`:** Bar charts comparing all 20 metrics across 5 rows.
+2.  **`*_radar.png`:** Radar chart comparing the **6 composite health scores**.
+3.  **`*_metrics.tex`:** LaTeX table for paper inclusion.
