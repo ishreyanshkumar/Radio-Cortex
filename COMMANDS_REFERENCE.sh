@@ -8,7 +8,7 @@
 # ============================================================================
 
 # Install Python dependencies
-pip install numpy torch gymnasium kafka-python
+pip install numpy torch gymnasium kafka-python matplotlib
 
 # Start Kafka (Required for training loop)
 # Note: Keep this running in a separate terminal or background
@@ -19,12 +19,16 @@ pip install numpy torch gymnasium kafka-python
 # ============================================================================
 
 # --- Standard Training ---
-# Trains PPO agent with default settings (3 cells, 20 UEs)
+# Trains PPO agent with default settings (3 cells, 20 UEs, flash_crowd scenario)
 python3 radio_cortex_complete.py --mode train
 
-# --- Custom Topology ---
-# Train on a larger network
-python3 radio_cortex_complete.py --mode train --num-ues 50 --num-cells 5 --scenario mobility_storm
+# --- Custom Topology & Scenario ---
+# Train on a larger network with a specific scenario and duration
+python3 radio_cortex_complete.py --mode train \
+    --num-ues 50 \
+    --num-cells 5 \
+    --scenario mobility_storm \
+    --sim-time 20.0
 
 # --- Hyperparameter Tuning (PPO) ---
 # Customize PPO learning parameters
@@ -44,12 +48,9 @@ python3 radio_cortex_complete.py --mode train \
     --device cuda \
     --model-path models/advanced_ppo.pt
 
-# --- Training Speed vs Control Frequency ---
-# Fast Training (100ms interval - Default)
-python3 radio_cortex_complete.py --mode train --kpm-interval 100
-
-# High-Fidelity Control (10ms interval - Standard O-RAN)
-python3 radio_cortex_complete.py --mode train --kpm-interval 10 --total-timesteps 200000
+# --- Spectrum Management ---
+# Train with different system bandwidth (affects capacity)
+python3 radio_cortex_complete.py --mode train --system-bandwidth-mhz 20.0
 
 # --- Using Config File ---
 # Load arguments from a JSON file
@@ -59,37 +60,47 @@ python3 radio_cortex_complete.py --mode train --config experiments/config_exampl
 # 3. EVALUATION
 # ============================================================================
 
-# Evaluate trained model against baselines
+# Evaluate trained model against baselines across all scenarios
 python3 radio_cortex_complete.py --mode eval --model-path models/radio_cortex.pt
 
-# Evaluate specific checkpoint
-python3 radio_cortex_complete.py --mode eval --model-path models/advanced_ppo.pt
+# Evaluate specific checkpoint on a single scenario
+python3 radio_cortex_complete.py --mode eval \
+    --model-path models/advanced_ppo.pt \
+    --scenario urban_canyon
 
 # ============================================================================
-# 4. QUICK VERIFICATION (No ns-3/Kafka required)
+# 4. QUICK VERIFICATION & TESTING
 # ============================================================================
 
-# Fast training on mock environment to verify RL logic
+# A. Verify E2 Interface (Ensures Kafka + ns-3 are sending real metrics)
+python3 verify_kpm_data.py
+
+# B. Fast training on mock environment (No ns-3/Kafka required, verified dimensions)
 python3 quick_train.py
+
+# C. Minimal real training (Very few steps, saves model)
+./train_quick.sh
 
 # ============================================================================
 # 5. UTILITIES
 # ============================================================================
 
 # Interpret Policy (Saliency Map)
-python3 interpret_policy.py --checkpoint models/radio_cortex.pt --top-k 5
+# Requires a model and a log file (action_logs.jsonl)
+python3 interpret_policy.py --checkpoint models/radio_cortex.pt --action-index 0 --top-k 10
 
-# Plot Training Progress
+# Plot Training Progress (from action_logs.jsonl)
 python3 -c "import json; import matplotlib.pyplot as plt; \
 data = [json.loads(l) for l in open('action_logs.jsonl')]; \
-plt.plot([d['reward'] for d in data]); plt.savefig('training_curve.png')"
+plt.plot([d['reward'] for d in data]); plt.title('Training Reward'); \
+plt.savefig('training_curve.png'); print('Saved training_curve.png')"
 
-# Monitor Training
+# Monitor Training Output
 tail -f action_logs.jsonl
 
 # ============================================================================
 # 6. NS-3 SIMULATION ONLY (Manual Testing)
 # ============================================================================
 
-# Run simulation without Python agent (generates traffic, requires Kafka listener)
-./ns3 run "oran-congestion-scenario --numUes=20 --numCells=3 --simTime=10"
+# Run simulation without Python agent (requires Kafka listener to see data)
+./ns3 run "oran-congestion-scenario --numUes=20 --numCells=3 --simTime=10 --scenario=flash_crowd"

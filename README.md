@@ -47,22 +47,26 @@ This commands automatically:
 
 ## 🎮 Usage & Workflows
 
-### advanced Training Configuration
+### Advanced Training Configuration
 You can customize the training hyperparameters and environment settings via command-line arguments.
 
 | Argument | Default | Description |
 |:---|:---|:---|
-| `--num-ues` | 20 | Number of User Equipments (UEs) |
-| `--num-cells` | 3 | Number of cells (eNodeBs) |
-| `--total-timesteps` | 10000 | Total training timesteps |
-| `--learning-rate` | 3e-4 | Learning rate for PPO |
-| `--batch-size` | 64 | Batch size for optimization |
-| `--gamma` | 0.99 | Discount factor |
-| `--scenario` | flash_crowd | Simulation scenario (flash_crowd, mobility_storm, sleepy_campus, ambulance, traffic_burst, ping_pong, adversarial, commuter_rush, mixed_reality, urban_canyon, iot_tsunami, spectrum_crunch) |
-| `--kpm-interval` | 100 | KPM Reporting Interval in ms |
-| `--config` | None | Path to JSON config file to override args |
-| `--system_bandwidth_mhz` | 10.0 | System Bandwidth in MHz (e.g. 5.0, 10.0, 20.0). Affects capacity. |
-| `--eval-steps` | 100 | Number of steps per scenario in eval mode. |
+| `--mode` | `train` | Operation mode: `train`, `eval`, `demo`. |
+| `--num-ues` | 20 | Number of User Equipments (UEs). |
+| `--num-cells` | 3 | Number of cells (eNodeBs). |
+| `--scenario` | `flash_crowd` | ns-3 Scenario (12 available). |
+| `--sim-time` | 10.0 | Simulation duration per episode (seconds). |
+| `--kpm-interval` | 100 | KPM Reporting Interval in ms. |
+| `--system-bandwidth-mhz` | 10.0 | System Bandwidth (5.0, 10.0, 20.0). |
+| `--total-timesteps` | 10000 | Total training timesteps. |
+| `--learning-rate` | 3e-4 | Learning rate for PPO. |
+| `--batch-size` | 64 | Batch size for optimization. |
+| `--gamma` | 0.99 | Discount factor. |
+| `--model-path` | `models/radio_cortex.pt` | Path to save/load model. |
+| `--config` | None | Path to JSON config file to override args. |
+| `--device` | `cpu/cuda` | Compute device. |
+| `--hidden-dim` | 256 | Hidden dimension for actor/critic networks. |
 
 ### 🌍 Simulation Scenarios
 
@@ -86,7 +90,7 @@ Radio-Cortex supports 12 diverse scenarios that stress-test different aspects of
 
 **Example: Run a custom scenario**
 ```bash
-python3 radio_cortex_complete.py --mode train --scenario iot_tsunami
+python3 radio_cortex_complete.py --mode train --scenario iot_tsunami --num-ues 50
 ```
 
 **Example: Run full benchmark suite**
@@ -94,6 +98,20 @@ python3 radio_cortex_complete.py --mode train --scenario iot_tsunami
 python3 radio_cortex_complete.py --mode eval
 ```
 
+### 🔍 Verification & Testing
+Before running a long training session, verify that the data pipeline is working.
+
+- **E2 Interface Check:** Confirm real KPM metrics (throughput, delay) are flowing from ns-3 via Kafka.
+  ```bash
+  python3 verify_kpm_data.py
+  ```
+- **RL Pipeline Check:** Train a tiny agent on a mock environment (no ns-3 needed) to verify the neural network and PPO logic.
+  ```bash
+  python3 quick_train.py
+  ```
+
+### 📊 Evaluation
+Evaluate a trained model against a static baseline (no AI control).
 ```bash
 python3 radio_cortex_complete.py --mode train --num-ues 50 --num-cells 10 --scenario mobility_storm
 ```
@@ -113,6 +131,11 @@ Evaluate a trained model against a static baseline (no AI control).
 ```bash
 python3 radio_cortex_complete.py --mode eval --model-path models/radio_cortex.pt
 ```
+
+**Outputs (saved in `results/`):**
+- **Comparison Plots (`*_comparison.png`):** Detailed bar charts comparing all KPIs (TP, Delay, Loss, SINR, etc.) for both AI and Baseline.
+- **Health Radar (`*_radar.png`):** High-level view across 6 composite scores (QoS, Reliability, Resources, Buffer, PHY, RIC).
+- **Metric Reports (`*_metrics.csv`, `*_metrics.tex`):** Raw data and ready-to-use LaTeX tables for reports.
 
 **Metrics Tracked:**
 
@@ -218,58 +241,64 @@ The "Digital Twin" of the RAN. Implements the LTE/5G network, traffic generation
 ## 🔄 System Architecture
 
 ```mermaid
-graph TD
-    %% Subgraph for the ns-3 Simulation Environment
-    subgraph NS3_SIM ["Simulation (C++)"]
+graph LR
+    %% Data Flow Labels
+    subgraph SIM ["ns-3 Simulation (C++)"]
         direction TB
-        RAN["LTE/NR Network<br>(eNodeBs + UEs)"]
-        Trace["Traces"]
-        subgraph E2_MODULE ["E2 Interface Layer"]
-            MC["MetricCollector<br>(Aggregates Stats)"]
-            E2M["E2InterfaceManager<br>(Kafka Producer/Consumer)"]
+        subgraph RAN ["RAN Infrastructure"]
+            L12["PHY / MAC / RLC"]
+            STACK["PDCP / RRC"]
+        end
+        
+        subgraph E2 ["E2 Node Interface"]
+            COLL["Metric Collector<br/>(KPM Agreggator)"]
+            PROC["Action Processor<br/>(RC Handler)"]
         end
     end
 
-    %% Subgraph for the Kafka Messaging Middleware
-    subgraph KAFKA ["Kafka Middleware"]
+    subgraph BUS ["Message Bus (Kafka)"]
         direction TB
-        Topic_KPM[("e2_kpm_stream<br>(Metrics)")]
-        Topic_RC[("e2_rc_control<br>(Actions)")]
+        TOPIC_KPM[("e2_kpm_stream<br/>(Reports)")]
+        TOPIC_RC[("e2_rc_control<br/>(Commands)")]
     end
 
-    %% Subgraph for the Python RL Environment
-    subgraph PYTHON_AGENT ["RL Agent (Python)"]
+    subgraph RIC ["Intelligent Controller (Python)"]
         direction TB
-        Gym["Gym Environment<br>(oran_ns3_env.py)"]
-        subgraph PPO_ALG ["PPO Implementation"]
-            Agent["PPO Agent<br>(Actor-Critic)"]
-            Model["Neural Network"]
+        subgraph ENV ["Gym Environment"]
+            GYM["ORANns3Env"]
+        end
+        
+        subgraph AI ["AI Brain (PPO)"]
+            AGENT["PPO Agent"]
+            NET["Neural Network"]
         end
     end
 
-    %% Data Flow Connections
-    RAN -- "Packet/PHY Events" --> Trace
-    Trace -- "Callbacks" --> MC
-    MC -- "Accumulated Metrics<br>(TP, Delay, SINR)" --> E2M
-    E2M -- "JSON Serialized Report" --> Topic_KPM
+    %% Connections - Downlink / Metrics
+    L12 --> COLL
+    STACK --> COLL
+    COLL -- "E2SM-KPM<br/>(JSON)" --> TOPIC_KPM
+    TOPIC_KPM --> GYM
+    GYM -- "State Vector" --> AGENT
+    AGENT --> NET
 
-    Topic_KPM -- "Poll Messages" --> Gym
-    Gym -- "State Vector<br>(Normalized)" --> Agent
-    Agent -- "Inference" --> Model
-    Model -- "Action Logits" --> Agent
-    Agent -- "Selected Action" --> Gym
+    %% Connections - Uplink / Control
+    NET --> AGENT
+    AGENT -- "Action Vector" --> GYM
+    GYM -- "E2SM-RC<br/>(JSON)" --> TOPIC_RC
+    TOPIC_RC --> PROC
+    PROC -- "SetTxPower / Sched" --> RAN
 
-    Gym -- "JSON Control Command" --> Topic_RC
-    Topic_RC -- "Consume Command" --> E2M
-    E2M -- "SetTxPower(cell, power)" --> RAN
-    
     %% Styling
-    classDef cpp fill:#f9f,stroke:#333,stroke-width:2px;
-    classDef python fill:#9cf,stroke:#333,stroke-width:2px;
-    classDef kafka fill:#ff9,stroke:#333,stroke-width:2px;
-    class NS3_SIM,RAN,E2_MODULE,MC,E2M cpp;
-    class PYTHON_AGENT,Gym,PPO_ALG,Agent,Model python;
-    class KAFKA,Topic_KPM,Topic_RC kafka;
+    classDef simNode fill:#f8f9fa,stroke:#343a40,stroke-width:2px,color:#212529;
+    classDef kafkaNode fill:#fff9db,stroke:#fcc419,stroke-width:2px,color:#212529;
+    classDef pythonNode fill:#e7f5ff,stroke:#228be6,stroke-width:2px,color:#212529;
+    classDef stackNode fill:#f1f3f5,stroke:#adb5bd,stroke-style:dashed;
+
+    class SIM,RAN,E2,L12,STACK,COLL,PROC simNode;
+    class BUS,TOPIC_KPM,TOPIC_RC kafkaNode;
+    class RIC,ENV,AI,GYM,AGENT,NET pythonNode;
+    class RAN,E2,ENV,AI stackNode;
 ```
 
 ---

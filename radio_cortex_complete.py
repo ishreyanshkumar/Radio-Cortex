@@ -373,6 +373,8 @@ def main():
     parser.add_argument('--log-interval', type=int, default=5, help='Logging interval (updates)')
     parser.add_argument('--device', type=str, default='cuda' if torch.cuda.is_available() else 'cpu', help='Device (cpu/cuda)')
     parser.add_argument('--config', type=str, default=None, help='Path to JSON config file to override arguments')
+    parser.add_argument('--system-bandwidth-mhz', type=float, default=10.0, help='System Bandwidth in MHz (5.0, 10.0, 20.0)')
+    parser.add_argument('--sim-time', type=float, default=10.0, help='Simulation duration in seconds')
 
     args = parser.parse_args()
 
@@ -393,10 +395,11 @@ def main():
     config = NS3Config(
         num_ues=args.num_ues,
         num_cells=args.num_cells,
-        sim_time=10.0,
+        sim_time=args.sim_time,
         kpm_interval_ms=args.kpm_interval,
         seed=42,
-        scenario=args.scenario
+        scenario=args.scenario,
+        system_bandwidth_mhz=args.system_bandwidth_mhz
     )
     
     # Execute mode
