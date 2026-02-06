@@ -155,7 +155,7 @@ python3 radio_cortex_complete.py --mode eval --model-path models/radio_cortex.pt
 | | Cell Edge Tput | 5th percentile user throughput (fairness proxy) |
 | **RIC Performance** | E2 Loop Latency | Time from KPM reception to Control TX (ms) |
 | | Message Overhead | Control loop frequency (messages per second) |
-| | Control Stability | Score of AI decision consistency (0-100) |
+| | Control Stability | Score of AI decision consistency (0-100). |
 
 ### Quick Logic Verification
 To test the RL pipeline without the overhead of the full ns-3 simulation (no Kafka required):
