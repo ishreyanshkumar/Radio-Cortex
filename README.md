@@ -141,16 +141,21 @@ python3 radio_cortex_complete.py --mode eval --model-path models/radio_cortex.pt
 
 | Category | Metric | Description |
 |:---|:---|:---|
-| **Core QoS** | Throughput | Average downlink throughput (Mbps) |
-| | Packet Loss | Ratio of lost packets |
+| **User Experience (QoS)** | Throughput | Average downlink data rate (Mbps) |
 | | Delay | Average end-to-end latency (ms) |
-| | SINR | Average Signal-to-Interference-plus-Noise Ratio (dB) |
-| **Capacity** | Satisfied Users | % of UEs meeting SLA (Tput > 1Mbps, Delay < 100ms) |
-| | Congestion Intensity | % of time RB utilization > 90% |
-| | Congestion Intensity | % of time RB utilization > 90% |
-| **Network** | Handover Success Rate | Successful / Attempted handovers |
-| **RIC Performance** | E2 Loop Latency | Time from KPM reception to Control transmission (ms) |
-| | Message Overhead | E2 messages per second (Hz) |
+| | Satisfied Users | % of users meeting SLA (>1Mbps, <100ms) |
+| | Jitter | Standard deviation of packet delay (ms) |
+| **Reliability** | Packet Loss | Ratio of lost packets to total sent |
+| | Peak Burst Loss | Max loss in a sliding 1-second window |
+| | Recovery Time | Time taken to return to <2% loss after failure |
+| | HO Success Rate | Successful vs Attempted handovers |
+| **Resource Efficiency** | Spectral Efficiency | bits/sec/Hz utilization |
+| | Energy Efficiency | Throughput per Watt of Tx Power (Mbps/W) |
+| | Jain's Fairness | Measure of resource distribution equality |
+| | Cell Edge Tput | 5th percentile user throughput (fairness proxy) |
+| **RIC Performance** | E2 Loop Latency | Time from KPM reception to Control TX (ms) |
+| | Message Overhead | Control loop frequency (messages per second) |
+| | Control Stability | Score of AI decision consistency (0-100) |
 
 ### Quick Logic Verification
 To test the RL pipeline without the overhead of the full ns-3 simulation (no Kafka required):
