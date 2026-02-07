@@ -139,6 +139,7 @@ python3 radio_cortex_complete.py --mode eval --model-path models/radio_cortex.pt
 
 **Metrics Tracked:**
 (For detailed formulas and definitions, see [`README_EVAL.md`](README_EVAL.md))
+(For the full technical breakdown of the KPM JSON Report structure, see [`KPM_REFERENCE.md`](KPM_REFERENCE.md))
 
 | Category | Metric | Description |
 |:---|:---|:---|
