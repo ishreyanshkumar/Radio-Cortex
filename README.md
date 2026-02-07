@@ -2,46 +2,71 @@
 
 Radio-Cortex is a closed-loop control system that uses Reinforcement Learning (RL) to optimize network parameters (Tx Power, Schedulers) in an O-RAN compliant ns-3 simulation. It demonstrates a real-time feedback loop where an RL agent (PPO) receives KPM (Key Performance Metrics) from ns-3 via Kafka and sends back RC (RAN Control) actions.
 
-## 🚀 Quick Start
 
-### 1. Prerequisites
-- Linux OS
-- Python 3.10+
-- ns-3 (v3.46.1) with dependent modules
-- Apache Kafka (v3.6.1)
+## 🚀 End-to-End Installation Guide
 
-### 2. Installation
+Follow these steps to set up the environment from scratch.
+
+### 1. Clone the Repositories
 ```bash
-# 1. Install Python dependencies
+# Clone the main project
+git clone https://github.com/ishreyanshkumar/Radio-Cortex.git
+cd Radio-Cortex
+
+# Clone ns-allinone (required for ns-3)
+git clone https://gitlab.com/nsnam/ns-3-allinone.git ns-allinone-3.46.1
+cd ns-allinone-3.46.1
+./download.py -n ns-3.46.1
+cd ..
+```
+
+### 2. Set up Python Virtual Environment
+```bash
+# Create venv in the parent directory (or project root)
+python3 -m venv .venv
+
+# Activate the virtual environment
+source .venv/bin/activate
+
+# Install dependencies
 pip install numpy torch gymnasium kafka-python
+```
+
+### 3. Build ns-3 & Link Scenario
+ns-3 requires specific libraries (like `librdkafka`) for the O-RAN interface to work.
+```bash
+# 1. Install librdkafka (system-level)
+sudo apt-get install librdkafka-dev
 
 # 2. Build ns-3
 cd ns-allinone-3.46.1/ns-3.46.1
+./ns3 configure --enable-examples --enable-tests
 ./ns3 build
-cd ../..
 
-# 3. Link Simulation Scenario
-cd ns-allinone-3.46.1/ns-3.46.1/scratch
+# 3. Link the Radio-Cortex scenario into ns-3 scratch
+cd scratch
 ln -sf ../../../oran-congestion-scenario.cc .
 cd ../../..
 ```
 
-### 3. Running the Training
-The training pipeline is managed by `radio_cortex_complete.py`. It requires Kafka to be running.
+### 4. Running the Training
 
+#### A. Start Kafka
+Kafka and Zookeeper must be running for the E2 interface to function.
 ```bash
-# 1. Start Kafka (in a separate terminal or background)
 ./start_kafka.sh
-
-# 2. Run Training (Standard)
-python3 radio_cortex_complete.py --mode train
 ```
+> [!IMPORTANT]
+> If you see `NoBrokersAvailable`, wait 5-10 seconds for Kafka to fully initialize before starting the training script.
 
-This commands automatically:
-1.  Launches the ns-3 simulation subprocess.
-2.  Connects to the Kafka E2 interface.
-3.  Trains the PPO agent.
-4.  Saves models to `models/`.
+#### B. Start Training
+```bash
+# Ensure venv is active
+source .venv/bin/activate
+
+# Run Training (on all 12 scenarios)
+python3 radio_cortex_complete.py --mode train --scenario all --total-timesteps 50000
+```
 
 ---
 
