@@ -196,10 +196,10 @@ python3 radio_cortex_complete.py --mode eval --model-path models/radio_cortex.pt
 
 ### 🧠 Hybrid Reward Engine
 
-Radio-Cortex uses a multi-objective **"Hybrid Reward Engine"** that balances user experience with network efficiency. The engine uses a **Two-Stage Safety Clipping** mechanism to prevent any single metric from dominating the gradients:
+Radio-Cortex uses a multi-objective **"Hybrid Reward Engine"** that balances individual user experience with global network efficiency. The engine uses a **Two-Stage Safety Clipping** mechanism to prevent any single metric from dominating the gradients:
 
-#### 🟢 Stage 1: Per-Component Clipping
-Each reward component $r_i$ is calculated and then clipped to its own safety bound $\text{clip}(r_i, [min, max])$:
+#### � 1. UE-Level Utility (User Satisfaction)
+Computed per-UE and averaged across the network to ensure fairness. Uses E2SM-KPM `ue_metrics`.
 
 *   **Throughput ($\alpha$-fairness):** $r_{tput} = \text{clip}\left( W_{tput} \cdot \log(1 + \frac{T}{T_{max}}), [-0.5, 5.0] \right)$
     Logarithmic utility ensures the agent prioritizes users with low throughput over those already well-served.
@@ -209,18 +209,24 @@ Each reward component $r_i$ is calculated and then clipped to its own safety bou
     Penalizes loss exponentially, capturing the non-linear impact of packet drops on QoE using the Independent Quality X (IQX) model.
 *   **Spectral Efficiency:** $r_{se} = \text{clip}\left( W_{se} \cdot \log_2(1 + SINR), [0.0, 2.0] \right)$
     Uses Shannon Capacity to provide a "keep-alive" signal, rewarding good channel quality even during silent periods.
+
+#### 🏗️ 2. Cell-Level Utility (Network Efficiency)
+Computed per-cell to optimize infrastructure scaling. Uses E2SM-KPM `cell_metrics`.
+
 *   **Energy Efficiency:** $r_{energy} = \text{clip}\left( -W_{energy} \cdot \frac{RB_{used}}{RB_{max}}, [-2.0, 0.0] \right)$
     Penalizes excessive Resource Block (RB) usage to encourage power-efficient scheduling.
 *   **Load Balancing:** $r_{load} = \text{clip}\left( -W_{load} \cdot \sigma(Loads), [-2.0, 0.0] \right)$
     Penalizes high standard deviation in cell loads, driving the agent to distribute users across base stations.
 *   **Queue Congestion:** $r_{queue} = \text{clip}\left( -W_{queue} \cdot \frac{Q}{Q_{max}}, [-2.0, 0.0] \right)$
     Penalizes growing buffers as an "early warning" signal to prevent delay spikes before they hit the application layer.
+
+#### ⚖️ 3. Agent Stability (Action Smoothing)
 *   **Action Smoothing:** $r_{smooth} = \text{clip}\left( -W_{smooth} \cdot \frac{\|a_t - a_{t-1}\|}{\text{range}(a)}, [-1.0, 0.0] \right)$
     Penalizes "jerky" or oscillatory control decisions to ensure network stability and reduce signaling overhead.
 
 #### 🔴 Stage 2: Total Reward Clipping
 Finally, the aggregate reward is clipped once more to ensure overall learning stability:
-$$R_{total} = \text{clip}\left( \sum r_i, [-10.0, 2.0] \right)$$
+$$R_{total} = \text{clip}\left( \sum r_{ue} + \sum r_{cell} + r_{smooth}, [-10.0, 2.0] \right)$$
 
 ---
 
