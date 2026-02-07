@@ -196,27 +196,23 @@ python3 radio_cortex_complete.py --mode eval --model-path models/radio_cortex.pt
 
 ### 🧠 Hybrid Reward Engine
 
-Radio-Cortex uses a multi-objective **"Hybrid Reward Engine"** that balances user experience with network efficiency. The agent learns to maximize the cumulative reward $R = \sum(r_{ue} + r_{net})$:
+Radio-Cortex uses a multi-objective **"Hybrid Reward Engine"** that balances user experience with network efficiency. The engine uses a **Two-Stage Safety Clipping** mechanism to prevent any single metric from dominating the gradients:
 
-#### 1. UE Utility (User Satisfaction)
-*   **Throughput ($\alpha$-fairness):** $r_{tput} = W_{tput} \cdot \log(1 + \frac{T}{T_{max}})$  
-    Ensures proportional fairness by prioritizing users with low throughput.
-*   **Delay (Two-Tier):** $r_{delay} = -\left( W_{d1} \cdot \frac{D}{D_{max}} + W_{d2} \cdot \frac{\max(0, D - D_{sla})^2}{D_{max}^2} \right)$  
-    Combines linear penalty with a quadratic barrier for SLA violations (>50ms).
-*   **Packet Loss (IQX Model):** $r_{loss} = -W_{loss} \cdot (\exp(\beta \cdot L) - 1)$  
-    Penalizes loss exponentially, capturing the non-linear impact of packet drops on QoE.
-*   **Spectral Efficiency:** $r_{se} = W_{se} \cdot \log_2(1 + SINR)$  
-    Provides a continuous gradient based on channel quality (Shannon Capacity).
+#### 🟢 Stage 1: Per-Component Clipping
+Each reward component $r_i$ is calculated and then clipped to its own safety bound $\text{clip}(r_i, [min, max])$:
 
-#### 2. Network Utility (Operational Efficiency)
-*   **Energy Efficiency:** $r_{energy} = -W_{energy} \cdot \frac{RB_{used}}{RB_{max}}$  
-    Penalizes excessive resource block allocation to reduce power consumption.
-*   **Load Balancing:** $r_{load} = -W_{load} \cdot \sigma(Loads)$  
-    Uses the standard deviation of cell loads to drive traffic distribution.
-*   **Queue Congestion:** $r_{queue} = -W_{queue} \cdot \frac{Q}{Q_{max}}$  
-    Acts as an "early warning" signal by penalizing buffer buildup before delay spikes occur.
-*   **Action Smoothing:** $r_{smooth} = -W_{smooth} \cdot \frac{\|a_t - a_{t-1}\|}{\text{range}(a)}$  
-    Prevents "chatter" and oscillatory control by penalizing large step changes in actions.
+*   **Throughput ($\alpha$-fairness):** $r_{tput} = \text{clip}\left( W_{tput} \cdot \log(1 + \frac{T}{T_{max}}), [-0.5, 5.0] \right)$
+*   **Delay (Two-Tier):** $r_{delay} = \text{clip}\left( -\left( W_{d1} \cdot \frac{D}{D_{max}} + W_{d2} \cdot \frac{\max(0, D - D_{sla})^2}{D_{max}^2} \right), [-5.0, 0.0] \right)$
+*   **Packet Loss (IQX Model):** $r_{loss} = \text{clip}\left( -W_{loss} \cdot (\exp(\beta \cdot L) - 1), [-5.0, 0.0] \right)$
+*   **Spectral Efficiency:** $r_{se} = \text{clip}\left( W_{se} \cdot \log_2(1 + SINR), [0.0, 2.0] \right)$
+*   **Energy Efficiency:** $r_{energy} = \text{clip}\left( -W_{energy} \cdot \frac{RB_{used}}{RB_{max}}, [-2.0, 0.0] \right)$
+*   **Load Balancing:** $r_{load} = \text{clip}\left( -W_{load} \cdot \sigma(Loads), [-2.0, 0.0] \right)$
+*   **Queue Congestion:** $r_{queue} = \text{clip}\left( -W_{queue} \cdot \frac{Q}{Q_{max}}, [-2.0, 0.0] \right)$
+*   **Action Smoothing:** $r_{smooth} = \text{clip}\left( -W_{smooth} \cdot \frac{\|a_t - a_{t-1}\|}{\text{range}(a)}, [-1.0, 0.0] \right)$
+
+#### 🔴 Stage 2: Total Reward Clipping
+Finally, the aggregate reward is clipped once more to ensure overall learning stability:
+$$R_{total} = \text{clip}\left( \sum r_i, [-10.0, 2.0] \right)$$
 
 ---
 
