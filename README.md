@@ -98,6 +98,36 @@ python3 radio_cortex_complete.py --mode train --scenario iot_tsunami --num-ues 5
 python3 radio_cortex_complete.py --mode eval
 ```
 
+### 🎲 Multi-Scenario Training (Domain Randomization)
+
+Train a single robust model that cycles through **all 12 scenarios** automatically. Each episode randomly selects a different scenario, teaching the agent to generalize.
+
+```bash
+python3 radio_cortex_complete.py --mode train --scenario all --total-timesteps 50000
+```
+
+#### Why It Works
+The `RewardEngine` is **scenario-agnostic** — it only reads metrics (throughput, delay, loss, SINR, queue, load), not the scenario name. All 12 scenarios output the same KPM metrics, so the reward function works universally.
+
+#### Pros & Cons
+
+| ✅ Pros | ❌ Cons |
+|:---|:---|
+| **Generalization** — One model handles any condition | **Longer Training** — 3-5x more timesteps needed |
+| **Robustness** — Won't fail on unseen scenarios | **Jack of All Trades** — May not be "best" on any single scenario |
+| **Competition Advantage** — "Universal agent" is impressive | **Harder to Debug** — Issues harder to trace to specific scenario |
+| **No Wasted Data** — Every scenario contributes | **Reward Variance** — Different scenarios may have different reward scales |
+
+#### Mitigations
+
+| Issue | Solution |
+|:---|:---|
+| Long training time | Increase `--total-timesteps` to 50,000-100,000 |
+| Scenario bias | Already mitigated — reward is normalized and clipped per-component |
+| Debugging | Check `action_logs.jsonl` to trace which scenario produced bad rewards |
+| Reward variance | Clipping bounds ([-10, +2]) prevent any scenario from dominating |
+
+
 ### 🔍 Verification & Testing
 Before running a long training session, verify that the data pipeline is working.
 

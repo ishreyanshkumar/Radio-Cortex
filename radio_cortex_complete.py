@@ -404,8 +404,18 @@ def main():
     
     # Execute mode
     if args.mode == 'train':
-        # Training requires a specific scenario, default to flash_crowd if not specified
-        if config.scenario is None:
+        # Multi-scenario training: if --scenario all, rotate through all scenarios
+        ALL_SCENARIOS = [
+            "flash_crowd", "mobility_storm", "traffic_burst", "handover_ping_pong",
+            "sleepy_campus", "ambulance", "adversarial", "commuter_rush",
+            "mixed_reality", "urban_canyon", "iot_tsunami", "spectrum_crunch"
+        ]
+        
+        if config.scenario == "all":
+            config.scenarios = ALL_SCENARIOS
+            config.scenario = ALL_SCENARIOS[0]  # Initial scenario (will be randomized on reset)
+            print(f"🎲 Multi-Scenario Training ENABLED: rotating through {len(ALL_SCENARIOS)} scenarios")
+        elif config.scenario is None:
             config.scenario = "flash_crowd"
             
         trainer = train_radio_cortex(

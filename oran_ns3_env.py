@@ -13,6 +13,7 @@ import socket
 import time
 import sys
 import os
+import random
 from typing import Dict, List, Tuple, Optional
 from dataclasses import dataclass
 from enum import Enum
@@ -37,7 +38,9 @@ class NS3Config:
     system_bandwidth_mhz: float = 10.0 # System Bandwidth
     # Scenario to run (12 available: flash_crowd, mobility_storm, traffic_burst, handover_ping_pong, 
     # sleepy_campus, ambulance, adversarial, commuter_rush, mixed_reality, urban_canyon, iot_tsunami, spectrum_crunch)
-    scenario: str = "flash_crowd" 
+    scenario: str = "flash_crowd"
+    # Multi-scenario training: if set, reset() will randomly pick from this list each episode
+    scenarios: Optional[List[str]] = None 
 
 
 @dataclass
@@ -616,6 +619,11 @@ class ORANns3Env(gym.Env):
         if seed is not None:
             self.config.seed = seed
         
+        # Multi-scenario training: randomly select a scenario each episode
+        if self.config.scenarios:
+            self.config.scenario = random.choice(self.config.scenarios)
+            print(f"\n🎲 [Multi-Scenario] Starting episode with scenario: {self.config.scenario}")
+        
         # Stop previous simulation if running
         if hasattr(self, 'ns3') and self.ns3.ns3_process:
             self.ns3.stop_simulation()
@@ -635,7 +643,8 @@ class ORANns3Env(gym.Env):
         
         info = {
             'episode': 0,
-            'seed': self.config.seed
+            'seed': self.config.seed,
+            'scenario': self.config.scenario
         }
         
         return state, info
