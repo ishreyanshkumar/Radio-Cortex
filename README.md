@@ -196,19 +196,27 @@ python3 radio_cortex_complete.py --mode eval --model-path models/radio_cortex.pt
 
 ### 🧠 Hybrid Reward Engine
 
-Radio-Cortex uses a multi-objective **"Hybrid Reward Engine"** that balances user experience with network efficiency. The agent learns to maximize this cumulative signal:
+Radio-Cortex uses a multi-objective **"Hybrid Reward Engine"** that balances user experience with network efficiency. The agent learns to maximize the cumulative reward $R = \sum(r_{ue} + r_{net})$:
 
 #### 1. UE Utility (User Satisfaction)
-*   **Throughput ($\alpha$-fairness):** Logarithmic utility $log(1 + T/T_{max})$ ensures the agent prioritizes users with low throughput over those already well-served.
-*   **Delay (Two-Tier):** Combines linear penalty for general delay and a **Quadratic SLA Barrier** that penalizes exponentially if delay exceeds 50ms.
-*   **Packet Loss (IQX Exponential):** Penalizes loss heavily using the IQX model, distinguishing between "mild" (1%) and "catastrophic" (10%+) loss.
-*   **Spectral Efficiency:** Uses Shannon Capacity ($log_2(1+SINR)$) as a "keep-alive" signal to reward good channel conditions even when traffic is low.
+*   **Throughput ($\alpha$-fairness):** $r_{tput} = W_{tput} \cdot \log(1 + \frac{T}{T_{max}})$  
+    Ensures proportional fairness by prioritizing users with low throughput.
+*   **Delay (Two-Tier):** $r_{delay} = -\left( W_{d1} \cdot \frac{D}{D_{max}} + W_{d2} \cdot \frac{\max(0, D - D_{sla})^2}{D_{max}^2} \right)$  
+    Combines linear penalty with a quadratic barrier for SLA violations (>50ms).
+*   **Packet Loss (IQX Model):** $r_{loss} = -W_{loss} \cdot (\exp(\beta \cdot L) - 1)$  
+    Penalizes loss exponentially, capturing the non-linear impact of packet drops on QoE.
+*   **Spectral Efficiency:** $r_{se} = W_{se} \cdot \log_2(1 + SINR)$  
+    Provides a continuous gradient based on channel quality (Shannon Capacity).
 
 #### 2. Network Utility (Operational Efficiency)
-*   **Energy Efficiency:** Penalizes excessive Resource Block (RB) usage to encourage power saving.
-*   **Load Balancing:** Penalizes high standard deviation in cell loads, driving the agent to distribute users evenly.
-*   **Queue Congestion:** Penalizes growing buffers. This acts as an "early warning" signal to prevent delay spikes before they happen.
-*   **Action Smoothing:** Penalizes "jerky" control decisions to ensure network stability and prevent oscillation.
+*   **Energy Efficiency:** $r_{energy} = -W_{energy} \cdot \frac{RB_{used}}{RB_{max}}$  
+    Penalizes excessive resource block allocation to reduce power consumption.
+*   **Load Balancing:** $r_{load} = -W_{load} \cdot \sigma(Loads)$  
+    Uses the standard deviation of cell loads to drive traffic distribution.
+*   **Queue Congestion:** $r_{queue} = -W_{queue} \cdot \frac{Q}{Q_{max}}$  
+    Acts as an "early warning" signal by penalizing buffer buildup before delay spikes occur.
+*   **Action Smoothing:** $r_{smooth} = -W_{smooth} \cdot \frac{\|a_t - a_{t-1}\|}{\text{range}(a)}$  
+    Prevents "chatter" and oscillatory control by penalizing large step changes in actions.
 
 ---
 
