@@ -202,13 +202,21 @@ Radio-Cortex uses a multi-objective **"Hybrid Reward Engine"** that balances use
 Each reward component $r_i$ is calculated and then clipped to its own safety bound $\text{clip}(r_i, [min, max])$:
 
 *   **Throughput ($\alpha$-fairness):** $r_{tput} = \text{clip}\left( W_{tput} \cdot \log(1 + \frac{T}{T_{max}}), [-0.5, 5.0] \right)$
+    Logarithmic utility ensures the agent prioritizes users with low throughput over those already well-served.
 *   **Delay (Two-Tier):** $r_{delay} = \text{clip}\left( -\left( W_{d1} \cdot \frac{D}{D_{max}} + W_{d2} \cdot \frac{\max(0, D - D_{sla})^2}{D_{max}^2} \right), [-5.0, 0.0] \right)$
+    Combines linear penalty for general delay and a **Quadratic SLA Barrier** that penalizes exponentially if delay exceeds 50ms.
 *   **Packet Loss (IQX Model):** $r_{loss} = \text{clip}\left( -W_{loss} \cdot (\exp(\beta \cdot L) - 1), [-5.0, 0.0] \right)$
+    Penalizes loss exponentially, capturing the non-linear impact of packet drops on QoE using the Independent Quality X (IQX) model.
 *   **Spectral Efficiency:** $r_{se} = \text{clip}\left( W_{se} \cdot \log_2(1 + SINR), [0.0, 2.0] \right)$
+    Uses Shannon Capacity to provide a "keep-alive" signal, rewarding good channel quality even during silent periods.
 *   **Energy Efficiency:** $r_{energy} = \text{clip}\left( -W_{energy} \cdot \frac{RB_{used}}{RB_{max}}, [-2.0, 0.0] \right)$
+    Penalizes excessive Resource Block (RB) usage to encourage power-efficient scheduling.
 *   **Load Balancing:** $r_{load} = \text{clip}\left( -W_{load} \cdot \sigma(Loads), [-2.0, 0.0] \right)$
+    Penalizes high standard deviation in cell loads, driving the agent to distribute users across base stations.
 *   **Queue Congestion:** $r_{queue} = \text{clip}\left( -W_{queue} \cdot \frac{Q}{Q_{max}}, [-2.0, 0.0] \right)$
+    Penalizes growing buffers as an "early warning" signal to prevent delay spikes before they hit the application layer.
 *   **Action Smoothing:** $r_{smooth} = \text{clip}\left( -W_{smooth} \cdot \frac{\|a_t - a_{t-1}\|}{\text{range}(a)}, [-1.0, 0.0] \right)$
+    Penalizes "jerky" or oscillatory control decisions to ensure network stability and reduce signaling overhead.
 
 #### 🔴 Stage 2: Total Reward Clipping
 Finally, the aggregate reward is clipped once more to ensure overall learning stability:
