@@ -165,9 +165,9 @@ python3 radio_cortex_complete.py --mode eval --model-path models/radio_cortex.pt
 | | Control Stability | AI decision consistency score (0-100). |
 
 ### Quick Logic Verification
-To test the RL pipeline without the overhead of the full ns-3 simulation (no Kafka required):
+To verify the RL pipeline implementation quickly (using `radio_cortex_complete.py` with minimal steps):
 ```bash
-python3 quick_train.py
+./train_quick.sh
 ```
 
 ### Interpretability
@@ -201,7 +201,8 @@ converts ns-3 simulation into a standard OpenAI Gym interface (observation, acti
 *   **`ORANns3Env`**: The Gym Environment class.
     *   `step(action)`: Takes an RL action, sends it to ns-3, waits for the next KPM report, and returns (state, reward, done).
     *   `reset()`: Restarts the ns-3 simulation subprocess.
-    *   `_compute_reward(e2_msg)`: Calculates reward based on Throughput (Log utility), Delay, and Fairness.
+    *   `_compute_reward(e2_msg)`: Delegates to `RewardEngine`.
+    *   **`RewardEngine`**: Hybrid reward logic combining 8 components: Throughput (Log Utility), Delay (Linear+SLA), Packet Loss (IQX), Spectral Efficiency, Energy Efficiency, Load Balancing, Queue Congestion, and Action Smoothing.
 *   **`NS3Interface`**: Handles low-level communication.
     *   `start_simulation()`: Spawns the `./ns3 run ...` subprocess.
     *   `send_rc_control(actions)`: Serializes actions to JSON and sends via Kafka `e2_rc_control` topic.
@@ -231,9 +232,9 @@ Computes saliency maps (gradient * input) to understand which state features (e.
 *   `_saliency()`: Backpropagates from the action mean to the input state.
 *   usage: `python interpret_policy.py --checkpoint models/radio_cortex.pt`
 
-### 6. `quick_train.py`
-**Role:** Fast Verification (Mock).
-Trains a tiny PPO agent on a mock environment (no ns-3, no Kafka) to verify the RL pipeline implementation quickly (seconds vs hours).
+### 6. `train_quick.sh`
+**Role:** Fast Verification.
+Runs `radio_cortex_complete.py` with minimal steps (100 timesteps) to verify the pipeline implementation quickly.
 
 ### 7. `oran-congestion-scenario.cc`
 **Role:** ns-3 Simulation Scenario (C++).

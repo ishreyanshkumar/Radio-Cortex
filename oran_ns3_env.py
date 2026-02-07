@@ -48,6 +48,225 @@ class E2Message:
     cell_metrics: Dict[int, Dict]  # {cell_id: {queue_len, rb_util, power}}
 
 
+class RewardEngine:
+    """
+    Hybrid Reward Engine for Radio-Cortex O-RAN.
+
+    Combines:
+      UE Utility  — Throughput (α-fairness log), Delay (linear + SLA barrier),
+                     Packet Loss (IQX exponential), Spectral Efficiency (Shannon)
+      Network     — Energy efficiency, Load balancing, Queue congestion, Action smoothing
+
+    Safety:
+      Stage 1 — per-component clipping (prevents any single term from dominating)
+      Stage 2 — total reward clipped to [-10, +2]
+
+    Diagnostics:
+      Returns (reward, breakdown_dict) for logging and evaluation.
+    """
+
+    def __init__(self, config: NS3Config):
+        self.config = config
+
+        # ── Weights ──────────────────────────────────────────────
+        self.W_TPUT      = 1.0      # Throughput (Log Utility)
+        self.W_DELAY_LIN = 0.5      # Linear Delay Penalty
+        self.W_DELAY_BAR = 5.0      # Quadratic SLA Barrier
+        self.W_LOSS      = 2.0      # Packet Loss (IQX)
+        self.W_SE        = 0.05     # Spectral Efficiency (keep-alive signal)
+        self.W_ENERGY    = 0.5      # Energy Efficiency
+        self.W_LOAD      = 1.0      # Load Balancing
+        self.W_QUEUE     = 0.3      # Queue Congestion (NEW)
+        self.W_SMOOTH    = 0.05     # Action Smoothing
+
+        # ── Thresholds / Normalizers ─────────────────────────────
+        self.T_MAX     = 100.0      # Max Throughput (Mbps)
+        self.D_MAX     = 100.0      # Normalizing Delay (ms)
+        self.D_SLA     = 50.0       # SLA Threshold (ms) — barrier kicks in after this
+        self.BETA_LOSS = 5.0        # IQX Sensitivity parameter
+        self.EPSILON   = 1e-6       # Safe log
+        self.Q_MAX     = 1000.0     # Queue length normalizer (NEW)
+
+        # ── Clip bounds (Stage 1 — per component) ───────────────
+        self.CLIP_TPUT   = (-0.5, 5.0)    # log(1+x) for x≥0 is ≥0, but allow small neg for numerical safety
+        self.CLIP_DELAY  = (-5.0, 0.0)    # Delay is ALWAYS a penalty (≤0)
+        self.CLIP_LOSS   = (-5.0, 0.0)    # Loss is ALWAYS a penalty (≤0)
+        self.CLIP_SE     = (0.0, 2.0)     # SE is ALWAYS a bonus (≥0)
+        self.CLIP_ENERGY = (-2.0, 0.0)    # Energy is ALWAYS a penalty (≤0)
+        self.CLIP_LOAD   = (-2.0, 0.0)    # Load imbalance is ALWAYS a penalty (≤0)
+        self.CLIP_QUEUE  = (-2.0, 0.0)    # Queue congestion is ALWAYS a penalty (≤0)
+        self.CLIP_SMOOTH = (-1.0, 0.0)    # Smoothing is ALWAYS a penalty (≤0)
+
+        # ── Clip bounds (Stage 2 — total) ────────────────────────
+        self.CLIP_TOTAL = (-10.0, 2.0)
+
+    def compute(self,
+                e2_msg: E2Message,
+                action: np.ndarray = None,
+                prev_action: np.ndarray = None,
+                action_space: spaces.Box = None
+                ) -> Tuple[float, Dict[str, float]]:
+        """
+        Compute scalar reward and per-component breakdown.
+
+        Returns
+        -------
+        reward    : float, clipped to CLIP_TOTAL
+        breakdown : dict with every component + diagnostic metrics
+        """
+        empty = self._empty_breakdown()
+        if not e2_msg.ue_metrics:
+            return 0.0, empty
+
+        # ════════════════════════════════════════════════════════
+        # 1.  UE UTILITY  (User Satisfaction)
+        # ════════════════════════════════════════════════════════
+        tputs  = np.array([m['throughput']  for m in e2_msg.ue_metrics.values()])
+        delays = np.array([m['delay']       for m in e2_msg.ue_metrics.values()])
+        losses = np.array([m['packet_loss'] for m in e2_msg.ue_metrics.values()])
+        sinrs  = np.array([m['sinr']        for m in e2_msg.ue_metrics.values()])
+
+        # ── 1a. Throughput  (α-fairness, α=1 → log utility) ────
+        #   log(1 + T/T_MAX) :  0 Mbps→0,  50 Mbps→0.41,  100 Mbps→0.69
+        #   Averaged over UEs for per-user fairness.
+        r_tput = float(np.mean(np.log(1.0 + tputs / self.T_MAX + self.EPSILON))) * self.W_TPUT
+        r_tput = float(np.clip(r_tput, *self.CLIP_TPUT))
+
+        # ── 1b. Delay  (Two-tier: linear everywhere + quadratic past SLA) ──
+        d_norm    = np.minimum(delays / self.D_MAX, 1.0)                    # Tier 1: 0→1 linear
+        d_barrier = np.maximum(delays - self.D_SLA, 0.0) ** 2              # Tier 2: explodes past SLA
+        r_delay = float(-np.mean(
+            self.W_DELAY_LIN * d_norm
+            + (self.W_DELAY_BAR / self.D_MAX ** 2) * d_barrier
+        ))
+        r_delay = float(np.clip(r_delay, *self.CLIP_DELAY))
+
+        # ── 1c. Packet Loss  (IQX exponential) ─────────────────
+        #   exp(5 × 0.01)-1 = 0.05  (1% loss → mild)
+        #   exp(5 × 0.10)-1 = 0.65  (10% loss → painful)
+        #   exp(5 × 0.50)-1 = 11.2  (50% loss → catastrophic)
+        r_loss = float(-np.mean(np.exp(self.BETA_LOSS * losses) - 1.0)) * self.W_LOSS
+        r_loss = float(np.clip(r_loss, *self.CLIP_LOSS))
+
+        # ── 1d. Spectral Efficiency  (Shannon keep-alive) ──────
+        #   Gives the AI a gradient even when no traffic is flowing,
+        #   rewarding good channel conditions.
+        sinr_linear = np.power(10.0, sinrs / 10.0)
+        se_per_ue   = np.log2(1.0 + sinr_linear)           # bits/s/Hz per UE
+        se_avg      = float(np.mean(se_per_ue))
+        r_se = se_avg * self.W_SE
+        r_se = float(np.clip(r_se, *self.CLIP_SE))
+
+        ue_score = r_tput + r_delay + r_loss + r_se
+
+        # ════════════════════════════════════════════════════════
+        # 2.  NETWORK UTILITY  (Efficiency & Stability)
+        # ════════════════════════════════════════════════════════
+        r_energy = 0.0
+        r_load   = 0.0
+        r_queue  = 0.0
+        r_smooth = 0.0
+
+        if e2_msg.cell_metrics:
+            loads  = np.array([m['cell_load']      for m in e2_msg.cell_metrics.values()])
+            rbs    = np.array([m['avg_rb_request']  for m in e2_msg.cell_metrics.values()])
+            queues = np.array([m['queue_length']    for m in e2_msg.cell_metrics.values()])
+
+            # ── 2a. Energy Efficiency ───────────────────────────
+            #   Penalizes high resource block usage across cells.
+            #   50 RBs × 100 TTIs = 5000 max RBs per interval.
+            total_rbs_max = 5000.0
+            r_energy = float(-np.mean(rbs / total_rbs_max)) * self.W_ENERGY
+            r_energy = float(np.clip(r_energy, *self.CLIP_ENERGY))
+
+            # ── 2b. Load Balancing ──────────────────────────────
+            #   Penalizes uneven load across cells.
+            #   std(loads) is high when one cell is overloaded
+            #   and another is idle → AI learns to distribute.
+            r_load = float(-np.std(loads)) * self.W_LOAD
+            r_load = float(np.clip(r_load, *self.CLIP_LOAD))
+
+            # ── 2c. Queue Congestion  (NEW) ─────────────────────
+            #   Penalizes cells with growing queues.
+            #   This gives early warning BEFORE delay spikes —
+            #   a full queue today = high delay tomorrow.
+            q_norm = np.minimum(queues / self.Q_MAX, 1.0)
+            r_queue = float(-np.mean(q_norm)) * self.W_QUEUE
+            r_queue = float(np.clip(r_queue, *self.CLIP_QUEUE))
+
+        network_score = r_energy + r_load + r_queue
+
+        # ── 2d. Action Smoothing (normalized by range) ──────────
+        #   Penalizes the AI for jerky, oscillating actions.
+        #   Normalizing by range makes power change (10→46 dBm)
+        #   comparable to scheduler change (0→2).
+        if prev_action is not None and action is not None:
+            if action_space is not None:
+                a_range = action_space.high - action_space.low
+                a_range = np.where(a_range < 1e-6, 1.0, a_range)
+                delta = float(np.mean(np.abs(action - prev_action) / a_range))
+            else:
+                delta = float(np.mean(np.abs(action - prev_action)))
+            r_smooth = float(-delta * self.W_SMOOTH)
+            r_smooth = float(np.clip(r_smooth, *self.CLIP_SMOOTH))
+            network_score += r_smooth
+
+        # ════════════════════════════════════════════════════════
+        # 3.  AGGREGATE & BOUND
+        # ════════════════════════════════════════════════════════
+        total_raw = ue_score + network_score
+        total     = float(np.clip(total_raw, *self.CLIP_TOTAL))
+
+        # ════════════════════════════════════════════════════════
+        # 4.  DIAGNOSTICS  (for MODULE 5 / debugging)
+        # ════════════════════════════════════════════════════════
+        jains    = float(self._jains_index(tputs))
+        p95_dly  = float(np.percentile(delays, 95)) if len(delays) > 0 else 0.0
+        avg_tput = float(np.mean(tputs))
+        avg_dly  = float(np.mean(delays))
+        avg_loss = float(np.mean(losses))
+
+        breakdown = {
+            # Per-component rewards
+            'r_total':  total,
+            'r_tput':   r_tput,
+            'r_delay':  r_delay,
+            'r_loss':   r_loss,
+            'r_se':     r_se,
+            'r_energy': r_energy,
+            'r_load':   r_load,
+            'r_queue':  r_queue,
+            'r_smooth': r_smooth,
+            # Diagnostic KPIs (not part of reward, but essential for logging)
+            'se_avg':       se_avg,
+            'jains':        jains,
+            'p95_delay':    p95_dly,
+            'avg_throughput': avg_tput,
+            'avg_delay':    avg_dly,
+            'avg_loss':     avg_loss,
+        }
+
+        return total, breakdown
+
+    # ── Helpers ──────────────────────────────────────────────────
+    @staticmethod
+    def _jains_index(x: np.ndarray) -> float:
+        """Jain's Fairness Index: 1.0 = perfectly equal, 1/N = maximally unfair."""
+        s = float(np.sum(x))
+        if s <= 0:
+            return 0.0
+        return (s ** 2) / (len(x) * float(np.sum(x ** 2)))
+
+    def _empty_breakdown(self) -> Dict[str, float]:
+        """Return zeroed breakdown dict (for edge cases like empty metrics)."""
+        return {
+            'r_total': 0.0, 'r_tput': 0.0, 'r_delay': 0.0, 'r_loss': 0.0,
+            'r_se': 0.0, 'r_energy': 0.0, 'r_load': 0.0, 'r_queue': 0.0,
+            'r_smooth': 0.0, 'se_avg': 0.0, 'jains': 0.0, 'p95_delay': 0.0,
+            'avg_throughput': 0.0, 'avg_delay': 0.0, 'avg_loss': 0.0,
+        }
+
+
 class NS3Interface:
     """
     Interface to ns-O-RAN simulation via E2 protocol
@@ -336,6 +555,8 @@ class ORANns3Env(gym.Env):
         
         self.config = config or NS3Config()
         self.ns3 = NS3Interface(self.config)
+        self.reward_engine = RewardEngine(self.config)
+        self.prev_action = None
         
         # State space: flattened network metrics
         # Per-UE features: throughput, delay, loss, sinr, rsrp, rsrq, ul_rbs,
@@ -410,6 +631,7 @@ class ORANns3Env(gym.Env):
         
         self.current_step = 0
         self.episode_metrics = []
+        self.prev_action = None      # Reset action history for smoothing
         
         info = {
             'episode': 0,
@@ -419,59 +641,38 @@ class ORANns3Env(gym.Env):
         return state, info
     
     def step(self, action: np.ndarray) -> Tuple[np.ndarray, float, bool, bool, dict]:
-        """
-        Execute one timestep of RL control loop
-        
-        Args:
-            action: RAN control parameters [tx_power, scheduler, harq, hysteresis] per cell
-            
-        Returns:
-            observation: Network state
-            reward: Performance metric
-            terminated: Episode complete
-            truncated: Max steps reached
-            info: Additional metrics
-        """
-        # Parse action into control parameters
         rc_actions = self._parse_action(action)
-        
-        # Send E2SM-RC control to ns-3
         self.ns3.send_rc_control(rc_actions)
         
-        # Wait for next KPM interval
         time.sleep(self.config.kpm_interval_ms / 1000.0)
-
-        # Receive new state from E2SM-KPM (synchronized to newest Kafka record)
-        # Using a shorter wait multiplier to be more aggressive
-        e2_msg = self.ns3.receive_kpm_report(wait_for_new=True, max_wait_s=(self.config.kpm_interval_ms / 1000.0) * 1.5)
+        e2_msg = self.ns3.receive_kpm_report(
+            wait_for_new=True,
+            max_wait_s=(self.config.kpm_interval_ms / 1000.0) * 1.5
+        )
         next_state = self._extract_state(e2_msg)
         
-        # Calculate reward
-        reward = self._compute_reward(e2_msg)
+        self.current_action = action
+        reward, breakdown = self._compute_reward(e2_msg)
+        self.prev_action = action.copy()
         
-        # Track metrics
         self.episode_metrics.append({
             'step': self.current_step,
             'reward': reward,
-            'avg_throughput': np.mean([m['throughput'] for m in e2_msg.ue_metrics.values()]),
-            'avg_delay': np.mean([m['delay'] for m in e2_msg.ue_metrics.values()]),
-            'avg_loss': np.mean([m['packet_loss'] for m in e2_msg.ue_metrics.values()]),
+            **breakdown,
         })
         
         self.current_step += 1
         terminated = self.current_step >= self.max_steps
-
-        # If ns-3 simulation has ended, terminate the episode immediately
         if self.ns3.ns3_process and self.ns3.ns3_process.poll() is not None:
             terminated = True
         truncated = False
         
-        ns3_finished = bool(self.ns3.ns3_process and self.ns3.ns3_process.poll() is not None)
         info = {
             'step': self.current_step,
             'e2_metrics': e2_msg,
             'actions_applied': rc_actions,
-            'ns3_finished': ns3_finished
+            'ns3_finished': bool(self.ns3.ns3_process and self.ns3.ns3_process.poll() is not None),
+            **breakdown,
         }
         
         return next_state, reward, terminated, truncated, info
@@ -542,16 +743,18 @@ class ORANns3Env(gym.Env):
 
         return rc_actions
     
-    def _compute_reward(self, e2_msg: E2Message) -> float:
-        """
-        Compute reward based on network performance
-        Maximize Throughput and Fairness, Minimize Delay
-        Adding SINR component to ensure gradient even without traffic
-        """
-        if not e2_msg.ue_metrics:
-            return 0.0
+    def _compute_reward(self, e2_msg: E2Message) -> Tuple[float, Dict]:
+        """Compute reward via RewardEngine. Called by step()."""
+        current_action = getattr(self, 'current_action', None) # Note: Action is passed in step(), this is just for signature match or fallback
+        # However, step() calls reward_engine.compute directly now.
+        # This wrapper calls the engine and also ensures table printing as requested.
         
-        # Print formatted UE metrics table (Simplified)
+        self._print_metrics_table(e2_msg)
+        
+        return self.reward_engine.compute(e2_msg, current_action, self.prev_action, self.action_space)
+
+    def _print_metrics_table(self, e2_msg):
+        """Helper to print UE metrics table."""
         num_ues = len(e2_msg.ue_metrics)
         print(f"\n  ╔{'═'*90}╗")
         print(f"  ║  UE Metrics - {num_ues} UEs {'':>60}║")
@@ -559,43 +762,13 @@ class ORANns3Env(gym.Env):
         print(f"  ║ {'UE':>2} │ {'Tput':>6} │ {'Delay':>6} │ {'Loss':>5} │ {'SINR':>6} │ {'RSRP':>7} │ {'Cell':>4} │ {'Buffer':>6} ║")
         print(f"  ╠{'═'*90}╣")
         for ue_id, m in e2_msg.ue_metrics.items():
-            # Handle default values with indicators
             rsrp_str = f"{m['rsrp']:.0f}" if m['rsrp'] != -140 else "  --"
             cell_str = f"{m['serving_cell']}" if m['serving_cell'] != -1 else "--"
             buffer_str = f"{m['buffer_occupancy']:.0f}" if m['buffer_occupancy'] > 0 else "  0"
-            
-            print(f"  ║ {ue_id:>2} │ {m['throughput']:>5.2f}M │ {m['delay']:>5.0f}ms │ {m['packet_loss']*100:>4.1f}% │ {m['sinr']:>5.1f}dB │ {rsrp_str:>6}dB │ {cell_str:>4} │ {buffer_str:>6} ║")
+            print(f"  ║ {ue_id:>2} │ {m['throughput']:>5.2f}M │ {m['delay']:>5.0f}ms │ "
+                  f"{m['packet_loss']*100:>4.1f}% │ {m['sinr']:>5.1f}dB │ {rsrp_str:>6}dB │ "
+                  f"{cell_str:>4} │ {buffer_str:>6} ║")
         print(f"  ╚{'═'*90}╝")
-        
-        # Print variance summary if any UE has non-zero variance
-        rsrp_vars = [(ue_id, m['rsrp_var']) for ue_id, m in e2_msg.ue_metrics.items() if m['rsrp_var'] > 0]
-        if rsrp_vars:
-            var_str = ", ".join([f"UE{ue}:{var:.1f}" for ue, var in rsrp_vars[:5]])
-            print(f"  [Variance] RSRP: {var_str}")
-        
-        tputs = [m['throughput'] for m in e2_msg.ue_metrics.values()]
-        delays = [m['delay'] for m in e2_msg.ue_metrics.values()]
-        sinrs = [m['sinr'] for m in e2_msg.ue_metrics.values()]
-        
-        sum_log_tput = np.sum(np.log(np.array(tputs) + 1e-6)) # Proportional Fairness
-        avg_delay = np.mean(delays)
-        avg_sinr = np.mean(sinrs)
-        
-        # Fairness (Jain's index)
-        if sum(tputs) > 0:
-            fairness = (sum(tputs) ** 2) / (len(tputs) * sum(np.array(tputs) ** 2))
-        else:
-            fairness = 1.0
-            
-        # Reward components
-        # 1. Throughput (Log utility)
-        # 2. Delay penalty
-        # 3. SINR bonus (0.05 * SINR_dB) -> e.g. 20dB -> +1.0
-        # 4. Fairness bonus
-        
-        reward = sum_log_tput - (0.1 * avg_delay) + (0.05 * avg_sinr) + (0.5 * fairness)
-        print(f"Reward components: Throughput={sum_log_tput:.3f}, Delay={avg_delay:.3f}, SINR={avg_sinr:.3f}, Fairness={fairness:.3f}, Total Reward={reward:.3f}")
-        return float(reward)
     
     def render(self, mode='human'):
         """Visualize current network state"""
@@ -655,4 +828,3 @@ if __name__ == "__main__":
     
     env.close()
     print("\n✓ Environment test complete")
-
