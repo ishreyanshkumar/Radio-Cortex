@@ -9,12 +9,17 @@ fi
 
 echo "Stopping Kafka Broker..."
 "$KAFKA_DIR/bin/kafka-server-stop.sh"
+sleep 2
 
 echo "Stopping Zookeeper..."
 "$KAFKA_DIR/bin/zookeeper-server-stop.sh"
+sleep 2
 
 echo "Cleaning up any remaining processes..."
 pkill -f kafka.Kafka || true
 pkill -f org.apache.zookeeper.server.quorum.QuorumPeerMain || true
+
+echo "Wiping temporary data for clean start..."
+rm -rf /tmp/kafka-logs /tmp/zookeeper
 
 echo "Kafka and Zookeeper stopped."

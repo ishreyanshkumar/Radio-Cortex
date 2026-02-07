@@ -13,9 +13,9 @@ Follow these steps to set up the environment from scratch.
 git clone https://github.com/ishreyanshkumar/Radio-Cortex.git
 cd Radio-Cortex
 
-# Clone ns-allinone (required for ns-3)
-git clone https://gitlab.com/nsnam/ns-3-allinone.git ns-allinone-3.46.1
-cd ns-allinone-3.46.1
+# Clone ns-allinone (Official Gitlab Repository)
+git clone https://gitlab.com/nsnam/ns-3-allinone.git
+cd ns-3-allinone
 ./download.py -n ns-3.46.1
 cd ..
 ```
@@ -39,7 +39,7 @@ ns-3 requires specific libraries (like `librdkafka`) for the O-RAN interface to 
 sudo apt-get install librdkafka-dev
 
 # 2. Build ns-3
-cd ns-allinone-3.46.1/ns-3.46.1
+cd ns-3-allinone/ns-3.46.1
 ./ns3 configure --enable-examples --enable-tests
 ./ns3 build
 
@@ -52,12 +52,10 @@ cd ../../..
 ### 4. Running the Training
 
 #### A. Start Kafka
-Kafka and Zookeeper must be running for the E2 interface to function.
+Kafka and Zookeeper must be running for the E2 interface to function. The script now includes a readiness check.
 ```bash
 ./start_kafka.sh
 ```
-> [!IMPORTANT]
-> If you see `NoBrokersAvailable`, wait 5-10 seconds for Kafka to fully initialize before starting the training script.
 
 #### B. Start Training
 ```bash
