@@ -16,19 +16,19 @@ For each UE, keys are formatted as `ue_{id}_{metric}`.
 
 | Metric Key Suffix | Type | Unit | Typical Range | Description |
 | :--- | :--- | :--- | :--- | :--- |
-| `_tput` | `float` | Mbps | 0.0 - 50.0 | Downlink Throughput. Calculated based on bytes received in the interval. |
-| `_delay` | `float` | ms | 5.0 - 200.0 | Average Downlink Latency for packets received in the interval. |
+| `_tput` | `float` | Mbps | 0.0 - 150.0 | Downlink Throughput. Calculated based on bytes received in the interval. |
+| `_delay` | `float` | ms | 5.0 - 500.0 | Average Downlink Latency for packets received in the interval. |
 | `_loss` | `float` | Ratio | 0.0 - 1.0 | Packet Loss Ratio. (Lost Packets / Total Packets). |
-| `_sinr` | `float` | dB | -10.0 - 30.0 | Signal-to-Interference-plus-Noise Ratio. Linear average converted to dB. |
-| `_rsrp` | `float` | dBm | -140.0 - -40.0 | Reference Signal Received Power. Indicates signal strength. |
+| `_sinr` | `float` | dB | -10.0 - 60.0 | Signal-to-Interference-plus-Noise Ratio. Linear average converted to dB. |
+| `_rsrp` | `float` | dBm | -140.0 - -60.0 | Reference Signal Received Power. Indicates signal strength. |
 | `_rsrq` | `float` | dB | -20.0 - 0.0 | Reference Signal Received Quality. Indicates signal quality. |
 | `_cqi` | `float` | Index | 0 - 15 | Channel Quality Indicator. Estimated from SINR. |
-| `_rbs` | `float` | count | 0 - 50 | Number of Downlink Resource Blocks allocated. |
-| `_ul_rbs` | `float` | count | 0 - 50 | Average Uplink Resource Blocks used. |
+| `_rbs` | `float` | count | 0 - 5000 | Number of Downlink Resource Blocks allocated over the interval. |
+| `_ul_rbs` | `float` | count | 0 - 5000 | Average Uplink Resource Blocks used. |
 | `_cell` | `int` | ID | 0 - N (N=Cells-1) | The ID of the serving cell the UE is currently connected to. |
 | `_ho_att` | `int` | count | 0 - 5 | Number of handover attempts initiated. |
 | `_ho_succ` | `int` | count | 0 - 5 | Number of successful handovers. |
-| `_rsrp_var` | `float` | - | 0.0 - 20.0 | Variance of RSRP samples (stability metric). |
+| `_rsrp_var` | `float` | - | 0.0 - 100.0 | Variance of RSRP samples (stability metric). |
 | `_rsrq_var` | `float` | - | 0.0 - 5.0 | Variance of RSRQ samples (stability metric). |
 | `_buffer` | `float` | bytes | 0.0 | Buffer occupancy (Currently a placeholder returning `0.0`). |
 
@@ -38,9 +38,9 @@ For each Cell/eNodeB, keys are formatted as `cell_{id}_{metric}`.
 
 | Metric Key Suffix | Type | Unit | Typical Range | Description |
 | :--- | :--- | :--- | :--- | :--- |
-| `_power` | `float` | dBm | 20.0 - 46.0 | Current Transmission Power. |
+| `_power` | `float` | dBm | 10.0 - 46.0 | Current Transmission Power. |
 | `_load` | `float` | count | 0 - 50 | Number of active UEs served by this cell in the last interval. |
-| `_avg_rb_req` | `float` | count | 0 - 50 | Average number of Resource Blocks requested per UE. |
+| `_avg_rb_req` | `float` | count | 0 - 5000 | Average total Resource Blocks requested per UE over the interval. |
 | `_rb_util` | `float` | ratio | 0.0 - 1.0 (Fixed 0.5) | Resource block utilization (Currently fixed at `0.5`). |
 | `_queue` | `int` | count | 0 | Queue length (Currently fixed at `0`). |
 | `_ues` | `int` | count | 0 | Number of connected UEs (Currently fixed at `0`). |
