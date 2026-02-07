@@ -62,9 +62,22 @@ Kafka and Zookeeper must be running for the E2 interface to function. The script
 # Ensure venv is active
 source .venv/bin/activate
 
+### Quick Start
+1. **Train Model**: `python3 radio_cortex_complete.py --mode train --scenario all`
+2. **Clean Workspace**: `bash scripts/cleanup.sh`
+
 # Run Training (on all 12 scenarios)
 python3 radio_cortex_complete.py --mode train --scenario all --total-timesteps 50000
 ```
+
+## 🛠️ Utilities
+
+The `scripts/` directory contains multi-language utilities to assist with development:
+
+- **Cleanup**: `bash scripts/cleanup.sh` - Removes logs, residuals, and caches.
+- **System Monitor (Rust)**: `rustc scripts/sys_monitor.rs -o scripts/sys_monitor && ./scripts/sys_monitor`
+- **Log Analyzer (Go)**: `go run scripts/log_analyzer.go`
+- **Web Compat (JS)**: `node scripts/web_compat.js`
 
 ---
 
