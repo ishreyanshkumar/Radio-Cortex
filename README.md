@@ -110,8 +110,8 @@ Before running a long training session, verify that the data pipeline is working
   python3 quick_train.py
   ```
 
-### 📊 Evaluation
-Evaluate a trained model against a static baseline (no AI control).
+### 🏋️ Training Variations
+Train on specific scenarios or customize hyperparameters.
 ```bash
 python3 radio_cortex_complete.py --mode train --num-ues 50 --num-cells 10 --scenario mobility_storm
 ```
@@ -126,7 +126,7 @@ python3 radio_cortex_complete.py --mode train --learning-rate 0.0001 --gamma 0.9
 python3 radio_cortex_complete.py --mode train --config experiments/exp1_config.json
 ```
 
-### Evaluation
+### 📊 Evaluation & Benchmarking
 Evaluate a trained model against a static baseline (no AI control).
 ```bash
 python3 radio_cortex_complete.py --mode eval --model-path models/radio_cortex.pt
@@ -138,24 +138,30 @@ python3 radio_cortex_complete.py --mode eval --model-path models/radio_cortex.pt
 - **Metric Reports (`*_metrics.csv`, `*_metrics.tex`):** Raw data and ready-to-use LaTeX tables for reports.
 
 **Metrics Tracked:**
+(For detailed formulas and definitions, see [`README_EVAL.md`](README_EVAL.md))
 
 | Category | Metric | Description |
 |:---|:---|:---|
-| **User Experience (QoS)** | Throughput | Average downlink data rate (Mbps) |
-| | Delay | Average end-to-end latency (ms) |
-| | Satisfied Users | % of users meeting SLA (>1Mbps, <100ms) |
-| | Jitter | Standard deviation of packet delay (ms) |
-| **Reliability** | Packet Loss | Ratio of lost packets to total sent |
-| | Peak Burst Loss | Max loss in a sliding 1-second window |
-| | Recovery Time | Time taken to return to <2% loss after failure |
-| | HO Success Rate | Successful vs Attempted handovers |
-| **Resource Efficiency** | Spectral Efficiency | bits/sec/Hz utilization |
-| | Energy Efficiency | Throughput per Watt of Tx Power (Mbps/W) |
-| | Jain's Fairness | Measure of resource distribution equality |
-| | Cell Edge Tput | 5th percentile user throughput (fairness proxy) |
-| **RIC Performance** | E2 Loop Latency | Time from KPM reception to Control TX (ms) |
-| | Message Overhead | Control loop frequency (messages per second) |
-| | Control Stability | Score of AI decision consistency (0-100). |
+| **QoS (User Experience)** | Throughput | Average downlink data rate (Mbps). |
+| | End-to-End Delay | Average time for packet delivery (ms). |
+| | Jitter | Standard deviation of delay (variability). |
+| | Satisfied User Ratio | % of users meeting SLA (Tput > 1Mbps, Delay < 100ms). |
+| **Reliability** | Packet Loss Ratio | Ratio of lost packets to total sent. |
+| | Peak Burst Loss | Max loss in any 1s window (instability indicator). |
+| | Recovery Time | Time to return to <2% loss after failure. |
+| | Handover Success Rate | Ratio of successful vs attempted handovers. |
+| **Resource Efficiency** | Spectrum Utilization | Average usage of Resource Blocks (RBs). |
+| | Congestion Intensity | % of time network utilization > 90%. |
+| | Cell Edge Throughput | 5th percentile user throughput (fairness proxy). |
+| | Jain's Fairness | Measure of resource distribution equality (0-1). |
+| | Spectral Efficiency | System Throughput / Bandwidth (bits/sec/Hz). |
+| | Energy Efficiency | System Throughput / Total Power (Mbps/Watt). |
+| **PHY / Wireless** | Average SINR | Signal-to-Interference-plus-Noise Ratio (dB). |
+| | Average RSRP | Reference Signal Received Power (Signal Strength, dBm). |
+| **Mobility** | Handover Count | Number of cell switches per UE. |
+| **RIC / E2 Interface** | E2 Loop Latency | Control loop response time (ms). |
+| | RIC Message Overhead | E2 messages per second. |
+| | Control Stability | AI decision consistency score (0-100). |
 
 ### Quick Logic Verification
 To test the RL pipeline without the overhead of the full ns-3 simulation (no Kafka required):
