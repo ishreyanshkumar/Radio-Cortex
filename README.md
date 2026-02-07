@@ -194,11 +194,23 @@ python3 radio_cortex_complete.py --mode eval --model-path models/radio_cortex.pt
 | | RIC Message Overhead | E2 messages per second. |
 | | Control Stability | AI decision consistency score (0-100). |
 
-### Quick Logic Verification
-To verify the RL pipeline implementation quickly (using `radio_cortex_complete.py` with minimal steps):
-```bash
-./train_quick.sh
-```
+### 🧠 Hybrid Reward Engine
+
+Radio-Cortex uses a multi-objective **"Hybrid Reward Engine"** that balances user experience with network efficiency. The agent learns to maximize this cumulative signal:
+
+#### 1. UE Utility (User Satisfaction)
+*   **Throughput ($\alpha$-fairness):** Logarithmic utility $log(1 + T/T_{max})$ ensures the agent prioritizes users with low throughput over those already well-served.
+*   **Delay (Two-Tier):** Combines linear penalty for general delay and a **Quadratic SLA Barrier** that penalizes exponentially if delay exceeds 50ms.
+*   **Packet Loss (IQX Exponential):** Penalizes loss heavily using the IQX model, distinguishing between "mild" (1%) and "catastrophic" (10%+) loss.
+*   **Spectral Efficiency:** Uses Shannon Capacity ($log_2(1+SINR)$) as a "keep-alive" signal to reward good channel conditions even when traffic is low.
+
+#### 2. Network Utility (Operational Efficiency)
+*   **Energy Efficiency:** Penalizes excessive Resource Block (RB) usage to encourage power saving.
+*   **Load Balancing:** Penalizes high standard deviation in cell loads, driving the agent to distribute users evenly.
+*   **Queue Congestion:** Penalizes growing buffers. This acts as an "early warning" signal to prevent delay spikes before they happen.
+*   **Action Smoothing:** Penalizes "jerky" control decisions to ensure network stability and prevent oscillation.
+
+---
 
 ### Interpretability
 Understand which input features (e.g., Queue Length vs Throughput) drove the agent's decisions.
