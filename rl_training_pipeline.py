@@ -9,13 +9,19 @@ import torch.nn as nn
 import numpy as np
 from typing import Dict, List, Optional, Tuple
 import gymnasium as gym
+import time
 from collections import deque
 import wandb
 import json
 from pathlib import Path
 from datetime import datetime
 import dataclasses
-from tqdm import tqdm
+from rich.progress import Progress, TextColumn, BarColumn, TimeElapsedColumn, TimeRemainingColumn, SpinnerColumn
+from rich.live import Live
+from rich.table import Table
+from rich.panel import Panel
+from rich.console import Console, Group
+from rich.columns import Columns
 
 
 # ============================================================================
@@ -77,10 +83,18 @@ class PPOTrainer:
         vf_coef: float = 0.5,
         ent_coef: float = 0.01,
         max_grad_norm: float = 0.5,
-        device: str = 'cuda' if torch.cuda.is_available() else 'cpu'
+        device: str = 'cuda' if torch.cuda.is_available() else 'cpu',
+        checkpoint_dir: str = 'models',
+        checkpoint_interval: int = 5
     ):
         self.env = env
         self.device = device
+        
+        # Detect vectorized environment
+        self.is_vec_env = hasattr(env, 'num_envs')
+        self.n_envs = env.num_envs if self.is_vec_env else 1
+        if self.is_vec_env:
+            print(f"[PPOTrainer] Detected VecEnv with {self.n_envs} parallel environments")
         
         state_dim = env.observation_space.shape[0]
         action_dim = env.action_space.shape[0]
@@ -105,6 +119,11 @@ class PPOTrainer:
         self.action_history = []
         self.log_file = "action_logs.jsonl"
         
+        # Checkpointing
+        self.checkpoint_dir = checkpoint_dir
+        self.checkpoint_interval = checkpoint_interval
+        Path(checkpoint_dir).mkdir(exist_ok=True)
+        
         # Initialize log file
         with open(self.log_file, 'w') as f:
             pass # Clear file
@@ -126,16 +145,20 @@ class PPOTrainer:
         
         return torch.tensor(advantages, dtype=torch.float32)
     
-    def collect_rollout(self, num_steps: int, pbar: Optional[tqdm] = None):
+    def collect_rollout(self, num_steps: int, progress: Optional[Progress] = None, task_id = None, on_step=None):
         """Collect experience from environment"""
+        # Dispatch to VecEnv-specific method if using vectorized environment
+        if self.is_vec_env:
+            return self.collect_rollout_vec(num_steps, progress, task_id, on_step)
+        
         states, actions, rewards, dones, values, log_probs = [], [], [], [], [], []
         
         state, _ = self.env.reset()
         # print(f"[debug] collect_rollout start: num_steps={num_steps}, state_shape={np.shape(state)}")
         
         for step_i in range(num_steps):
-            if pbar:
-                pbar.update(1)
+            if progress and task_id is not None:
+                progress.update(task_id, advance=1)
             
             state_tensor = torch.FloatTensor(state).unsqueeze(0).to(self.device)
             
@@ -148,6 +171,10 @@ class PPOTrainer:
             action_denorm = self._denormalize_action(action_np)
             
             next_state, reward, terminated, truncated, info = self.env.step(action_denorm)
+            
+            # Live UI Callback
+            if on_step:
+                on_step(info, reward)
             
             # Console Logging for User Verification
             if step_i % 10 == 0:
@@ -168,9 +195,9 @@ class PPOTrainer:
                     ue_priorities = action_denorm[num_cells*7:]
                     avg_ue_prio = np.mean(ue_priorities) if len(ue_priorities) > 0 else 0
                     
-                    print(f"\n[Step {self.total_steps}] 🤖 RIC Decision (Cell 0): Power={c0_actions[0]:.1f}dBm | Sched={int(c0_actions[1])} | Avg UE Prio={avg_ue_prio:.2f}")
+                    # print(f"\n[Step {self.total_steps}] 🤖 RIC Decision (Cell 0): Power={c0_actions[0]:.1f}dBm | Sched={int(c0_actions[1])} | Avg UE Prio={avg_ue_prio:.2f}")
                 
-                print(f"[{self.total_steps}] Reward={reward:.3f} | Tput={avg_tput * self.env.config.num_ues:.2f} Mbps | Delay={avg_delay:.0f}ms | Loss={avg_loss*100:.1f}%", flush=True)
+                # print(f"[{self.total_steps}] Reward={reward:.3f} | Tput={avg_tput * self.env.config.num_ues:.2f} Mbps | Delay={avg_delay:.0f}ms | Loss={avg_loss*100:.1f}%", flush=True)
 
             # File logging
             try:
@@ -239,6 +266,88 @@ class PPOTrainer:
             'advantages': advantages,
         }
     
+    def collect_rollout_vec(self, num_steps: int, progress: Optional[Progress] = None, task_id = None, on_step=None):
+        """Collect experience from vectorized environment (parallel envs)"""
+        n_envs = self.n_envs
+        
+        # Storage: [num_steps, n_envs, ...]
+        all_states = []
+        all_actions = []
+        all_rewards = []
+        all_dones = []
+        all_values = []
+        all_log_probs = []
+        
+        # VecEnv reset returns just observations (n_envs, obs_dim)
+        states = self.env.reset()
+        
+        for step_i in range(num_steps):
+            if progress and task_id is not None:
+                progress.update(task_id, advance=n_envs)  # Update by number of parallel steps
+            
+            # states: (n_envs, state_dim) -> tensor (n_envs, state_dim)
+            states_tensor = torch.FloatTensor(states).to(self.device)
+            
+            with torch.no_grad():
+                # Get actions for all envs at once
+                actions, log_probs = self.policy.get_action(states_tensor)
+                _, values = self.policy(states_tensor)
+            
+            # Convert to numpy: (n_envs, action_dim)
+            actions_np = actions.cpu().numpy()
+            
+            # Denormalize actions for each env
+            actions_denorm = np.array([self._denormalize_action(a) for a in actions_np])
+            
+            # Step all environments: returns (n_envs, ...) arrays
+            next_states, rewards_arr, dones_arr, infos = self.env.step(actions_denorm)
+            
+            # Live UI Callback
+            if on_step:
+                on_step(infos, rewards_arr)
+            
+            # Log progress occasionally
+            if step_i % 10 == 0:
+                avg_reward = np.mean(rewards_arr)
+                # print(f"[Step {self.total_steps}] VecEnv Avg Reward={avg_reward:.3f} (across {n_envs} envs)")
+            
+            # Store batch data
+            all_states.append(states)
+            all_actions.append(actions_np)
+            all_rewards.append(rewards_arr)
+            all_dones.append(dones_arr)
+            all_values.append(values.cpu().numpy().flatten())
+            all_log_probs.append(log_probs.cpu().numpy().flatten())
+            
+            states = next_states
+            self.total_steps += n_envs
+        
+        # Reshape from [num_steps, n_envs, ...] to [num_steps * n_envs, ...]
+        all_states = np.array(all_states).reshape(-1, states.shape[-1])
+        all_actions = np.array(all_actions).reshape(-1, actions_np.shape[-1])
+        all_rewards = np.array(all_rewards).flatten()
+        all_dones = np.array(all_dones).flatten()
+        all_values = np.array(all_values).flatten()
+        all_log_probs = np.array(all_log_probs).flatten()
+        
+        # Get value of final states for GAE
+        with torch.no_grad():
+            states_tensor = torch.FloatTensor(states).to(self.device)
+            _, next_values = self.policy(states_tensor)
+            next_value = next_values.mean().item()  # Average across envs
+        
+        # Compute advantages
+        advantages = self.compute_gae(all_rewards.tolist(), all_values.tolist(), all_dones.tolist(), next_value)
+        returns = advantages + torch.tensor(all_values)
+        
+        return {
+            'states': torch.FloatTensor(all_states),
+            'actions': torch.FloatTensor(all_actions),
+            'log_probs': torch.FloatTensor(all_log_probs),
+            'returns': returns,
+            'advantages': advantages,
+        }
+    
     def update_policy(self, rollout: Dict, num_epochs: int = 4, batch_size: int = 64):
         """Update policy using PPO objective"""
         states = rollout['states'].to(self.device)
@@ -294,10 +403,21 @@ class PPOTrainer:
                 nn.utils.clip_grad_norm_(self.policy.parameters(), self.max_grad_norm)
                 self.optimizer.step()
         
+        # Calculate Explained Variance
+        # How well the value function explains the observed returns.
+        # 1 - Var(returns - values) / Var(returns)
+        with torch.no_grad():
+            v_pred = self.policy(states)[1].squeeze()
+            y_true = returns
+            var_y = torch.var(y_true)
+            explained_var = 1.0 - torch.var(y_true - v_pred) / (var_y + 1e-8)
+            explained_var = explained_var.item()
+
         return {
             'policy_loss': policy_loss.item(),
             'value_loss': value_loss.item(),
-            'entropy': -entropy_loss.item()
+            'entropy': -entropy_loss.item(),
+            'explained_variance': explained_var
         }
     
     def _denormalize_action(self, action: np.ndarray) -> np.ndarray:
@@ -308,12 +428,22 @@ class PPOTrainer:
         high = self.env.action_space.high
         return low + (action + 1.0) * 0.5 * (high - low)
     
-    def train(self, total_timesteps: int, rollout_steps: int = 20, log_interval: int = 1, batch_size: int = 64):
-        """Main training loop"""
-        num_updates = total_timesteps // rollout_steps
+    def train(self, total_timesteps: int, rollout_steps: int = 20, log_interval: int = 1, batch_size: int = 64, checkpoint_interval: int = None):
+        """Main training loop
+        
+        Args:
+            checkpoint_interval: Override instance checkpoint_interval (None = use default)
+        """
+        if checkpoint_interval is not None:
+            self.checkpoint_interval = checkpoint_interval
+        
+        # Calculate update frequency based on total samples per rollout
+        samples_per_update = rollout_steps * self.n_envs
+        num_updates = total_timesteps // samples_per_update
+        
         if num_updates == 0:
-            print(f"ERROR: Total timesteps ({total_timesteps}) is less than rollout steps ({rollout_steps}).")
-            print("       PPO requires at least one full rollout to update.")
+            print(f"ERROR: Total timesteps ({total_timesteps}) is less than samples per update ({samples_per_update}).")
+            print(f"       With {self.n_envs} envs x {rollout_steps} steps, a single update is {samples_per_update} steps.")
             print("       Adjust arguments: Increase --total-timesteps or decrease --rollout-steps.")
             return
         
@@ -321,25 +451,285 @@ class PPOTrainer:
         print(f"Device: {self.device}")
         
         update = 0
-        with tqdm(total=total_timesteps, desc="Training Steps", unit="step") as pbar:
+        # Rich UI Setup
+        console = Console()
+        progress = Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            BarColumn(bar_width=None),
+            TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
+            TimeElapsedColumn(),
+            TextColumn("•"),
+            TimeRemainingColumn(),
+            expand=True
+        )
+        
+        main_task = progress.add_task("Training", total=total_timesteps)
+        
+        # Live metrics storage: {env_id: {'tput': x, 'loss': y, 'ue_metrics': {...}}}
+        live_env_metrics = {}
+        
+        # We need a reference to the live object for the callback
+        live_display = None
+
+        # Callback to update live metrics from env info
+        def on_step_callback(infos, rewards=None):
+            # Debug: Print type and content of first info
+            # if isinstance(infos, (list, tuple)) and len(infos) > 0:
+            #    print(f"\n[DEBUG] Info type: {type(infos)}, Len: {len(infos)}")
+            #    if 'e2_metrics' in infos[0]:
+            #        print(f" [DEBUG] e2_metrics found. Type: {type(infos[0]['e2_metrics'])}")
+            
+            # Handle both single and parallel envs
+            if isinstance(infos, dict): # Single env
+                 infos = [infos]
+            elif isinstance(infos, tuple):
+                 infos = list(infos)
+            
+            # --- Live Reward Tracking ---
+            if rewards is not None:
+                # Should handle scalar (single env) or array (vec env)
+                if np.isscalar(rewards):
+                    current_rollout_rewards.append(rewards)
+                else:
+                    current_rollout_rewards.extend(rewards)
+            
+            nonlocal current_stats
+            
+            # Create partial stats if they don't exist (first step of first rollout)
+            if current_stats is None:
+                current_stats = {
+                    'update': update + 1,
+                    'steps': self.total_steps,
+                    'reward': 0.0,
+                    'reward_var': 0.0,
+                    'policy_loss': 0.0, 
+                    'value_loss': 0.0,
+                    'entropy': 0.0
+                }
+            
+            # Calculate running stats for current rollout
+            if current_rollout_rewards:
+                avg_rew = np.mean(current_rollout_rewards)
+                var_rew = np.var(current_rollout_rewards)
+                current_stats['reward'] = avg_rew
+                current_stats['reward_var'] = var_rew
+                current_stats['steps'] = self.total_steps # Approximate live step count
+            # ---------------------------
+
+            for env_i, info in enumerate(infos):
+                e2 = info.get('e2_metrics')
+                if e2:
+                    # Calculate aggregates
+                    ue_kpms = list(e2.ue_metrics.values()) if e2.ue_metrics else []
+                    cell_kpms = list(e2.cell_metrics.values()) if e2.cell_metrics else []
+                    
+                    tput = np.mean([m['throughput'] for m in ue_kpms]) if ue_kpms else 0.0
+                    delay = np.mean([m['delay'] for m in ue_kpms]) if ue_kpms else 0.0
+                    loss = np.mean([m['packet_loss'] for m in ue_kpms]) if ue_kpms else 0.0
+                    sinr = np.mean([m['sinr'] for m in ue_kpms]) if ue_kpms else -10.0
+                    rsrp = np.mean([m['rsrp'] for m in ue_kpms]) if ue_kpms else -140.0
+                    
+                    queue = np.mean([c['queue_length'] for c in cell_kpms]) if cell_kpms else 0.0
+                    rb = np.mean([c['rb_utilization'] for c in cell_kpms]) if cell_kpms else 0.0
+                    power = sum([(10**(c['tx_power']/10.0))*0.001 for c in cell_kpms]) if cell_kpms else 0.0
+                    
+                    # Store detailed UE metrics for grid
+                    detailed_ue = {
+                        ue_id: {
+                            'tput': m['throughput'],
+                            'delay': m['delay'],
+                            'loss': m['packet_loss'],
+                            'sinr': m['sinr'],
+                            'cell': m.get('serving_cell', -1)
+                        } for ue_id, m in e2.ue_metrics.items()
+                    }
+                    
+                    live_env_metrics[env_i] = {
+                        'tput': tput, 'delay': delay, 'loss': loss, 
+                        'sinr': sinr, 'rsrp': rsrp, 'queue': queue, 'rb': rb, 'power': power,
+                        'ue_metrics': detailed_ue
+                    }
+            
+            # Background refresh is handled by Live(refresh_per_second=10).
+            # No manual update() here to prevent UI lag.
+            pass
+
+        # Stats display table (Updated for Convergence Metrics)
+        def create_stats_table(current_metrics=None):
+            table = Table(show_header=True, header_style="bold magenta", expand=True)
+            table.add_column("Update", justify="center")
+            table.add_column("Tot Steps", justify="center")
+            table.add_column("Reward", justify="center")
+            table.add_column("Trend", justify="center")      # New: Direction
+            table.add_column("Expl Var", justify="center")   # New: Convergence indicator
+            table.add_column("Policy Loss", justify="center")
+            table.add_column("Entropy", justify="center")
+            
+            if current_metrics:
+                # Color code trend and expl variance
+                trend = current_metrics.get('trend', '→')
+                trend_str = f"[green]{trend}[/green]" if trend == '↗' else f"[red]{trend}[/red]" if trend == '↘' else trend
+                
+                expl_var = current_metrics.get('explained_variance', 0.0)
+                ev_color = "green" if expl_var > 0.8 else "yellow" if expl_var > 0.4 else "red"
+                ev_display = f"[{ev_color}]{expl_var:.3f}[/]"
+                
+                table.add_row(
+                    str(current_metrics.get('update', '-')),
+                    f"{current_metrics.get('steps', 0):,}",
+                    f"[green]{current_metrics.get('reward', 0.0):.3f}[/green]" if current_metrics.get('reward', 0.0) > 0 else f"[red]{current_metrics.get('reward', 0.0):.3f}[/red]",
+                    trend_str,
+                    ev_display,
+                    f"{current_metrics.get('policy_loss', 0.0):.4f}",
+                    f"{current_metrics.get('entropy', 0.0):.4f}"
+                )
+            else:
+                 table.add_row("-", "0", "0.000", "→", "0.000", "0.0000", "0.0000")
+            return Panel(table, title="[bold blue]RL Training Progress[/]", border_style="blue", expand=True)
+
+        # Per-Env Metrics Table
+        def create_env_metrics_table():
+            table = Table(show_header=True, header_style="bold green", expand=True)
+            table.add_column("Env ID", justify="center")
+            table.add_column("Activity", justify="center") # Heartbeat indicator
+            table.add_column("Tput (Mbps)", justify="right")
+            table.add_column("Delay (ms)", justify="right")
+            table.add_column("Loss (%)", justify="right")
+            table.add_column("SINR (dB)", justify="right")
+            table.add_column("Queue", justify="right")
+            table.add_column("RB Util", justify="right")
+            table.add_column("Power (W)", justify="right")
+            
+            # Simple alternating heartbeat
+            heartbeat = "●" if int(time.time() * 2) % 2 == 0 else "○"
+            
+            for env_id in sorted(live_env_metrics.keys()):
+                m = live_env_metrics[env_id]
+                table.add_row(
+                    str(env_id),
+                    f"[bold green]{heartbeat}[/]" if m.get('tput', 0) > 0 else "[dim]idling[/]",
+                    f"{m.get('tput', 0):.2f}",
+                    f"{m.get('delay', 0):.1f}",
+                    f"{m.get('loss', 0)*100:.1f}",
+                    f"{m.get('sinr', -10):.1f}",
+                    f"{m.get('queue', 0):.1f}",
+                    f"{m.get('rb', 0)*100:.1f}%",
+                    f"{m.get('power', 0):.2f}"
+                )
+            if not live_env_metrics:
+                 table.add_row("-", "-", "-", "-", "-", "-", "-", "-", "-")
+                 
+            return Panel(table, title="[bold green]Live Environment Metrics[/]", border_style="green", expand=True)
+
+        # UE Metrics Grid
+        def create_ue_grid():
+            tables = []
+            for env_id in sorted(live_env_metrics.keys()):
+                m = live_env_metrics[env_id]
+                if 'ue_metrics' not in m: continue
+                
+                ue_data = m['ue_metrics']
+                table = Table(title=f"Env {env_id} UEs", show_header=True, header_style="bold cyan", expand=True, box=None)
+                table.add_column("UE", justify="right", style="cyan", width=3)
+                table.add_column("Cell", justify="right", style="magenta", width=3)
+                table.add_column("Tput", justify="right", style="green")
+                table.add_column("Delay", justify="right", style="yellow")
+                table.add_column("Loss", justify="right", style="red")
+                
+                # Limit to first 5 UEs to save space
+                displayed_ues = sorted(ue_data.keys())[:5]
+                
+                for ue_id in displayed_ues:
+                    ud = ue_data[ue_id]
+                    table.add_row(
+                        str(ue_id),
+                        str(ud['cell']),
+                        f"{ud['tput']:.1f}",
+                        f"{ud['delay']:.0f}",
+                        f"{ud['loss']*100:.0f}%"
+                    )
+                
+                # Add a row indicating more UEs if truncated
+                if len(ue_data) > 5:
+                    table.add_row("..", "..", "..", "..", "..")
+                    
+                tables.append(Panel(table, border_style="white", expand=True))
+            
+            if not tables:
+                return Panel("Waiting for UE data...", style="dim")
+                
+            # Create a 2-column grid to hold the panels
+            grid = Table.grid(expand=True)
+            grid.add_column(ratio=1)
+            grid.add_column(ratio=1)
+            
+            # Add panels in rows of 2
+            for i in range(0, len(tables), 2):
+                row_panels = tables[i:i+2]
+                if len(row_panels) == 1:
+                    row_panels.append("") # Padding
+                grid.add_row(*row_panels)
+                
+            return grid
+
+        update = 0
+        current_stats = None
+        reward_history = [0.0] # For trend calculation
+        
+        # Helper to generate the full layout
+        def make_layout():
+            return Group(
+                progress, # Progress bar at top
+                create_stats_table(current_stats),
+                create_env_metrics_table(),
+                create_ue_grid()
+            )
+            
+        with Live(make_layout(), console=console, refresh_per_second=10) as live:
+            live_display = live # Set reference for callback
             for update in range(num_updates):
-                # Collect rollout
-                # print(f"[debug] train: starting rollout {update+1}/{num_updates}")
-                rollout = self.collect_rollout(rollout_steps, pbar=pbar)
+                # Reset storage for live reward tracking per update
+                current_rollout_rewards = []
+                
+                # Collect rollout with callback
+                rollout = self.collect_rollout(rollout_steps, progress=progress, task_id=main_task, on_step=on_step_callback)
             
                 # Update policy
-                print(f"[debug] train: starting policy update for rollout {update+1}")
                 metrics = self.update_policy(rollout, batch_size=batch_size)
-                print(f"[debug] train: completed policy update for rollout {update+1}")
-                # Logging
-                if update % log_interval == 0:
-                    avg_reward = rollout['returns'].mean().item()
-                    print(f"\nUpdate {update}/{num_updates}")
-                    print(f"  Total steps: {self.total_steps}")
-                    print(f"  Avg return: {avg_reward:.3f}")
-                    print(f"  Policy loss: {metrics['policy_loss']:.4f}")
-                    print(f"  Value loss: {metrics['value_loss']:.4f}")
-                    print(f"  Entropy: {metrics['entropy']:.4f}")
+                
+                # Update Dashboard Stats (Final for this update)
+                avg_reward = rollout['returns'].mean().item()
+                
+                # Calculate Trend: compare with previous update average
+                prev_avg = reward_history[-1]
+                if avg_reward > prev_avg * 1.05: # > 5% improvement
+                    trend = '↗'
+                elif avg_reward < prev_avg * 0.95: # > 5% drop
+                    trend = '↘'
+                else:
+                    trend = '→'
+                
+                reward_history.append(avg_reward)
+                if len(reward_history) > 10: reward_history.pop(0)
+
+                current_stats = {
+                    'update': update + 1,
+                    'steps': self.total_steps,
+                    'reward': avg_reward,
+                    'trend': trend,
+                    'explained_variance': metrics['explained_variance'],
+                    'policy_loss': metrics['policy_loss'],
+                    'entropy': metrics['entropy']
+                }
+                
+                # Force refresh
+                live.update(make_layout())
+                
+                # Periodic checkpointing
+                if self.checkpoint_interval > 0 and (update + 1) % self.checkpoint_interval == 0:
+                    checkpoint_path = str(Path(self.checkpoint_dir) / 'radio_cortex_latest.pt')
+                    self.save(checkpoint_path)
         
         print("\n✓ Training complete")
     

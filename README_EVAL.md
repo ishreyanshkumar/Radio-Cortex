@@ -41,6 +41,9 @@ We categorize metrics based on the network layer they analyze, ensuring a holist
 *   **RIC Message Overhead (msg/s):** E2 messages per second.
 *   **Control Stability (%):** 0-100 score measuring AI "jitter". High score means stable decisions; low score means frequent, large action changes.
 
+### 🧠 Architecture & Compute Metrics
+*   **Inference Time (ms):** Average time taken by the agent to compute an action. Critical for comparing model architectures (e.g., Transformer vs MLP) against O-RAN real-time constraints.
+
 ---
 
 ## 2. Composite Health Scores (Radar Chart)
@@ -72,22 +75,25 @@ Measures control loop latency, message overhead, and AI "jitteriness".
 *   **Formula:** `40% E2 Latency + 30% Message Overhead + 30% Control Stability`
 *   High stability, low latency, and reasonable overhead yield high scores.
 
+### 🧠 7. Architecture Score (Model Efficiency)
+Measures the "cost of intelligence" - how heavy the model is.
+*   **Formula:** `50% Normalized Params + 50% Normalized Inference Speed`
+*   **Penalties:** 
+    *   0 score if Params > 1,000,000 (1M)
+    *   0 score if Inference > 10ms (O-RAN limit)
+    *   Baseline (Static) gets 100/100 (Efficient).
+
+
 ---
 
-## 3. Per-UE Metrics Display
+### 🖥️ Evaluation Dashboard (Rich UI)
 
-During evaluation, a formatted table shows **all key metrics per UE**:
+The evaluation suite utilizes a multi-panel dashboard for real-time tracking:
 
-```
-  ╔════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════╗
-  ║  UE Metrics - 20 UEs                                                                                                    ║
-  ╠════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════╣
-  ║ UE │   Tput │  Delay │  Loss │   SINR │    RSRP │   Cell │ Buffer ║
-  ╠════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════╣
-  ║  0 │  1.41M │    53ms │  0.0% │  29.1dB │   -100dB │    2 │      0 ║
-  ...
-  ╚════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════╝
-```
+1. **Overall Progress**: Fixed progress bar at the top showing remaining scenarios.
+2. **Live Network Metrics**: Aggregated Tput, Delay, Loss across all environments.
+3. **Activity Heartbeat**: Pulses (`●`) during each environment step to confirm ns-3 data flow.
+4. **Per-UE Grid (2x2)**: Real-time visualization of the **top 5 UEs per environment**, enabling immediate identification of "bottleneck" users.
 
 **Legend:**
 - `--` indicates a default/unavailable value (e.g., RSRP=-140, Cell=-1)
@@ -131,7 +137,14 @@ python3 radio_cortex_complete.py --mode eval
 
 # Run only one specific scenario (Fast Test)
 python3 radio_cortex_complete.py --mode eval --scenario mobility_storm
+
+# Run parallel evaluation on 4 scenarios at once (Faster)
+python3 radio_cortex_complete.py --mode eval --n-envs 4
 ```
+
+> [!IMPORTANT]
+> **Performance Note:** Evaluation relies on the ns-3 binary. Ensure you have compiled the **optimized build** (see README.md) to avoid slow evaluation speeds.
+
 
 ### Outputs
 Results are saved in the `results/` directory:

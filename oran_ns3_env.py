@@ -40,7 +40,11 @@ class NS3Config:
     # sleepy_campus, ambulance, adversarial, commuter_rush, mixed_reality, urban_canyon, iot_tsunami, spectrum_crunch)
     scenario: str = "flash_crowd"
     # Multi-scenario training: if set, reset() will randomly pick from this list each episode
-    scenarios: Optional[List[str]] = None 
+    scenarios: Optional[List[str]] = None
+    # Topic suffix for parallel environment isolation (e.g., "_0", "_1")
+    topic_suffix: str = ""
+    # Verbosity control for CLI output
+    verbose: bool = True
 
 
 @dataclass
@@ -305,35 +309,122 @@ class NS3Interface:
             elif os.path.exists(os.path.join('..', '..', 'ns3')): # Handle scratch/Radio-Cortex case
                 ns3_path = os.path.join('..', '..', 'ns3')
         
-        ns3_cmd = [
-            sys.executable, ns3_path, 'run',
-            f'scratch/oran-congestion-scenario',
-            '--',
-            f'--numUes={self.config.num_ues}',
-            f'--numCells={self.config.num_cells}',
-            f'--simTime={self.config.sim_time}',
-            f'--seed={self.config.seed}',
-            f'--kpmInterval={self.config.kpm_interval_ms}',
+        # Define working directory for ns-3
+        ns3_path = os.path.abspath(ns3_path)
+        ns3_dir = os.path.dirname(ns3_path)
+        if not ns3_dir: 
+            ns3_dir = os.getcwd()
 
-            '--enableE2=true',
-            f'--scenario={self.config.scenario}',
-            f'--bandwidthRbs={int(self.config.system_bandwidth_mhz * 5)}' # 10MHz * 5 = 50 RBs
+        # Try to find the compiled binary directly to avoid Waf lock contention.
+        # PRIORITY: Check for 'optimized' build first (much faster simulation).
+        # Fallback to 'default' or 'debug' if optimized is not found.
+        binary_name_default = "ns3.46.1-oran-congestion-scenario-default"
+        binary_name_opt = "ns3.46.1-oran-congestion-scenario-optimized"
+        
+        candidate_paths = [
+            # 1. Optimized build in standard layout (Most common with './ns3 build')
+            os.path.join(ns3_dir, "build/scratch", binary_name_opt),
+            # 2. Optimized build in split layout (Legacy/CMake specific)
+            os.path.join(ns3_dir, "build/optimized/scratch", binary_name_opt),
+            # 3. Default build (Commonly present, often debug-enabled/slow)
+            os.path.join(ns3_dir, "build/scratch", binary_name_default),
+            # 4. Debug build (Explicit debug)
+            os.path.join(ns3_dir, "build/debug/scratch", binary_name_default.replace("default", "debug")),
         ]
         
+        binary_path = None
+        for path in candidate_paths:
+            if os.path.exists(path):
+                binary_path = path
+                break
+        
+        if binary_path:
+            # Execute binary directly - FORCE ABSOLUTE PATH
+            binary_path = os.path.abspath(binary_path)
+            if not os.path.exists(binary_path):
+                 raise FileNotFoundError(f"Binary not found at {binary_path}")
+            
+            ns3_cmd = [
+                binary_path,
+                f'--numUes={self.config.num_ues}',
+                f'--numCells={self.config.num_cells}',
+                f'--simTime={self.config.sim_time}',
+                f'--seed={self.config.seed}',
+                f'--kpmInterval={self.config.kpm_interval_ms}',
+                f'--enableE2=true',
+                f'--scenario={self.config.scenario}',
+                f'--bandwidthRbs={int(self.config.system_bandwidth_mhz * 5)}',
+            ]
+            if self.config.topic_suffix:
+                ns3_cmd.append(f'--topicSuffix={self.config.topic_suffix}')
+        else:
+            # Fallback to wrapper if binary not found (slower startup)
+            if self.config.verbose:
+                print(f"Warning: Encoded binary not found, falling back to ns3 wrapper (slow startup)")
+            ns3_cmd = [
+                sys.executable, os.path.basename(ns3_path), 'run',
+                f'scratch/oran-congestion-scenario',
+                '--',
+                f'--numUes={self.config.num_ues}',
+                f'--numCells={self.config.num_cells}',
+                f'--simTime={self.config.sim_time}',
+                f'--seed={self.config.seed}',
+                f'--kpmInterval={self.config.kpm_interval_ms}',
+                '--enableE2=true',
+                f'--scenario={self.config.scenario}',
+                f'--bandwidthRbs={int(self.config.system_bandwidth_mhz * 5)}',
+                f'--topicSuffix={self.config.topic_suffix}'
+            ]
+        
         # Start ns-3 in subprocess
-        # Native Kafka support in ns-3, no adapter needed.
-        # Redirect output to file for debugging
-        self.ns3_log_file = open("ns3.log", "w")
+        # Redirect output to files for debugging
+        self.log_file_out = open(f"ns3_out{self.config.topic_suffix}.log", "w")
+        self.log_file_err = open(f"ns3_err{self.config.topic_suffix}.log", "w")
+        
+        # Prepare environment variables with LD_LIBRARY_PATH
+        env = os.environ.copy()
+        # Ensure build/lib is in LD_LIBRARY_PATH so direct binary execution works
+        # Try both build/lib (standard) and build (sometimes used)
+        lib_paths = [
+            os.path.join(ns3_dir, "build/lib"),
+            os.path.join(ns3_dir, "build"),
+        ]
+        
+        # Also check if we are in 'optimized' or 'debug' build directory structure
+        if "optimized" in str(binary_path):
+             lib_paths.append(os.path.join(ns3_dir, "build/optimized/lib"))
+        if "debug" in str(binary_path):
+             lib_paths.append(os.path.join(ns3_dir, "build/debug/lib"))
+
+        valid_lib_paths = [p for p in lib_paths if os.path.exists(p)]
+        if valid_lib_paths:
+            current_ld_path = env.get('LD_LIBRARY_PATH', '')
+            new_ld_path = ':'.join(valid_lib_paths)
+            if current_ld_path:
+                new_ld_path = f"{new_ld_path}:{current_ld_path}"
+            env['LD_LIBRARY_PATH'] = new_ld_path
+            # print(f"DEBUG: LD_LIBRARY_PATH set to {new_ld_path}")
+
+        if self.config.verbose:
+            print(f"Starting ns-3 simulation with command: {' '.join(ns3_cmd)}")
         self.ns3_process = subprocess.Popen(
             ns3_cmd,
-            stdout=self.ns3_log_file,
-            stderr=subprocess.STDOUT,
+            cwd=ns3_dir,
+            stdout=self.log_file_out,
+            stderr=self.log_file_err,
+            preexec_fn=os.setsid,
+            env=env
         )
-        
+        if self.config.verbose:
+            print(f"ns-3 process started (PID: {self.ns3_process.pid}, Logs: ns3_out{self.config.topic_suffix}.log)")
         time.sleep(2) # Give ns-3 time to initialize
         
-        # Connect to Kafka
-        self._connect_kafka()
+        # Connect to Kafka (if not already connected)
+        if not self.kafka_consumer:
+            self._connect_kafka()
+            
+        # Reset timestamp tracking for new episode
+        self.last_kpm_ts = None
         
     def _connect_kafka(self):
         """Establish Kafka connections"""
@@ -341,14 +432,17 @@ class NS3Interface:
         import socket
 
         try:
-            print("Connecting to Kafka...")
+            if self.config.verbose:
+                print("Connecting to Kafka...")
+            kpm_topic = f'e2_kpm_stream{self.config.topic_suffix}'
+            rc_topic = f'e2_rc_control{self.config.topic_suffix}'
             self.kafka_consumer = KafkaConsumer(
-                'e2_kpm_stream',
+                kpm_topic,
                 bootstrap_servers=['localhost:9092'],
-                auto_offset_reset='latest',
+                auto_offset_reset='earliest',  # Read from beginning to catch startup msgs
                 enable_auto_commit=False,
                 value_deserializer=lambda x: json.loads(x.decode('utf-8')),
-                consumer_timeout_ms=30000  # Non-blocking check
+                group_id=f'oran_rl_agent{self.config.topic_suffix}_{int(time.time())}' # Unique group ID
             )
 
             # Ensure we only consume NEW messages from this point onward
@@ -362,7 +456,9 @@ class NS3Interface:
                 bootstrap_servers=['localhost:9092'],
                 value_serializer=lambda x: json.dumps(x).encode('utf-8')
             )
-            print("✓ Connected to Kafka")
+            self._rc_topic = rc_topic  # Store for send_rc_control
+            if self.config.verbose:
+                print(f"✓ Connected to Kafka (topics: {kpm_topic}, {rc_topic})")
             
         except Exception as e:
             print(f"✗ Failed to connect to Kafka: {e}")
@@ -398,29 +494,28 @@ class NS3Interface:
                     break
             
             if not records:
-                # No data yet, return defaults or wait?
-                # For training, we need data.
-                print("No KPM data received, returning default metrics")
-                
-                return self._get_default_metrics()
+                # No data yet
+                if wait_for_new:
+                     # If we were strictly waiting for new data (e.g. during reset) and failed, 
+                     # we should check if the process is valid.
+                     if self.ns3_process.poll() is not None:
+                         raise RuntimeError(f"ns-3 process died unexpectedly with code {self.ns3_process.returncode}. Check ns3_err{self.config.topic_suffix}.log")
+                     # If process is alive but no data, raise error to avoid silent failure
+                     raise TimeoutError(f"Timed out waiting for initial KPM report from ns-3 (Env {self.config.topic_suffix}). Check Kafka topics and logs.")
             
             if last_record:
                 self.last_kpm_ts = last_record.timestamp
                 kpm_data = last_record.value
-                # DEBUG: Print keys from first few reports to verify JSON structure
-                if getattr(self, '_debug_kpm_count', 0) < 5:
-                    #print(f"DEBUG: Received KPM keys: {list(kpm_data.keys())} Sample: {kpm_data}")
-                    self._debug_kpm_count = getattr(self, '_debug_kpm_count', 0) + 1
-                
                 self.last_kpm_rx_time = time.time() # Timestamp for E2 Latency
                 self.kpm_msg_count += 1
                 return self._parse_kpm(kpm_data)
             else:
-                return self._get_default_metrics()
+                raise RuntimeError(f"No KPM data found on Kafka topic {kpm_topic}. Ensure ns-3 is running and producing data.")
             
         except Exception as e:
-            print(f"Error receiving KPM: {e}")
-            return self._get_default_metrics()
+            if "TimeoutError" in str(type(e)):
+                raise e
+            raise RuntimeError(f"E2 Interface Failure (Env {self.config.topic_suffix}): {e}")
             
     def _parse_kpm(self, kpm_data):
         # Parse KPM metrics
@@ -467,7 +562,7 @@ class NS3Interface:
         if not hasattr(self, '_kpm_parse_count'):
             self._kpm_parse_count = 0
         self._kpm_parse_count += 1
-        if self._kpm_parse_count % 50 == 1:
+        if self._kpm_parse_count % 50 == 1 and self.config.verbose:
             num_ues = self.config.num_ues
             print(f"\n  [Data Quality] RSRP: {rsrp_real_count}/{num_ues} real | Cell: {cell_real_count}/{num_ues} real | HO: {ho_real_count}/{num_ues} with events")
         
@@ -500,7 +595,8 @@ class NS3Interface:
         }
         
         try:
-            self.kafka_producer.send('e2_rc_control', rc_message)
+            rc_topic = getattr(self, '_rc_topic', 'e2_rc_control')
+            self.kafka_producer.send(rc_topic, rc_message)
             self.kafka_producer.flush()
             
             self.rc_msg_count += 1
@@ -511,35 +607,33 @@ class NS3Interface:
             # print(f"Error sending RC control: {e}")
             pass 
     
-    def _get_default_metrics(self) -> E2Message:
-        """Fallback metrics if E2 connection fails"""
-        return E2Message(
-            timestamp=time.time(),
-            ue_metrics={i: {
-                'throughput': 0, 'delay': 0, 'packet_loss': 0, 'sinr': -10,
-                'rsrp': -140, 'rsrq': -20, 'ul_rbs': 0.0, 'rb_allocated': 0,
-                'cqi': 0, 'rsrp_var': 0, 'rsrq_var': 0, 'buffer_occupancy': 0,
-                'serving_cell': -1, 'handover_attempts': 0, 'handover_successes': 0
-            } for i in range(self.config.num_ues)},
-            cell_metrics={i: {'queue_length': 0, 'rb_utilization': 0, 'tx_power': 23, 
-                             'num_connected_ues': 0, 'cell_load': 0, 'avg_rb_request': 0}
-                         for i in range(self.config.num_cells)}
-        )
     
-    def stop_simulation(self):
+    def stop_simulation(self, close_kafka: bool = True):
         """Clean shutdown of ns-3 and Kafka connection"""
-        if self.kafka_consumer:
-            self.kafka_consumer.close()
-        if self.kafka_producer:
-            self.kafka_producer.close()
+        if close_kafka:
+            if self.kafka_consumer:
+                self.kafka_consumer.close()
+                self.kafka_consumer = None
+            if self.kafka_producer:
+                self.kafka_producer.close()
+                self.kafka_producer = None
             
         if hasattr(self, 'adapter_process') and self.adapter_process:
             self.adapter_process.terminate()
-            self.adapter_process.wait()
+            try:
+                self.adapter_process.wait(timeout=1)
+            except subprocess.TimeoutExpired:
+                 self.adapter_process.kill()
             
         if self.ns3_process:
             self.ns3_process.terminate()
-            self.ns3_process.wait()
+            try:
+                self.ns3_process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                print(f"Warning: Force killing ns-3 process {self.ns3_process.pid}...")
+                self.ns3_process.kill()
+                self.ns3_process.wait()
+            self.ns3_process = None
 
 
 class ORANns3Env(gym.Env):
@@ -614,28 +708,50 @@ class ORANns3Env(gym.Env):
         
     def reset(self, seed=None, options=None) -> Tuple[np.ndarray, dict]:
         """Reset environment and start new ns-3 simulation episode"""
+        start_reset = time.time()
         super().reset(seed=seed)
         
         if seed is not None:
             self.config.seed = seed
         
         # Multi-scenario training: randomly select a scenario each episode
+        # This Domain Randomization ensures the policy is robust to different traffic patterns.
         if self.config.scenarios:
             self.config.scenario = random.choice(self.config.scenarios)
-            print(f"\n🎲 [Multi-Scenario] Starting episode with scenario: {self.config.scenario}")
+            if self.config.verbose:
+                print(f"\n🎲 [Multi-Scenario] Starting episode with scenario: {self.config.scenario}")
         
         # Stop previous simulation if running
-        if hasattr(self, 'ns3') and self.ns3.ns3_process:
-            self.ns3.stop_simulation()
+        if hasattr(self, 'ns3') and self.ns3:
+            # Update scenario in existing interface config
+            if self.config.scenarios and self.config.scenario:
+                self.ns3.config.scenario = self.config.scenario
+                
+            # print(f"Calling stop_simulation (keep_kafka=True)...")
+            self.ns3.stop_simulation(close_kafka=False)
+            # print(f"Calling start_simulation...")
+            self.ns3.start_simulation()
+        else:
+            # First time initialization
+            self.ns3 = NS3Interface(self.config)
+            self.ns3.start_simulation()
         
-        # Start fresh ns-3 simulation
-        self.ns3 = NS3Interface(self.config)
-        self.ns3.start_simulation()
-        
-        # Get initial state
-        time.sleep(0.1)  # Wait for first KPM report
-        e2_msg = self.ns3.receive_kpm_report(wait_for_new=False)
+        # Wait for first KPM report to establish state
+        if self.config.verbose:
+            print("Waiting for initial KPM report...")
+        try:
+            # Longer timeout for initialization (30s)
+            e2_msg = self.ns3.receive_kpm_report(max_wait_s=30.0, wait_for_new=True)
+        except Exception as e:
+            print(f"Failed to initialize environment: {e}")
+            self.close()
+            raise e
         state = self._extract_state(e2_msg)
+        
+        reset_duration = time.time() - start_reset
+        reset_duration = time.time() - start_reset
+        if self.config.verbose:
+            print(f"Environment reset complete in {reset_duration:.2f}s")
         
         self.current_step = 0
         self.episode_metrics = []
@@ -758,7 +874,9 @@ class ORANns3Env(gym.Env):
         # However, step() calls reward_engine.compute directly now.
         # This wrapper calls the engine and also ensures table printing as requested.
         
-        self._print_metrics_table(e2_msg)
+        if self.config.verbose:
+            # self._print_metrics_table(e2_msg) 
+            pass
         
         return self.reward_engine.compute(e2_msg, current_action, self.prev_action, self.action_space)
 

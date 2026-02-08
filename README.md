@@ -29,7 +29,7 @@ python3 -m venv .venv
 source .venv/bin/activate
 
 # Install dependencies
-pip install numpy torch gymnasium kafka-python
+pip install -r requirements.txt
 ```
 
 ### 3. Build ns-3 & Link Scenario
@@ -40,7 +40,8 @@ sudo apt-get install librdkafka-dev
 
 # 2. Build ns-3
 cd ns-3-allinone/ns-3.46.1
-./ns3 configure --enable-examples --enable-tests
+
+./ns3 configure -d optimized --enable-examples --enable-tests
 ./ns3 build
 
 # 3. Link the Radio-Cortex scenario into ns-3 scratch
@@ -51,8 +52,14 @@ cd ../../..
 
 ### 4. Running the Training
 
-#### A. Start Kafka
-Kafka and Zookeeper must be running for the E2 interface to function. The script now includes a readiness check.
+#### A. Bootstrap & Start Kafka
+Kafka and Zookeeper must be running for the E2 interface to function. If this is a fresh setup, use the bootstrap script:
+```bash
+bash run_kafka_native.sh
+```
+*Note: This will download Kafka binaries, install `librdkafka-dev`, and start the services.*
+
+For subsequent starts, you can use:
 ```bash
 ./start_kafka.sh
 ```
@@ -66,8 +73,8 @@ source .venv/bin/activate
 1. **Train Model**: `python3 radio_cortex_complete.py --mode train --scenario all`
 2. **Clean Workspace**: `bash scripts/cleanup.sh`
 
-# Run Training (on all 12 scenarios)
-python3 radio_cortex_complete.py --mode train --scenario all --total-timesteps 50000
+# Run Training (Fast Parallel Mode)
+python3 radio_cortex_complete.py --mode train --scenario all --n-envs 4 --total-timesteps 50000
 ```
 
 ## 🛠️ Utilities
@@ -75,9 +82,7 @@ python3 radio_cortex_complete.py --mode train --scenario all --total-timesteps 5
 The `scripts/` directory contains multi-language utilities to assist with development:
 
 - **Cleanup**: `bash scripts/cleanup.sh` - Removes logs, residuals, and caches.
-- **System Monitor (Rust)**: `rustc scripts/sys_monitor.rs -o scripts/sys_monitor && ./scripts/sys_monitor`
 - **Log Analyzer (Go)**: `go run scripts/log_analyzer.go`
-- **Web Compat (JS)**: `node scripts/web_compat.js`
 
 ---
 
@@ -92,17 +97,18 @@ You can customize the training hyperparameters and environment settings via comm
 | `--num-ues` | 20 | Number of User Equipments (UEs). |
 | `--num-cells` | 3 | Number of cells (eNodeBs). |
 | `--scenario` | `flash_crowd` | ns-3 Scenario (12 available). |
-| `--sim-time` | 10.0 | Simulation duration per episode (seconds). |
+| `--sim-time` | 300.0 | Simulation duration per episode (seconds). |
 | `--kpm-interval` | 100 | KPM Reporting Interval in ms. |
 | `--system-bandwidth-mhz` | 10.0 | System Bandwidth (5.0, 10.0, 20.0). |
-| `--total-timesteps` | 10000 | Total training timesteps. |
+| `--total-timesteps` | 100000 | Total training timesteps. |
 | `--learning-rate` | 3e-4 | Learning rate for PPO. |
-| `--batch-size` | 64 | Batch size for optimization. |
+| `--batch-size` | 256 | Batch size for optimization. |
 | `--gamma` | 0.99 | Discount factor. |
 | `--model-path` | `models/radio_cortex.pt` | Path to save/load model. |
 | `--config` | None | Path to JSON config file to override args. |
 | `--device` | `cpu/cuda` | Compute device. |
 | `--hidden-dim` | 256 | Hidden dimension for actor/critic networks. |
+| `--n-envs` | 4 | Number of parallel implementations to run for training/eval. |
 
 ### 🌍 Simulation Scenarios
 
@@ -192,10 +198,38 @@ python3 radio_cortex_complete.py --mode train --learning-rate 0.0001 --gamma 0.9
 python3 radio_cortex_complete.py --mode train --config experiments/exp1_config.json
 ```
 
-### 📊 Evaluation & Benchmarking
+#### ⚡ Performance Tuning (Recommended)
+
+To significantly speed up training (from >50s/step to <0.3s/step):
+
+1. **Compile Optimized Build** (Critical for parallel mode):
+   ```bash
+   cd ns-allinone-3.46.1/ns-3.46.1
+   ./ns3 configure -d optimized --enable-examples --enable-tests --disable-python
+   ./ns3 build -j$(nproc)
+   ```
+   *Radio-Cortex will automatically detect and prioritize this binary.*
+
+2. **Run in Parallel**:
+   Use `--n-envs 4` (or more, depending on CPU cores) to train multiple simulations simultaneously.
+   ```bash
+   python radio_cortex_complete.py --mode train --scenario all --n-envs 4
+   ```
+
+3. **Persistent Simulation**:
+   The environment automatically keeps Kafka connections alive across episodes to prevent rebalancing delays.
+
+---
+
+## 📊 Evaluation & Benchmarking
 Evaluate a trained model against a static baseline (no AI control).
+
 ```bash
-python3 radio_cortex_complete.py --mode eval --model-path models/radio_cortex.pt
+# Run full evaluation suite (all 12 scenarios) in parallel (Recommended)
+python3 radio_cortex_complete.py --mode eval --n-envs 4
+
+# Sequential Evaluation (slower)
+python3 radio_cortex_complete.py --mode eval --n-envs 1
 ```
 
 **Outputs (saved in `results/`):**
@@ -424,11 +458,32 @@ graph LR
 -   Check `ns3.log` (created in project root) to see if the simulation crashed.
 -   Ensure `oran-congestion-scenario` compiled successfully.
 
-### Monitoring
-Watch training progress in real-time:
-```bash
-tail -f action_logs.jsonl
-```
+### 🖥️ Convergence Dashboard (Rich UI)
+
+Radio-Cortex features a high-fidelity convergence dashboard that replaces standard text logs with mission-critical training metrics.
+
+#### Key Metrics to Observe:
+- **Reward**: The primary optimization goal. Should show an **Upward Trend (↗)** over the first 50-100 updates.
+- **Explained Variance (Expl Var)**: Measures the Accuracy of the RIC's internal reward predictions.
+    - **Value range**: `1.0` (Perfect), `0.0` (Guessing Mean), `< 0.0` (Still exploring/Worse than mean).
+    - **Coloring**: `Green` (>0.8) indicates a "Converged" critic; `Red` (<0.4 or negative) is normal for the first ~50 updates.
+- **Entropy**: Measures the agent's confidence. Should gradually decrease as the agent becomes more specialized at handling specific congestion scenarios.
+- **Activity Heartbeat**: A pulsing `●` light showing real-time data influx from ns-3.
+
+---
+
+## 📈 Training Dashboard Guide
+
+| Metric | Target Trend | What it means |
+|:---|:---:|:---|
+| **Reward** | ↗ Growing | The agent is successfully reducing congestion and improving user QoS. |
+| **Trend** | ↗ (Green) | Recent updates have improved performance by 5% or more. |
+| **Expl Var** | → 0.9 | High values mean the agent correctly predicts the "cost" of its actions. |
+| **Entropy** | ↘ Decreasing | The agent is narrowing down its optimal control strategy (good). |
+| **Policy Loss** | ⇄ Oscillating | Normal in PPO; indicates the agent is exploring different tradeoffs. |
+
+> [!TIP]
+> **When to Stop?** Stop training when **Explained Variance > 0.8** and the **Reward Trend** stabilizes (→) for 10 consecutive updates. This indicates a "Converged" model.
 
 ---
 

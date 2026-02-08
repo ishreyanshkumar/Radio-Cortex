@@ -28,6 +28,7 @@ from tqdm import tqdm
 from pathlib import Path
 import seaborn as sns
 import os
+import time
 
 
 @dataclass
@@ -50,10 +51,12 @@ class EvaluationMetrics:
     avg_sinr: float # dB
     avg_rsrp: float # dBm
     avg_handover_count: float # Average handovers per UE per episode
+    avg_inference_time: float # Average time to compute action (ms)
 
     # Advanced Efficiency Metrics
     spectral_efficiency: float # bits/sec/Hz
     energy_efficiency: float # Mbps/Watt
+    model_params: int # Number of trainable parameters
     
     # Phase 2 Metrics
     handover_success_rate: float # ratio
@@ -68,6 +71,7 @@ class EvaluationMetrics:
     buffer_score: float
     phy_score: float
     ric_score: float  # NEW: E2 Interface Performance
+    architecture_score: float # NEW: Model Efficiency (Size + Speed)
 
 
 class BaselineController:
@@ -104,12 +108,15 @@ class EvaluationRunner:
         self,
         controller,
         env,
-        controller_name: str
+        controller_name: str,
+        progress_queue = None,
+        task_id = None
     ) -> EvaluationMetrics:
         """
         Run online evaluation episode with real ns-3 environment
         """
-        print(f"\nEvaluating {controller_name}...")
+        if not progress_queue:
+            print(f"\nEvaluating {controller_name}...")
         
         # Track metrics
         throughputs = []
@@ -128,7 +135,14 @@ class EvaluationRunner:
         # Handover tracking
         prev_cells = {}
         total_handovers = 0
+        total_handovers = 0
         actions_history = []
+        inference_times = []
+        
+        # Get model parameters if available
+        model_params = 0
+        if hasattr(controller, 'get_model_params'):
+            model_params = controller.get_model_params()
         
         # Reset environment
         state, info = env.reset()
@@ -137,24 +151,38 @@ class EvaluationRunner:
         
         # Calculate expected steps for progress bar
         total_steps = int(env.config.sim_time * 1000 / env.config.kpm_interval_ms)
-        pbar = tqdm(total=total_steps, desc=f"Eval {controller_name}", unit="step")
         
+        # UI Management
+        pbar = None
+        if progress_queue:
+            # Parallel mode: notify main process of new task
+            progress_queue.put(('start', task_id, total_steps, f"Eval {controller_name}"))
+        else:
+            pbar = tqdm(total=total_steps, desc=f"Eval {controller_name}", unit="step")
+        
+        step_i = 0
         while not (terminated or truncated):
+            step_i += 1
             # Controller makes decision
+            t0 = time.time()
             if hasattr(controller, 'get_rl_action'):
                 action_arr = controller.get_rl_action(state)
             else:
                 state_dict = self._parse_state(state, env.config)
                 action = controller.get_action(state_dict)
                 action_arr = self._dict_to_action(action, env.action_space)
+            t1 = time.time()
+            inference_times.append((t1 - t0) * 1000.0) # ms
             
             # Execute step
             next_state, reward, terminated, truncated, info = env.step(action_arr)
             actions_history.append(action_arr)
             
             # Periodic logging of RIC decisions (actions) during evaluation
-            step_count = pbar.n
-            if controller_name == "Radio-Cortex" and step_count % 10 == 0:
+            
+            # Periodic logging of RIC decisions (actions) during evaluation
+            step_count = step_i # step_i is current loop index
+            if not progress_queue and controller_name == "Radio-Cortex" and step_count % 10 == 0:
                 # Format detailed action summary for display
                 num_cells = (len(action_arr) - env.config.num_ues) // 7
                 if num_cells > 0:
@@ -163,8 +191,6 @@ class EvaluationRunner:
                     avg_ue_prio = np.mean(ue_priorities) if len(ue_priorities) > 0 else 0
                     print(f"\n  Step {step_count:>3} │ 🤖 RIC Decision (Cell 0): Power={c0_actions[0]:.1f}dBm │ Scheduler={int(c0_actions[1])} │ Avg UE Prio={avg_ue_prio:.2f}")
             
-            pbar.update(1)
-            pbar.set_postfix({'reward': f'{reward:.2f}'})
             
             # Track Handovers
             if 'e2_metrics' in info:
@@ -198,6 +224,37 @@ class EvaluationRunner:
             total_power_w_accum += step_power_w
             step_count_power += 1
             
+            # Send progress and metrics to main process
+            if progress_queue:
+                metrics_payload = {
+                    'reward': reward,
+                    'tput': step_tput,
+                    'delay': step_delay,
+                    'loss': step_loss,
+                    'power': step_power_w,
+                    'sinr': step_sinr,
+                    'rsrp': step_rsrp,
+                    'queue': avg_queue,
+                    'rb': avg_rb
+                }
+                
+                # Add detailed UE metrics every 10 steps to reduce IPC load
+                if step_i % 10 == 0:
+                     metrics_payload['ue_metrics'] = {
+                         ue_id: {
+                             'tput': m['throughput'],
+                             'delay': m['delay'],
+                             'loss': m['packet_loss'],
+                             'sinr': m['sinr'],
+                             'cell': m.get('serving_cell', -1)
+                         } for ue_id, m in e2_msg.ue_metrics.items()
+                     }
+
+                progress_queue.put(('update', task_id, 1, metrics_payload))
+            elif pbar:
+                pbar.update(1)
+                pbar.set_postfix({'reward': f'{reward:.2f}', 'tput': f'{step_tput:.1f}'})
+            
             throughputs.append(step_tput)
             delays.append(step_delay)
             losses.append(step_loss)
@@ -215,7 +272,12 @@ class EvaluationRunner:
             
             state = next_state
         
-        pbar.close()
+        if pbar:
+            pbar.update(total_steps - pbar.n) # Ensure full completion
+            pbar.close()
+        
+        if progress_queue:
+            progress_queue.put(('complete', task_id))
         
         # Calculate aggregate metrics
         
@@ -234,9 +296,10 @@ class EvaluationRunner:
 
         # Calculate aggregate metrics
         avg_power_w = total_power_w_accum / step_count_power if step_count_power > 0 else 0.001
+        avg_inference = np.mean(inference_times) if inference_times else 0.0
         
         metrics = self._calculate_metrics(throughputs, delays, losses, queue_lengths, rb_utils, per_ue_stats, sinrs, rsrps, total_handovers,
-                                          ho_attempts, ho_successes, e2_latency, ric_overhead, env.config.system_bandwidth_mhz, control_stability, avg_power_w)
+                                          ho_attempts, ho_successes, e2_loop_latency, ric_overhead, env.config.system_bandwidth_mhz, control_stability, avg_power_w, avg_inference, model_params)
         
         # Print formatted results
         print(f"\n  {'─'*50}")
@@ -255,6 +318,8 @@ class EvaluationRunner:
         print(f"  │ {'Handover Success Rate':<25} │ {metrics.handover_success_rate*100:>16.1f}% │")
         print(f"  │ {'E2 Loop Latency':<25} │ {metrics.e2_loop_latency:>17.2f} ms │")
         print(f"  │ {'RIC Msg Overhead':<25} │ {metrics.ric_message_overhead:>15.1f} msg/s │")
+        print(f"  │ {'Inference Time':<25} │ {metrics.avg_inference_time:>17.3f} ms │")
+        print(f"  │ {'Model Params':<25} │ {metrics.model_params:>18,} │")
         print(f"  │ {'Control Stability':<25} │ {metrics.control_stability:>17.1f}% │")
         print(f"  │ {'Recovery Time':<25} │ {metrics.recovery_time:>17.2f} s │")
         print(f"  {'─'*50}")
@@ -393,7 +458,9 @@ class EvaluationRunner:
         ric_message_overhead: float = 0.0,
         system_bandwidth_mhz: float = 10.0,
         control_stability: float = 0.0,
-        total_power_watts: float = 0.1 # Avoid div by zero
+        total_power_watts: float = 0.1, # Avoid div by zero
+        avg_inference_time: float = 0.0,
+        model_params: int = 0
     ) -> EvaluationMetrics:
         """Compute evaluation metrics including advanced congestion stats"""
         
@@ -542,6 +609,15 @@ class EvaluationRunner:
         norm_msg_overhead = max(0.0, 1.0 - (ric_message_overhead / 100.0))
         norm_stability = control_stability / 100.0
         ric_score = (0.4 * norm_e2_latency + 0.3 * norm_msg_overhead + 0.3 * norm_stability) * 100        
+        
+        # 7. Architecture Score: Efficiency of the AI Model itself
+        # Params: 0 params (baseline) = 1.0. 1M params = 0.0.
+        norm_params = max(0.0, 1.0 - (model_params / 1000000.0))
+        # Infer: 0ms = 1.0. 10ms = 0.0.
+        norm_infer = max(0.0, 1.0 - (avg_inference_time / 10.0))
+        
+        architecture_score = (0.5 * norm_params + 0.5 * norm_infer) * 100
+        
         return EvaluationMetrics(
             avg_throughput=avg_throughput,
             avg_delay=avg_delay,
@@ -563,18 +639,21 @@ class EvaluationRunner:
             
             spectral_efficiency=spectral_efficiency,
             energy_efficiency=energy_efficiency,
+            model_params=model_params,
             
             handover_success_rate=handover_success_rate,
             e2_loop_latency=e2_loop_latency,
             ric_message_overhead=ric_message_overhead,
             control_stability=control_stability,
+            avg_inference_time=avg_inference_time,
             
             qos_score=qos_score,
             reliability_score=reliability_score,
             resource_score=resource_score,
             buffer_score=buffer_score,
             phy_score=phy_score,
-            ric_score=ric_score
+            ric_score=ric_score,
+            architecture_score=architecture_score
         )
     
     def _calculate_recovery_time(self, losses: List[float]) -> float:
@@ -733,8 +812,8 @@ class VisualizationSuite:
         scenario_name: str,
         save_path: str = None
     ):
-        """Generate Radar Chart for Grouped Metrics (6 dimensions)"""
-        labels = ['QoS', 'Reliability', 'Resource', 'Buffer', 'PHY', 'RIC']
+        """Generate Radar Chart for Grouped Metrics (7 dimensions)"""
+        labels = ['QoS', 'Reliability', 'Resource', 'Buffer', 'PHY', 'RIC', 'Arch']
         num_vars = len(labels)
         
         # Compute angle for each axis
@@ -755,7 +834,8 @@ class VisualizationSuite:
                 metrics.resource_score,
                 metrics.buffer_score,
                 metrics.phy_score,
-                metrics.ric_score
+                metrics.ric_score,
+                metrics.architecture_score
             ]
             values += values[:1]
             
@@ -794,8 +874,8 @@ class VisualizationSuite:
         latex += "\\caption{Radio-Cortex Performance Comparison}\n"
         latex += "\\begin{tabular}{|l|c|c|c|c|c|c|c|c|c|c|}\n"
         latex += "\\hline\n"
-        latex += "\\textbf{Scenario} & \\textbf{Controller} & \\textbf{T-put} & \\textbf{Loss} & \\textbf{Satisf} & \\textbf{SpecEff} & \\textbf{EngEff} & \\textbf{HO Succ} & \\textbf{E2 Lat} & \\textbf{Msgs/s} & \\textbf{HO/UE} \\\\\n"
-        latex += "& & (Mbps) & (\\%) & (\\%) & (b/s/Hz) & (M/W) & (\\%) & (ms) & (Hz) & (Count) \\\\\n"
+        latex += "\\textbf{Scenario} & \\textbf{Controller} & \\textbf{T-put} & \\textbf{Loss} & \\textbf{Satisf} & \\textbf{SpecEff} & \\textbf{EngEff} & \\textbf{HO Succ} & \\textbf{E2 Lat} & \\textbf{Msgs/s} & \\textbf{Infer (ms)} \\\\\n"
+        latex += "& & (Mbps) & (\\%) & (\\%) & (b/s/Hz) & (M/W) & (\\%) & (ms) & (Hz) & (ms) \\\\\n"
         latex += "\\hline\n"
         
         for scenario, controllers in results.items():
@@ -809,10 +889,10 @@ class VisualizationSuite:
                 
                 latex += f"& {controller} & {metrics.avg_throughput:.1f} & "
                 latex += f"{metrics.avg_packet_loss*100:.2f} & {metrics.satisfied_user_ratio*100:.1f} & "
-                latex += f"{metrics.spectral_efficiency:.2f} & {metrics.energy_efficiency:.1f} & "
+                latex += f"{metrics.spectral_efficiency:.2f} & {metrics.energy_efficiency:.2f} & "
                 latex += f"{metrics.handover_success_rate*100:.1f} & "
                 latex += f"{metrics.e2_loop_latency:.2f} & {metrics.ric_message_overhead:.1f} & "
-                latex += f"{metrics.avg_handover_count:.1f} \\\\\n"
+                latex += f"{metrics.avg_inference_time:.1f} ({metrics.model_params/1000:.0f}k) \\\\\n"
             latex += "\\hline\n"
         
         latex += "\\end{tabular}\n"
