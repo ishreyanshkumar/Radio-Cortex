@@ -571,27 +571,30 @@ def evaluate_single_scenario(
         env.close()
 
     # Generate visualizations (Worker can do this efficiently)
+    results_dir = Path("results")
+    results_dir.mkdir(parents=True, exist_ok=True)
+    
     VisualizationSuite.plot_comparison(
         results,
         scenario_name,
-        save_path=f'results/{scenario_name}_comparison.png'
+        save_path=str(results_dir / f"{scenario_name}_comparison.png")
     )
     VisualizationSuite.plot_radar(
         results,
         scenario_name,
-        save_path=f'results/{scenario_name}_radar.png'
+        save_path=str(results_dir / f"{scenario_name}_radar.png")
     )
     
     # Generate LaTeX Table
     VisualizationSuite.generate_latex_table(
         {scenario_name: results},
-        save_path=f'results/{scenario_name}_metrics.tex'
+        save_path=str(results_dir / f"{scenario_name}_metrics.tex")
     )
 
     # Generate CSV Report
     VisualizationSuite.generate_csv(
         {scenario_name: results},
-        save_path=f'results/{scenario_name}_metrics.csv'
+        save_path=str(results_dir / f"{scenario_name}_metrics.csv")
     )
     
     return scenario_name, results
@@ -635,7 +638,7 @@ def main():
     parser.add_argument('--vf-coef', type=float, default=0.5, help='Value function coefficient')
     parser.add_argument('--ent-coef', type=float, default=0.01, help='Entropy coefficient')
     parser.add_argument('--max-grad-norm', type=float, default=0.5, help='Max gradient norm')
-    parser.add_argument('--rollout-steps', type=int, default=256, help='Steps per rollout')
+    parser.add_argument('--rollout-steps', type=int, default=128, help='Steps per rollout')
     parser.add_argument('--log-interval', type=int, default=5, help='Logging interval (updates)')
     parser.add_argument('--device', type=str, default='cuda' if torch.cuda.is_available() else 'cpu', help='Device (cpu/cuda)')
     parser.add_argument('--config', type=str, default=None, help='Path to JSON config file to override arguments')
@@ -644,7 +647,6 @@ def main():
     
     # Parallel training configs
     parser.add_argument('--n-envs', type=int, default=4, help='Number of parallel environments (requires stable-baselines3)')
-    parser.add_argument('--intensive', action='store_true', help='Enable intensive mode (50 UEs, 5 cells, larger networks)')
     parser.add_argument('--checkpoint-interval', type=int, default=5, help='Save checkpoint every N updates (0 to disable)')
 
     args = parser.parse_args()
@@ -672,20 +674,6 @@ def main():
         scenario=args.scenario,
         system_bandwidth_mhz=args.system_bandwidth_mhz
     )
-    
-    # Apply intensive mode overrides
-    if args.intensive:
-        print("\n🚀 INTENSIVE MODE ENABLED")
-        args.num_ues = 50
-        args.num_cells = 5
-        args.hidden_dim = 512
-        args.batch_size = 256
-        args.n_envs = max(args.n_envs, 8)  # Default to 8 parallel envs
-        args.rollout_steps = 256       # Smaller steps per env (8 * 256 = 2048 total)
-        config.num_ues = 50
-        config.num_cells = 5
-        print(f"   → 50 UEs, 5 Cells, hidden_dim=512, batch_size=256")
-        print(f"   → {args.n_envs} Parallel Envs x 256 steps = {args.n_envs*256} steps per update")
     
     # Execute mode
     if args.mode == 'train':

@@ -25,9 +25,9 @@ python3 radio_cortex_complete.py --mode train
 # Train using 4 parallel environments simultaneously
 python3 radio_cortex_complete.py --mode train --n-envs 4 --total-timesteps 50000
 
-# --- Intensive Training (Large Scale) ---
+# --- High-Scale Training ---
 # High device counts, larger networks, and parallel workers
-python3 radio_cortex_complete.py --mode train --intensive --n-envs 8
+python3 radio_cortex_complete.py --mode train --num-ues 50 --num-cells 5 --n-envs 8
 
 # --- Custom Topology & Scenario ---
 # Train on a larger network with a specific scenario and duration
@@ -97,17 +97,17 @@ python3 quick_train.py
 # ============================================================================
 
 # Interpret Policy (Saliency Map)
-# Requires a model and a log file (action_logs.jsonl)
+# Requires a model and a log file (telemetry/action_logs.jsonl)
 python3 interpret_policy.py --checkpoint models/radio_cortex.pt --action-index 0 --top-k 10
 
-# Plot Training Progress (from action_logs.jsonl)
+# Plot Training Progress (from telemetry/action_logs.jsonl)
 python3 -c "import json; import matplotlib.pyplot as plt; \
-data = [json.loads(l) for l in open('action_logs.jsonl')]; \
+data = [json.loads(l) for l in open('telemetry/action_logs.jsonl')]; \
 plt.plot([d['reward'] for d in data]); plt.title('Training Reward'); \
-plt.savefig('training_curve.png'); print('Saved training_curve.png')"
+plt.savefig('telemetry/training_curve.png'); print('Saved telemetry/training_curve.png')"
 
 # Monitor Training Output
-tail -f action_logs.jsonl
+tail -f telemetry/action_logs.jsonl
 
 # ============================================================================
 # 6. NS-3 SIMULATION ONLY (Manual Testing)

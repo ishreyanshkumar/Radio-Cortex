@@ -25,6 +25,7 @@ kafka_*/
 simulation/
 models/
 results/
+telemetry/
 
 # IDE files
 .vscode/

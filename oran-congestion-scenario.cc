@@ -1243,7 +1243,7 @@ int main(int argc, char *argv[]) {
   // Global LTE defaults (must be set before helper creation)
   Config::SetDefault("ns3::LteHelper::UseIdealRrc", BooleanValue(true));
   Config::SetDefault("ns3::LteHelper::HandoverAlgorithm",
-                     StringValue("ns3::NoOpHandoverAlgorithm"));
+                     StringValue("ns3::A3RsrpHandoverAlgorithm"));
 
   // Create LTE/EPC helpers
   Ptr<LteHelper> lteHelper = CreateObject<LteHelper>();
@@ -1252,7 +1252,10 @@ int main(int argc, char *argv[]) {
 
   // Stabilize RRC: avoid UE manager asserts from rapid RRC churn
   lteHelper->SetAttribute("UseIdealRrc", BooleanValue(true));
-  lteHelper->SetHandoverAlgorithmType("ns3::NoOpHandoverAlgorithm");
+  lteHelper->SetHandoverAlgorithmType("ns3::A3RsrpHandoverAlgorithm");
+  lteHelper->SetHandoverAlgorithmAttribute("Hysteresis", DoubleValue(3.0));
+  lteHelper->SetHandoverAlgorithmAttribute("TimeToTrigger",
+                                           TimeValue(MilliSeconds(256)));
 
   // Set Scheduler
   lteHelper->SetSchedulerType("ns3::PfFfMacScheduler"); // Proportional Fair

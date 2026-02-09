@@ -25,13 +25,14 @@ rm -rf /tmp/kafka-logs /tmp/zookeeper
 
 # 3. Start Zookeeper
 echo "Starting Zookeeper..."
-bin/zookeeper-server-start.sh config/zookeeper.properties > zookeeper.log 2>&1 &
+mkdir -p ../telemetry
+bin/zookeeper-server-start.sh config/zookeeper.properties > ../telemetry/zookeeper.log 2>&1 &
 ZOOKEEPER_PID=$!
 sleep 5
 
 # 4. Start Kafka Broker
 echo "Starting Kafka Broker..."
-bin/kafka-server-start.sh config/server.properties > kafka.log 2>&1 &
+bin/kafka-server-start.sh config/server.properties > ../telemetry/kafka.log 2>&1 &
 KAFKA_PID=$!
 sleep 5
 

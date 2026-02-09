@@ -48,14 +48,15 @@ class ActorCritic(nn.Module):
         action_mean, _ = self.forward(state)
         
         if deterministic:
-            return action_mean
+            return action_mean, None, None
         
         action_std = torch.exp(self.actor_logstd)
         dist = torch.distributions.Normal(action_mean, action_std)
         action = dist.sample()
         log_prob = dist.log_prob(action).sum(dim=-1)
+        entropy = dist.entropy().sum(dim=-1)
         
-        return action, log_prob
+        return action, log_prob, entropy
     
     def evaluate_actions(self, state, action):
         """Evaluate log probability and entropy of actions"""

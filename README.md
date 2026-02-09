@@ -166,7 +166,7 @@ The `RewardEngine` is **scenario-agnostic** — it only reads metrics (throughpu
 |:---|:---|
 | Long training time | Increase `--total-timesteps` to 50,000-100,000 |
 | Scenario bias | Already mitigated — reward is normalized and clipped per-component |
-| Debugging | Check `action_logs.jsonl` to trace which scenario produced bad rewards |
+| Debugging | Check `telemetry/action_logs.jsonl` to trace which scenario produced bad rewards |
 | Reward variance | Clipping bounds ([-10, +2]) prevent any scenario from dominating |
 
 
@@ -490,12 +490,12 @@ Radio-Cortex features a high-fidelity convergence dashboard that replaces standa
 ## 📊 Monitoring & Analysis
 
 ### 1. Plot Training Metrics
-You can plot the training progress (rewards, throughput) using this Python script. It reads from `action_logs.jsonl`.
+You can plot the training progress (rewards, throughput) using this Python script. It reads from `telemetry/action_logs.jsonl`.
 ```python
 import json
 import matplotlib.pyplot as plt
 
-with open('action_logs.jsonl') as f:
+with open('telemetry/action_logs.jsonl') as f:
     # Read line by line
     data = [json.loads(line) for line in f]
 
@@ -515,7 +515,7 @@ print("Saved training_plot.png")
 Quickly check the average metrics from the logs:
 ```bash
 python3 -c "import json; import numpy as np; 
-data = [json.loads(l) for l in open('action_logs.jsonl')]; 
+data = [json.loads(l) for l in open('telemetry/action_logs.jsonl')]; 
 print(f'Mean Reward: {np.mean([d[\"reward\"] for d in data]):.4f}')"
 ```
 

@@ -7,6 +7,7 @@ Supports PPO, SAC, TD3 for RAN congestion control
 import torch
 import torch.nn as nn
 import numpy as np
+import os
 from typing import Dict, List, Optional, Tuple
 import gymnasium as gym
 import time
@@ -117,7 +118,9 @@ class PPOTrainer:
         
         # Logging
         self.action_history = []
-        self.log_file = "action_logs.jsonl"
+        self.telemetry_dir = "telemetry"
+        Path(self.telemetry_dir).mkdir(exist_ok=True)
+        self.log_file = os.path.join(self.telemetry_dir, "action_logs.jsonl")
         
         # Checkpointing
         self.checkpoint_dir = checkpoint_dir
@@ -163,7 +166,7 @@ class PPOTrainer:
             state_tensor = torch.FloatTensor(state).unsqueeze(0).to(self.device)
             
             with torch.no_grad():
-                action, log_prob = self.policy.get_action(state_tensor)
+                action, log_prob, entropy = self.policy.get_action(state_tensor)
                 _, value = self.policy(state_tensor)
             
             # Denormalize action to environment's action space
@@ -174,7 +177,7 @@ class PPOTrainer:
             
             # Live UI Callback
             if on_step:
-                on_step(info, reward)
+                on_step(info, reward, entropy=entropy.item() if entropy is not None else None)
             
             # Console Logging for User Verification
             if step_i % 10 == 0:
@@ -290,7 +293,7 @@ class PPOTrainer:
             
             with torch.no_grad():
                 # Get actions for all envs at once
-                actions, log_probs = self.policy.get_action(states_tensor)
+                actions, log_probs, entropy = self.policy.get_action(states_tensor)
                 _, values = self.policy(states_tensor)
             
             # Convert to numpy: (n_envs, action_dim)
@@ -304,7 +307,7 @@ class PPOTrainer:
             
             # Live UI Callback
             if on_step:
-                on_step(infos, rewards_arr)
+                on_step(infos, rewards_arr, entropy=entropy.mean().item() if entropy is not None else None)
             
             # Log progress occasionally
             if step_i % 10 == 0:
@@ -473,7 +476,7 @@ class PPOTrainer:
         live_display = None
 
         # Callback to update live metrics from env info
-        def on_step_callback(infos, rewards=None):
+        def on_step_callback(infos, rewards=None, entropy=None):
             # Debug: Print type and content of first info
             # if isinstance(infos, (list, tuple)) and len(infos) > 0:
             #    print(f"\n[DEBUG] Info type: {type(infos)}, Len: {len(infos)}")
@@ -515,6 +518,9 @@ class PPOTrainer:
                 current_stats['reward'] = avg_rew
                 current_stats['reward_var'] = var_rew
                 current_stats['steps'] = self.total_steps # Approximate live step count
+            
+            if entropy is not None:
+                current_stats['entropy'] = entropy
             # ---------------------------
 
             for env_i, info in enumerate(infos):
@@ -551,8 +557,9 @@ class PPOTrainer:
                         'ue_metrics': detailed_ue
                     }
             
-            # Background refresh is handled by Live(refresh_per_second=10).
-            # No manual update() here to prevent UI lag.
+            # Force refresh of the live display to ensure progress bars and tables update every timestep.
+            if live_display:
+                live_display.update(make_layout())
             pass
 
         # Stats display table (Updated for Convergence Metrics)
