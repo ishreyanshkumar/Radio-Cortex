@@ -100,7 +100,8 @@ def make_vec_env(
     # Create vectorized environment
     if use_subprocess and n_envs > 1:
         print(f"[VecEnv] Creating SubprocVecEnv with {n_envs} parallel environments")
-        vec_env = SubprocVecEnv(env_fns)
+        # Use 'spawn' to avoid CUDA initialization deadlocks in forked processes
+        vec_env = SubprocVecEnv(env_fns, start_method='spawn')
     else:
         print(f"[VecEnv] Creating DummyVecEnv with {n_envs} sequential environments")
         vec_env = DummyVecEnv(env_fns)

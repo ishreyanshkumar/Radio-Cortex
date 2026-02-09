@@ -45,6 +45,8 @@ class NS3Config:
     topic_suffix: str = ""
     # Verbosity control for CLI output
     verbose: bool = True
+    # Whether to use BDH model as policy
+    use_bdh: bool = False
 
 
 @dataclass

@@ -21,9 +21,9 @@ pip install numpy torch gymnasium kafka-python matplotlib
 # Trains PPO agent with default settings (3 cells, 20 UEs, flash_crowd scenario)
 python3 radio_cortex_complete.py --mode train
 
-# --- Parallel Training (Faster Convergence) ---
-# Train using 4 parallel environments simultaneously
-python3 radio_cortex_complete.py --mode train --n-envs 4 --total-timesteps 50000
+# --- Parallel Training (Fast Randomized Scenario Training) ---
+# Train using all 12 scenarios with 4 parallel environments for robustness
+python3 radio_cortex_complete.py --mode train --scenario all --n-envs 4 --total-timesteps 50000
 
 # --- High-Scale Training ---
 # High device counts, larger networks, and parallel workers

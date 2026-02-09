@@ -1,17 +1,15 @@
 """
 Radio-Cortex: Complete Integration
-Self-Healing O-RAN xApp with Hebbian Learning + Reinforcement Learning
+RL-based Self-Healing O-RAN xApp
 
 This file integrates all components:
 1. ns-3 O-RAN environment (E2 interface)
-2. Pathway Hebbian trust graph
-3. RL training pipeline (PPO)
-4. Congestion scenarios
-5. Evaluation suite
+2. RL training pipeline (PPO / BDH)
+3. Congestion scenarios
+4. Evaluation suite
 
 Usage:
-    python radio_cortex_complete.py --mode train
-    python radio_cortex_complete.py --mode eval
+    python radio_cortex_complete.py --mode train --scenario all
     python radio_cortex_complete.py --mode eval
 """
 
@@ -21,6 +19,7 @@ import torch
 from pathlib import Path
 import json
 import time
+import os
 from typing import Dict, List, Optional, Tuple
 from concurrent.futures import ProcessPoolExecutor, as_completed
 import copy
@@ -52,13 +51,12 @@ from evaluation_baseline import (
 
 
 # ============================================================================
-# Radio-Cortex Agent (Hebbian + RL Integration)
+# Radio-Cortex Agent (RL Integration)
 # ============================================================================
 
 class RadioCortexAgent:
     """
-    Radio-Cortex agent:
-    - System 2 (RL): Strategic long-term optimization
+    Radio-Cortex agent coordinating RL policies for RAN optimization.
     """
     
     def __init__(
@@ -70,7 +68,7 @@ class RadioCortexAgent:
         self.num_ues = num_ues
         self.num_cells = num_cells
         
-        # System 2: RL policy
+        # RL policy
         self.policy = policy_model
         
         # Metrics tracking
@@ -83,10 +81,10 @@ class RadioCortexAgent:
     
     def get_rl_action(self, base_state: np.ndarray) -> np.ndarray:
         """
-        System 2: Strategic RL decision
+        Inference section: Strategic RL decision
         """
         if self.policy is None:
-            raise RuntimeError("RL Policy not loaded! 'Everything Real' mode requires a trained model.")
+            raise RuntimeError("RL Policy not loaded!")
         
         # RL inference directly on base state
         state_tensor = torch.FloatTensor(base_state).unsqueeze(0)
@@ -126,7 +124,7 @@ def train_radio_cortex(
     max_grad_norm: float = 0.5,
     rollout_steps: int = 2048,
     log_interval: int = 5,
-    device: str = 'cuda' if torch.cuda.is_available() else 'cpu',
+    device: Optional[str] = None,
     checkpoint_interval: int = 5,
     n_envs: int = 1
 ):
@@ -141,7 +139,7 @@ def train_radio_cortex(
     """
     print("="*60)
     print("TRAINING RADIO-CORTEX")
-    print(f"LR: {lr}, Gamma: {gamma}, Batch: {batch_size}, Device: {device}")
+    print(f"LR: {lr}, Gamma: {gamma}, Batch: {batch_size}")
     if n_envs > 1:
         print(f"PARALLEL ENVS: {n_envs}")
     print("="*60)
@@ -158,12 +156,18 @@ def train_radio_cortex(
             is_vec_env = False
         else:
             print(f"\n🚀 Creating {n_envs} parallel environments with VecNormalize...")
+            # IMPORTANT: Create parallel envs BEFORE initializing CUDA to avoid fork issues
             env = make_vec_env(config, n_envs=n_envs, normalize_obs=True, normalize_reward=True)
             is_vec_env = True
     else:
         env = create_oran_env(config)
         is_vec_env = False
-  #  print("[debug] env created, about to build PPO trainer")
+
+    # Resolve device AFTER forking
+    if device is None:
+        device = 'cuda' if torch.cuda.is_available() else 'cpu'
+    print(f"Device: {device}")
+
     # Create trainer
     trainer = PPOTrainer(
         env=env,
@@ -176,7 +180,8 @@ def train_radio_cortex(
         ent_coef=ent_coef,
         max_grad_norm=max_grad_norm,
         device=device,
-        checkpoint_interval=checkpoint_interval
+        checkpoint_interval=checkpoint_interval,
+        use_bdh=config.use_bdh
     )
     
     # Train
@@ -528,6 +533,7 @@ def evaluate_single_scenario(
     # 2. Evaluate Radio-Cortex (PPO RL Agent)
     controller_label = f"Radio-Cortex ({scenario_name})"
     from neural_networks import ActorCritic
+    from bdh_policy import BDHPolicy
     
     try:
         checkpoint = torch.load(model_path, map_location='cpu')
@@ -541,18 +547,33 @@ def evaluate_single_scenario(
         expected_state_dim = config.num_ues * 12 + config.num_cells * 5
         expected_action_dim = config.num_cells * 7 + config.num_ues
         
-        if stored_action_dim != expected_action_dim or stored_state_dim != expected_state_dim:
-            detected_ues = stored_action_dim - (config.num_cells * 7)
-            # Force config to match model
-            config.num_ues = detected_ues
-            state_dim = stored_state_dim
-            action_dim = stored_action_dim
+        if config.use_bdh:
+            print(f"      [INFO] Initializing BDH Policy...")
+            policy = BDHPolicy(expected_state_dim, expected_action_dim, device='cpu').to('cpu')
+            
+            # Optional: try loading weights if they exist and model file is not default or exists
+            if os.path.exists(model_path):
+                try:
+                    checkpoint = torch.load(model_path, map_location='cpu')
+                    # Handle different checkpoint formats if needed
+                    if isinstance(checkpoint, dict):
+                        # If saved as full state dict
+                        policy.load_state_dict(checkpoint, strict=False)
+                    print(f"      [INFO] Loaded BDH weights from {model_path}")
+                except Exception as e:
+                    print(f"      [WARN] Could not load BDH weights from {model_path} (using random init): {e}")
         else:
             state_dim = expected_state_dim
             action_dim = expected_action_dim
-
-        policy = ActorCritic(state_dim, action_dim).to('cpu')
-        policy.load_state_dict(state_dict)
+            if stored_action_dim != expected_action_dim or stored_state_dim != expected_state_dim:
+                detected_ues = stored_action_dim - (config.num_cells * 7)
+                # Force config to match model
+                config.num_ues = detected_ues
+                state_dim = stored_state_dim
+                action_dim = stored_action_dim
+            
+            policy = ActorCritic(state_dim, action_dim).to('cpu')
+            policy.load_state_dict(state_dict)
         
     except Exception as e:
         print(f"      [ERROR] Could not load model {model_path}: {e}")
@@ -612,42 +633,54 @@ def evaluate_single_scenario(
 # ============================================================================
 
 def main():
-    parser = argparse.ArgumentParser(description='Radio-Cortex: Self-Healing O-RAN xApp')
-    parser.add_argument(
+    parser = argparse.ArgumentParser(
+        description='Radio-Cortex: RL-based RAN Optimization',
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter
+    )
+    
+    # --- Primary Group ---
+    primary = parser.add_argument_group('Core Operation')
+    primary.add_argument(
         '--mode',
         choices=['train', 'eval'],
         default='train',
         help='Operation mode'
     )
-    # Environment configs
-    parser.add_argument('--num-ues', type=int, default=20, help='Number of UEs')
-    parser.add_argument('--num-cells', type=int, default=3, help='Number of cells')
-    parser.add_argument('--scenario', type=str, default=None, help='ns-3 Scenario (flash_crowd, mobility_storm, etc.). If omitted in eval mode, runs all scenarios.')
-    parser.add_argument('--kpm-interval', type=int, default=100, help='KPM Reporting Interval (ms)')
-    
-    # Training configs
-    parser.add_argument('--total-timesteps', type=int, default=100000, help='Training timesteps')
-    parser.add_argument('--model-path', type=str, default='models/radio_cortex.pt', help='Model save path')
-    parser.add_argument('--learning-rate', type=float, default=3e-4, help='Learning rate')
-    parser.add_argument('--gamma', type=float, default=0.99, help='Discount factor')
-    parser.add_argument('--batch-size', type=int, default=256, help='Batch size for optimization')
-    # Advanced PPO configs
-    parser.add_argument('--hidden-dim', type=int, default=256, help='Hidden dimension for actor/critic networks')
-    parser.add_argument('--gae-lambda', type=float, default=0.95, help='GAE lambda')
-    parser.add_argument('--clip-epsilon', type=float, default=0.2, help='PPO clip epsilon')
-    parser.add_argument('--vf-coef', type=float, default=0.5, help='Value function coefficient')
-    parser.add_argument('--ent-coef', type=float, default=0.01, help='Entropy coefficient')
-    parser.add_argument('--max-grad-norm', type=float, default=0.5, help='Max gradient norm')
-    parser.add_argument('--rollout-steps', type=int, default=128, help='Steps per rollout')
-    parser.add_argument('--log-interval', type=int, default=5, help='Logging interval (updates)')
-    parser.add_argument('--device', type=str, default='cuda' if torch.cuda.is_available() else 'cpu', help='Device (cpu/cuda)')
-    parser.add_argument('--config', type=str, default=None, help='Path to JSON config file to override arguments')
-    parser.add_argument('--system-bandwidth-mhz', type=float, default=10.0, help='System Bandwidth in MHz (5.0, 10.0, 20.0)')
-    parser.add_argument('--sim-time', type=float, default=300.0, help='Simulation duration in seconds')
-    
-    # Parallel training configs
-    parser.add_argument('--n-envs', type=int, default=4, help='Number of parallel environments (requires stable-baselines3)')
-    parser.add_argument('--checkpoint-interval', type=int, default=5, help='Save checkpoint every N updates (0 to disable)')
+    primary.add_argument(
+        '--scenario', 
+        type=str, 
+        default='flash_crowd', 
+        help='ns-3 Scenario (e.g., flash_crowd, mobility_storm, traffic_burst). Use "all" to rotate through all scenarios.'
+    )
+    primary.add_argument('--total-timesteps', type=int, default=100000, help='Total training/eval steps')
+    primary.add_argument('--bdh', action='store_true', help='Use BDH model (Transformer-based policy)')
+    primary.add_argument('--n-envs', type=int, default=4, help='Number of parallel environments')
+    primary.add_argument('--model-path', type=str, default='models/radio_cortex.pt', help='Path to save/load model')
+    primary.add_argument('--device', type=str, default=None, help='Compute device (cpu/cuda)')
+    primary.add_argument('--config', type=str, default=None, help='JSON config file to override any argument')
+
+    # --- Infrastructure Group ---
+    infra = parser.add_argument_group('Network & Environment')
+    infra.add_argument('--num-ues', type=int, default=20, help='Number of UEs')
+    infra.add_argument('--num-cells', type=int, default=3, help='Number of cells')
+    infra.add_argument('--sim-time', type=float, default=60.0, help='Simulation duration per episode (seconds)')
+    infra.add_argument('--kpm-interval', type=int, default=100, help='KPM Reporting Interval (ms)')
+    infra.add_argument('--system-bandwidth-mhz', type=float, default=10.0, help='System Bandwidth (5.0, 10.0, 20.0)')
+
+    # --- Hyperparameters Group ---
+    hyper = parser.add_argument_group('Advanced PPO / RL Tuning')
+    hyper.add_argument('--learning-rate', type=float, default=3e-4, help='PPO Learning rate')
+    hyper.add_argument('--batch-size', type=int, default=256, help='Batch size for optimization updates')
+    hyper.add_argument('--rollout-steps', type=int, default=128, help='Steps per rollout trajectory')
+    hyper.add_argument('--gamma', type=float, default=0.99, help='Discount factor')
+    hyper.add_argument('--hidden-dim', type=int, default=256, help='Network hidden dimension')
+    hyper.add_argument('--gae-lambda', type=float, default=0.95, help='GAE normalization lambda')
+    hyper.add_argument('--clip-epsilon', type=float, default=0.2, help='PPO clipping bound')
+    hyper.add_argument('--vf-coef', type=float, default=0.5, help='Value function loss weight')
+    hyper.add_argument('--ent-coef', type=float, default=0.01, help='Entropy regularization weight')
+    hyper.add_argument('--max-grad-norm', type=float, default=0.5, help='Gradient clipping threshold')
+    hyper.add_argument('--checkpoint-interval', type=int, default=5, help='Checkpoint frequency (updates)')
+    hyper.add_argument('--log-interval', type=int, default=5, help='Console log frequency (updates)')
 
     args = parser.parse_args()
 
@@ -672,7 +705,8 @@ def main():
         kpm_interval_ms=args.kpm_interval,
         seed=42,
         scenario=args.scenario,
-        system_bandwidth_mhz=args.system_bandwidth_mhz
+        system_bandwidth_mhz=args.system_bandwidth_mhz,
+        use_bdh=args.bdh
     )
     
     # Execute mode

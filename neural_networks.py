@@ -22,13 +22,14 @@ class ActorCritic(nn.Module):
             nn.ReLU(),
         )
         
-        # Actor head (policy)
+        # Actor heads (policy)
         self.actor_mean = nn.Sequential(
             nn.Linear(hidden_dim, action_dim),
             nn.Tanh()  # Output normalized actions
         )
         
-        self.actor_logstd = nn.Parameter(torch.zeros(action_dim))
+        # State-dependent standard deviation for dynamic entropy
+        self.actor_logstd_head = nn.Linear(hidden_dim, action_dim)
         
         # Critic head (value function)
         self.critic = nn.Sequential(
@@ -40,17 +41,20 @@ class ActorCritic(nn.Module):
     def forward(self, state):
         features = self.feature_net(state)
         action_mean = self.actor_mean(features)
+        logstd = self.actor_logstd_head(features)
+        # Optional: clamp logstd to avoid extreme values
+        logstd = torch.clamp(logstd, -2, 1)
         value = self.critic(features)
-        return action_mean, value
+        return action_mean, logstd, value
     
     def get_action(self, state, deterministic=False):
         """Sample action from policy"""
-        action_mean, _ = self.forward(state)
+        action_mean, logstd, _ = self.forward(state)
         
         if deterministic:
             return action_mean, None, None
         
-        action_std = torch.exp(self.actor_logstd)
+        action_std = torch.exp(logstd)
         dist = torch.distributions.Normal(action_mean, action_std)
         action = dist.sample()
         log_prob = dist.log_prob(action).sum(dim=-1)
@@ -60,14 +64,11 @@ class ActorCritic(nn.Module):
     
     def evaluate_actions(self, state, action):
         """Evaluate log probability and entropy of actions"""
-        action_mean, value = self.forward(state)
-        action_std = torch.exp(self.actor_logstd)
+        action_mean, logstd, value = self.forward(state)
+        action_std = torch.exp(logstd)
         dist = torch.distributions.Normal(action_mean, action_std)
         
         log_prob = dist.log_prob(action).sum(dim=-1)
         entropy = dist.entropy().sum(dim=-1)
         
         return value, log_prob, entropy
-
-
-

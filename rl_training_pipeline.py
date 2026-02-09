@@ -29,7 +29,12 @@ from rich.columns import Columns
 # Neural Network Architectures
 # ============================================================================
 
+# ============================================================================
+# Neural Network Architectures
+# ============================================================================
+
 from neural_networks import ActorCritic
+from bdh_policy import BDHPolicy
 
 
 # ============================================================================
@@ -84,12 +89,16 @@ class PPOTrainer:
         vf_coef: float = 0.5,
         ent_coef: float = 0.01,
         max_grad_norm: float = 0.5,
-        device: str = 'cuda' if torch.cuda.is_available() else 'cpu',
+        device: Optional[str] = None,
         checkpoint_dir: str = 'models',
-        checkpoint_interval: int = 5
+        checkpoint_interval: int = 5,
+        use_bdh: bool = False
     ):
         self.env = env
-        self.device = device
+        if device is None:
+            self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
+        else:
+            self.device = device
         
         # Detect vectorized environment
         self.is_vec_env = hasattr(env, 'num_envs')
@@ -101,7 +110,12 @@ class PPOTrainer:
         action_dim = env.action_space.shape[0]
         
         # Initialize networks
-        self.policy = ActorCritic(state_dim, action_dim, hidden_dim).to(device)
+        if use_bdh:
+            print(f"[PPOTrainer] Initializing BDH Policy...")
+            self.policy = BDHPolicy(state_dim, action_dim, device=device).to(device)
+        else:
+            self.policy = ActorCritic(state_dim, action_dim, hidden_dim).to(device)
+            
         self.optimizer = torch.optim.Adam(self.policy.parameters(), lr=lr)
         
         # Hyperparameters
@@ -131,22 +145,26 @@ class PPOTrainer:
         with open(self.log_file, 'w') as f:
             pass # Clear file
             
-    def compute_gae(self, rewards, values, dones, next_value):
-        """Generalized Advantage Estimation"""
-        advantages = []
-        gae = 0
+    def compute_gae(self, rewards, values, dones, next_values):
+        """Generalized Advantage Estimation (Vectorized for parallel environments)"""
+        # rewards, values, dones: (num_steps, n_envs)
+        # next_values: (n_envs,)
+        num_steps, n_envs = rewards.shape
+        advantages = torch.zeros((num_steps, n_envs), device=self.device)
+        last_gae = torch.zeros(n_envs, device=self.device)
         
-        for t in reversed(range(len(rewards))):
-            if t == len(rewards) - 1:
-                next_val = next_value
+        for t in reversed(range(num_steps)):
+            if t == num_steps - 1:
+                next_val = next_values
             else:
                 next_val = values[t + 1]
             
-            delta = rewards[t] + self.gamma * next_val * (1 - dones[t]) - values[t]
-            gae = delta + self.gamma * self.gae_lambda * (1 - dones[t]) * gae
-            advantages.insert(0, gae)
+            non_terminal = 1.0 - dones[t]
+            delta = rewards[t] + self.gamma * next_val * non_terminal - values[t]
+            last_gae = delta + self.gamma * self.gae_lambda * non_terminal * last_gae
+            advantages[t] = last_gae
         
-        return torch.tensor(advantages, dtype=torch.float32)
+        return advantages
     
     def collect_rollout(self, num_steps: int, progress: Optional[Progress] = None, task_id = None, on_step=None):
         """Collect experience from environment"""
@@ -167,7 +185,7 @@ class PPOTrainer:
             
             with torch.no_grad():
                 action, log_prob, entropy = self.policy.get_action(state_tensor)
-                _, value = self.policy(state_tensor)
+                _, _, value = self.policy(state_tensor)
             
             # Denormalize action to environment's action space
             action_np = action.cpu().numpy()[0]
@@ -254,7 +272,7 @@ class PPOTrainer:
         # Get value of final state for GAE
         with torch.no_grad():
             state_tensor = torch.FloatTensor(state).unsqueeze(0).to(self.device)
-            _, next_value = self.policy(state_tensor)
+            _, _, next_value = self.policy(state_tensor)
             next_value = next_value.item()
         
         # Compute advantages
@@ -294,7 +312,7 @@ class PPOTrainer:
             with torch.no_grad():
                 # Get actions for all envs at once
                 actions, log_probs, entropy = self.policy.get_action(states_tensor)
-                _, values = self.policy(states_tensor)
+                _, _, values = self.policy(states_tensor)
             
             # Convert to numpy: (n_envs, action_dim)
             actions_np = actions.cpu().numpy()
@@ -325,30 +343,36 @@ class PPOTrainer:
             states = next_states
             self.total_steps += n_envs
         
-        # Reshape from [num_steps, n_envs, ...] to [num_steps * n_envs, ...]
-        all_states = np.array(all_states).reshape(-1, states.shape[-1])
-        all_actions = np.array(all_actions).reshape(-1, actions_np.shape[-1])
-        all_rewards = np.array(all_rewards).flatten()
-        all_dones = np.array(all_dones).flatten()
-        all_values = np.array(all_values).flatten()
-        all_log_probs = np.array(all_log_probs).flatten()
+        # Convert collected lists to tensors of shape (num_steps, n_envs, ...)
+        all_states_tensor = torch.FloatTensor(np.array(all_states)).to(self.device)
+        all_actions_tensor = torch.FloatTensor(np.array(all_actions)).to(self.device)
+        all_rewards_tensor = torch.FloatTensor(np.array(all_rewards)).to(self.device)
+        all_dones_tensor = torch.FloatTensor(np.array(all_dones)).to(self.device)
+        all_values_tensor = torch.FloatTensor(np.array(all_values)).to(self.device)
+        all_log_probs_tensor = torch.FloatTensor(np.array(all_log_probs)).to(self.device)
         
         # Get value of final states for GAE
         with torch.no_grad():
             states_tensor = torch.FloatTensor(states).to(self.device)
-            _, next_values = self.policy(states_tensor)
-            next_value = next_values.mean().item()  # Average across envs
+            _, _, next_values = self.policy(states_tensor)
+            next_values = next_values.squeeze(-1) # (n_envs,)
         
-        # Compute advantages
-        advantages = self.compute_gae(all_rewards.tolist(), all_values.tolist(), all_dones.tolist(), next_value)
-        returns = advantages + torch.tensor(all_values)
+        # Compute advantages across all environments at once (vectorized)
+        # Resulting shape: (num_steps, n_envs)
+        advantages = self.compute_gae(
+            all_rewards_tensor, 
+            all_values_tensor, 
+            all_dones_tensor, 
+            next_values
+        )
+        returns = advantages + all_values_tensor
         
         return {
-            'states': torch.FloatTensor(all_states),
-            'actions': torch.FloatTensor(all_actions),
-            'log_probs': torch.FloatTensor(all_log_probs),
-            'returns': returns,
-            'advantages': advantages,
+            'states': all_states_tensor.reshape(-1, all_states_tensor.size(-1)),
+            'actions': all_actions_tensor.reshape(-1, all_actions_tensor.size(-1)),
+            'log_probs': all_log_probs_tensor.flatten(),
+            'returns': returns.flatten(),
+            'advantages': advantages.flatten(),
         }
     
     def update_policy(self, rollout: Dict, num_epochs: int = 4, batch_size: int = 64):
@@ -364,15 +388,12 @@ class PPOTrainer:
         
         dataset_size = states.shape[0]
         
-        print(f"[debug] update_policy: dataset_size={dataset_size}, num_epochs={num_epochs}, batch_size={batch_size}")
         for epoch in range(num_epochs):
             indices = torch.randperm(dataset_size)
-            print(f"[debug] update_policy: epoch {epoch+1}/{num_epochs}")
             
             for start in range(0, dataset_size, batch_size):
                 end = start + batch_size
                 idx = indices[start:end]
-                print(f"[debug]   batch rows {start}-{end} (actual {len(idx)})")
                 
                 batch_states = states[idx]
                 batch_actions = actions[idx]
@@ -410,7 +431,7 @@ class PPOTrainer:
         # How well the value function explains the observed returns.
         # 1 - Var(returns - values) / Var(returns)
         with torch.no_grad():
-            v_pred = self.policy(states)[1].squeeze()
+            v_pred = self.policy(states)[2].squeeze()
             y_true = returns
             var_y = torch.var(y_true)
             explained_var = 1.0 - torch.var(y_true - v_pred) / (var_y + 1e-8)
@@ -571,6 +592,7 @@ class PPOTrainer:
             table.add_column("Trend", justify="center")      # New: Direction
             table.add_column("Expl Var", justify="center")   # New: Convergence indicator
             table.add_column("Policy Loss", justify="center")
+            table.add_column("Value Loss", justify="center")
             table.add_column("Entropy", justify="center")
             
             if current_metrics:
@@ -589,10 +611,11 @@ class PPOTrainer:
                     trend_str,
                     ev_display,
                     f"{current_metrics.get('policy_loss', 0.0):.4f}",
+                    f"{current_metrics.get('value_loss', 0.0):.4f}",
                     f"{current_metrics.get('entropy', 0.0):.4f}"
                 )
             else:
-                 table.add_row("-", "0", "0.000", "→", "0.000", "0.0000", "0.0000")
+                table.add_row("-", "0", "0.000", "→", "0.000", "0.0000", "0.0000", "0.0000")
             return Panel(table, title="[bold blue]RL Training Progress[/]", border_style="blue", expand=True)
 
         # Per-Env Metrics Table
@@ -727,6 +750,7 @@ class PPOTrainer:
                     'trend': trend,
                     'explained_variance': metrics['explained_variance'],
                     'policy_loss': metrics['policy_loss'],
+                    'value_loss': metrics['value_loss'],
                     'entropy': metrics['entropy']
                 }
                 

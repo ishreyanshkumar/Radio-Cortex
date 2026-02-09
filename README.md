@@ -89,26 +89,68 @@ The `scripts/` directory contains multi-language utilities to assist with develo
 ## 🎮 Usage & Workflows
 
 ### Advanced Training Configuration
-You can customize the training hyperparameters and environment settings via command-line arguments.
+You can customize the training hyperparameters and environment settings via command-line arguments. Radio-Cortex uses organized argument groups to separate core operations from network settings and advanced tuning.
 
+#### 1. Core Operation
 | Argument | Default | Description |
 |:---|:---|:---|
-| `--mode` | `train` | Operation mode: `train`, `eval`, `demo`. |
+| `--mode` | `train` | Operation mode: `train` or `eval`. |
+| `--scenario` | `flash_crowd` | ns-3 Scenario (12 available). Use `all` for randomized training. |
+| `--total-timesteps` | 100000 | Total training or evaluation steps. |
+| `--n-envs` | 4 | Number of parallel environments (vectorized). |
+| `--bdh` | `False` | Use BDH model (Transformer-based policy). |
+| `--model-path` | `models/radio_cortex.pt` | Path to save/load model checkpoint. |
+| `--device` | `None` | Compute device (`cpu` or `cuda`). |
+| `--config` | `None` | Path to JSON config file to override any argument. |
+
+#### 2. Network & Environment
+| Argument | Default | Description |
+|:---|:---|:---|
 | `--num-ues` | 20 | Number of User Equipments (UEs). |
 | `--num-cells` | 3 | Number of cells (eNodeBs). |
-| `--scenario` | `flash_crowd` | ns-3 Scenario (12 available). |
-| `--sim-time` | 300.0 | Simulation duration per episode (seconds). |
+| `--sim-time` | 300.0 | Simulation duration per episode (seconds). **(See Speed Tips below)** |
 | `--kpm-interval` | 100 | KPM Reporting Interval in ms. |
 | `--system-bandwidth-mhz` | 10.0 | System Bandwidth (5.0, 10.0, 20.0). |
-| `--total-timesteps` | 100000 | Total training timesteps. |
-| `--learning-rate` | 3e-4 | Learning rate for PPO. |
-| `--batch-size` | 256 | Batch size for optimization. |
+
+---
+
+### ⚡ Performance & Accuracy Guide
+
+#### What is `sim-time`?
+`sim-time` is the **simulated duration** of each training episode.
+- **Too High (e.g. 300s)**: Training is slow because each episode takes a long time to complete. If the agent makes a mistake early on, it "suffers" for 5 minutes of sim-time before resetting.
+- **Too Low (e.g. 5s)**: Training is fast but inaccurate. The agent doesn't see the full lifecycle of a congestion event (which often takes 10-20s to peak).
+- **Sweet Spot**: **20.0 - 40.0 seconds**. This is enough time for all scenarios to manifest while keeping worker throughput high.
+
+#### How to Train Faster (Without Loss of Accuracy)
+To reach convergence in minutes rather than hours, use these settings:
+
+1. **Max out Parallelism**: Set `--n-envs` to the number of physical CPU cores you have. 
+   - *Example*: `--n-envs 8` on an 8-core machine.
+2. **Optimize `sim-time`**: Set `--sim-time 30.0`. This ensures frequent resets and exposure to different scenarios (if using `--scenario all`) without wasting time on "stable" network states.
+3. **Use Optimized Build**: (Critical) Ensure you built ns-3 with `-d optimized`. 
+4. **Tune Rollout Length**: Match your `--rollout-steps` to your budget. For fast iterations, `1024` or `512` is usually sufficient for convergence if `--n-envs` is high.
+
+**Recommended "Fast & Robust" Command:**
+```bash
+python3 radio_cortex_complete.py --mode train --scenario all --n-envs 8 --sim-time 30.0 --total-timesteps 50000
+```
+
+#### 3. Advanced RL Tuning
+| Argument | Default | Description |
+|:---|:---|:---|
+| `--learning-rate` | 3e-4 | PPO Learning rate. |
+| `--batch-size` | 256 | Batch size for optimization updates. |
+| `--rollout-steps` | 128 | Steps per rollout trajectory. |
 | `--gamma` | 0.99 | Discount factor. |
-| `--model-path` | `models/radio_cortex.pt` | Path to save/load model. |
-| `--config` | None | Path to JSON config file to override args. |
-| `--device` | `cpu/cuda` | Compute device. |
-| `--hidden-dim` | 256 | Hidden dimension for actor/critic networks. |
-| `--n-envs` | 4 | Number of parallel implementations to run for training/eval. |
+| `--hidden-dim` | 256 | Network hidden dimension. |
+| `--gae-lambda` | 0.95 | GAE normalization lambda. |
+| `--clip-epsilon` | 0.2 | PPO clipping bound. |
+| `--vf-coef` | 0.5 | Value function loss weight. |
+| `--ent-coef` | 0.01 | Entropy regularization weight. |
+| `--max-grad-norm` | 0.5 | Gradient clipping threshold. |
+| `--checkpoint-interval` | 5 | Checkpoint frequency (updates). |
+| `--log-interval` | 5 | Console log frequency (updates). |
 
 ### 🌍 Simulation Scenarios
 
