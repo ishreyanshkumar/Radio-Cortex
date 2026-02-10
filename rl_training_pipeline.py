@@ -33,8 +33,8 @@ from rich.columns import Columns
 # Neural Network Architectures
 # ============================================================================
 
-from neural_networks import ActorCritic
-from bdh_policy import BDHPolicy
+from policies.neural_networks import ActorCritic
+from policies.bdh_policy import BDHPolicy
 
 
 # ============================================================================
@@ -92,7 +92,7 @@ class PPOTrainer:
         device: Optional[str] = None,
         checkpoint_dir: str = 'models',
         checkpoint_interval: int = 5,
-        use_bdh: bool = False
+        model_type: str = 'bdh'
     ):
         self.env = env
         if device is None:
@@ -109,11 +109,19 @@ class PPOTrainer:
         state_dim = env.observation_space.shape[0]
         action_dim = env.action_space.shape[0]
         
-        # Initialize networks
-        if use_bdh:
-            print(f"[PPOTrainer] Initializing BDH Policy...")
+        # Initialize networks based on model choice
+        print(f"[PPOTrainer] Initializing Policy: {model_type.upper()}")
+        
+        if model_type == 'bdh':
             self.policy = BDHPolicy(state_dim, action_dim, device=device).to(device)
+        elif model_type == 't1':
+            from policies.transformer1 import TransformerPolicy1
+            self.policy = TransformerPolicy1(state_dim, action_dim, device=device).to(device)
+        elif model_type == 't2':
+            from policies.transformer2 import TransformerPolicy2
+            self.policy = TransformerPolicy2(state_dim, action_dim, device=device).to(device)
         else:
+            # Default to Neural Network (MLP)
             self.policy = ActorCritic(state_dim, action_dim, hidden_dim).to(device)
             
         self.optimizer = torch.optim.Adam(self.policy.parameters(), lr=lr)
@@ -147,8 +155,26 @@ class PPOTrainer:
             
     def compute_gae(self, rewards, values, dones, next_values):
         """Generalized Advantage Estimation (Vectorized for parallel environments)"""
-        # rewards, values, dones: (num_steps, n_envs)
-        # next_values: (n_envs,)
+        # Ensure inputs are tensors of shape (num_steps,) or (num_steps, n_envs)
+        if not isinstance(rewards, torch.Tensor):
+            rewards = torch.FloatTensor(np.array(rewards)).to(self.device)
+        if not isinstance(values, torch.Tensor):
+            values = torch.FloatTensor(np.array(values)).to(self.device)
+        if not isinstance(dones, torch.Tensor):
+            dones = torch.FloatTensor(np.array(dones)).to(self.device)
+        if not isinstance(next_values, torch.Tensor):
+            next_values = torch.tensor(next_values, dtype=torch.float32).to(self.device)
+        
+        # Handle both single-env (1D) and vec-env (2D) shapes
+        if rewards.dim() == 1:
+            rewards = rewards.unsqueeze(-1)
+            values = values.unsqueeze(-1)
+            dones = dones.unsqueeze(-1)
+            next_values = next_values.unsqueeze(-1) if next_values.dim() == 0 else next_values.unsqueeze(-1)
+            squeeze_output = True
+        else:
+            squeeze_output = False
+        
         num_steps, n_envs = rewards.shape
         advantages = torch.zeros((num_steps, n_envs), device=self.device)
         last_gae = torch.zeros(n_envs, device=self.device)
@@ -163,6 +189,9 @@ class PPOTrainer:
             delta = rewards[t] + self.gamma * next_val * non_terminal - values[t]
             last_gae = delta + self.gamma * self.gae_lambda * non_terminal * last_gae
             advantages[t] = last_gae
+        
+        if squeeze_output:
+            advantages = advantages.squeeze(-1)
         
         return advantages
     
@@ -277,7 +306,7 @@ class PPOTrainer:
         
         # Compute advantages
         advantages = self.compute_gae(rewards, values, dones, next_value)
-        returns = advantages + torch.tensor(values)
+        returns = advantages + torch.tensor(values).to(self.device)
         
         return {
             'states': torch.FloatTensor(np.array(states)),

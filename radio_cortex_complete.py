@@ -126,7 +126,8 @@ def train_radio_cortex(
     log_interval: int = 5,
     device: Optional[str] = None,
     checkpoint_interval: int = 5,
-    n_envs: int = 1
+    n_envs: int = 1,
+    model_type: str = 'bdh'
 ):
     """
     Train Radio-Cortex agent
@@ -145,7 +146,7 @@ def train_radio_cortex(
     print("="*60)
     
     # Create environment (single or vectorized)
-    vec_normalize_path = str(Path(save_path).parent / 'vec_normalize.pkl')
+    vec_normalize_path = str(Path(save_path).parent / f"vec_normalize_{Path(save_path).stem}.pkl")
     
     if n_envs > 1:
         if not VEC_ENV_AVAILABLE:
@@ -181,7 +182,7 @@ def train_radio_cortex(
         max_grad_norm=max_grad_norm,
         device=device,
         checkpoint_interval=checkpoint_interval,
-        use_bdh=config.use_bdh
+        model_type=model_type
     )
     
     # Train
@@ -532,48 +533,55 @@ def evaluate_single_scenario(
 
     # 2. Evaluate Radio-Cortex (PPO RL Agent)
     controller_label = f"Radio-Cortex ({scenario_name})"
-    from neural_networks import ActorCritic
-    from bdh_policy import BDHPolicy
-    
     try:
         checkpoint = torch.load(model_path, map_location='cpu')
         state_dict = checkpoint['policy_state_dict']
         
-        # Detect dimensions from state_dict
-        stored_action_dim = state_dict['actor_mean.0.bias'].shape[0]
-        stored_state_dim = state_dict['feature_net.0.weight'].shape[1]
+        # Detect dimensions from state_dict (if standard MLP)
+        stored_action_dim = 0
+        stored_state_dim = 0
+        try:
+            if 'actor_mean.0.bias' in state_dict:
+                stored_action_dim = state_dict['actor_mean.0.bias'].shape[0]
+            if 'feature_net.0.weight' in state_dict:
+                 stored_state_dim = state_dict['feature_net.0.weight'].shape[1]
+        except Exception:
+            pass
         
         # Verify if it matches current config
         expected_state_dim = config.num_ues * 12 + config.num_cells * 5
         expected_action_dim = config.num_cells * 7 + config.num_ues
         
-        if config.use_bdh:
-            print(f"      [INFO] Initializing BDH Policy...")
+        # Detect model type from config or checkpoint
+        model_type = getattr(config, 'model_type', 'bdh')
+        print(f"      [INFO] Initializing {model_type.upper()} Policy...")
+        
+        if model_type == 'bdh':
+            from policies.bdh_policy import BDHPolicy
             policy = BDHPolicy(expected_state_dim, expected_action_dim, device='cpu').to('cpu')
-            
-            # Optional: try loading weights if they exist and model file is not default or exists
-            if os.path.exists(model_path):
-                try:
-                    checkpoint = torch.load(model_path, map_location='cpu')
-                    # Handle different checkpoint formats if needed
-                    if isinstance(checkpoint, dict):
-                        # If saved as full state dict
-                        policy.load_state_dict(checkpoint, strict=False)
-                    print(f"      [INFO] Loaded BDH weights from {model_path}")
-                except Exception as e:
-                    print(f"      [WARN] Could not load BDH weights from {model_path} (using random init): {e}")
-        else:
+        elif model_type == 't1':
+            from policies.transformer1 import TransformerPolicy1
+            policy = TransformerPolicy1(expected_state_dim, expected_action_dim, device='cpu').to('cpu')
+        elif model_type == 't2':
+            from policies.transformer2 import TransformerPolicy2
+            policy = TransformerPolicy2(expected_state_dim, expected_action_dim, device='cpu').to('cpu')
+        else:  # 'nn' or default
             state_dim = expected_state_dim
             action_dim = expected_action_dim
             if stored_action_dim != expected_action_dim or stored_state_dim != expected_state_dim:
                 detected_ues = stored_action_dim - (config.num_cells * 7)
-                # Force config to match model
                 config.num_ues = detected_ues
                 state_dim = stored_state_dim
                 action_dim = stored_action_dim
-            
+            from policies.neural_networks import ActorCritic
             policy = ActorCritic(state_dim, action_dim).to('cpu')
-            policy.load_state_dict(state_dict)
+        
+        # Load weights
+        try:
+            policy.load_state_dict(state_dict, strict=False)
+            print(f"      [INFO] Loaded {model_type.upper()} weights from {model_path}")
+        except Exception as e:
+            print(f"      [WARN] Could not load weights (using random init): {e}")
         
     except Exception as e:
         print(f"      [ERROR] Could not load model {model_path}: {e}")
@@ -581,7 +589,26 @@ def evaluate_single_scenario(
         
     rc_agent = RadioCortexAgent(config.num_ues, config.num_cells, policy_model=policy)
     
-    env = create_oran_env(config)
+    # Check for VecNormalize stats
+    vec_normalize_path = str(Path(model_path).parent / f"vec_normalize_{Path(model_path).stem}.pkl")
+    use_vec_normalize = os.path.exists(vec_normalize_path) and VEC_ENV_AVAILABLE
+    
+    if use_vec_normalize:
+        print(f"      [INFO] Found VecNormalize stats at {vec_normalize_path}. Wrapping env...")
+        # Create dummy vec env to support VecNormalize
+        def make_env():
+            return create_oran_env(config)
+        
+        # We need to import inside function or ensure it's available
+        from stable_baselines3.common.vec_env import DummyVecEnv, VecNormalize
+        env = DummyVecEnv([make_env])
+        env = VecNormalize.load(vec_normalize_path, env)
+        # Disable training mode for eval
+        env.training = False
+        env.norm_reward = False
+    else:
+        env = create_oran_env(config)
+
     try:
         results['Radio-Cortex'] = evaluator.evaluate_controller(
             rc_agent, env, controller_label,
@@ -653,9 +680,10 @@ def main():
         help='ns-3 Scenario (e.g., flash_crowd, mobility_storm, traffic_burst). Use "all" to rotate through all scenarios.'
     )
     primary.add_argument('--total-timesteps', type=int, default=100000, help='Total training/eval steps')
-    primary.add_argument('--bdh', action='store_true', help='Use BDH model (Transformer-based policy)')
+    primary.add_argument('--model', type=str, default='bdh', choices=['bdh', 'nn', 't1', 't2'],
+                         help='Policy architecture: bdh (default), nn (MLP), t1 (Transformer 1), t2 (Transformer 2)')
     primary.add_argument('--n-envs', type=int, default=4, help='Number of parallel environments')
-    primary.add_argument('--model-path', type=str, default='models/radio_cortex.pt', help='Path to save/load model')
+    primary.add_argument('--model-path', type=str, default=None, help='Path to save/load model (default: models/radiocortex_{model}.pt)')
     primary.add_argument('--device', type=str, default=None, help='Compute device (cpu/cuda)')
     primary.add_argument('--config', type=str, default=None, help='JSON config file to override any argument')
 
@@ -705,9 +733,11 @@ def main():
         kpm_interval_ms=args.kpm_interval,
         seed=42,
         scenario=args.scenario,
-        system_bandwidth_mhz=args.system_bandwidth_mhz,
-        use_bdh=args.bdh
+        system_bandwidth_mhz=args.system_bandwidth_mhz
     )
+    
+    # Attach model_type to config for downstream usage (eval workers, etc.)
+    config.model_type = args.model
     
     # Execute mode
     if args.mode == 'train':
@@ -731,7 +761,10 @@ def main():
             config.scenarios = ALL_SCENARIOS
             config.scenario = ALL_SCENARIOS[0]  # Initial placeholder (randomized on reset)
             print(f"🎲 Multi-Scenario Training ENABLED: rotating through {len(ALL_SCENARIOS)} scenarios")
-        elif config.scenario is None:
+        if args.model_path is None:
+            args.model_path = f"models/radiocortex_{args.model}.pt"
+
+        if config.scenario is None:
             config.scenario = "flash_crowd"
             
         trainer = train_radio_cortex(
@@ -751,10 +784,14 @@ def main():
             log_interval=args.log_interval,
             device=args.device,
             checkpoint_interval=args.checkpoint_interval,
-            n_envs=args.n_envs
+            n_envs=args.n_envs,
+            model_type=args.model
         )
     
     elif args.mode == 'eval':
+        if args.model_path is None:
+             args.model_path = f"models/radiocortex_{args.model}.pt"
+
         results = evaluate_radio_cortex(
             config=config,
             model_path=args.model_path,

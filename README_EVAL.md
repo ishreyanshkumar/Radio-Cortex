@@ -138,6 +138,9 @@ python3 radio_cortex_complete.py --mode eval
 # Run only one specific scenario (Fast Test)
 python3 radio_cortex_complete.py --mode eval --scenario mobility_storm
 
+# Run specific architecture (e.g., Transformer 1)
+python3 radio_cortex_complete.py --mode eval --model t1 --scenario mobility_storm
+
 # Run parallel evaluation on 4 scenarios at once (Faster)
 python3 radio_cortex_complete.py --mode eval --n-envs 4
 ```

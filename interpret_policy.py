@@ -21,7 +21,7 @@ from typing import Dict, List, Tuple
 import numpy as np
 import torch
 
-from neural_networks import ActorCritic
+from policies.neural_networks import ActorCritic
 
 
 def _load_last_log_entry(log_path: Path) -> Dict:

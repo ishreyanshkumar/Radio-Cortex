@@ -23,15 +23,7 @@ class BDHPolicy(nn.Module):
 
     def __init__(self, state_dim: int, action_dim: int, bdh_config: Optional[object] = None, device: str = 'cpu'):
         super().__init__()
-        try:
-            # Try importing from current directory (Radio-Cortex)
-            import bdh as bdh_mod
-        except ImportError:
-             try:
-                 # Fallback if package structure differs
-                 bdh_mod = importlib.import_module('Radio-Cortex.bdh')
-             except Exception as e:
-                 raise ImportError("Could not import bdh module: " + str(e))
+        from . import bdh as bdh_mod
 
         # instantiate BDH core model
         cfg = bdh_config or bdh_mod.BDHConfig()

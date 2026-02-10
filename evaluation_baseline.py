@@ -144,13 +144,35 @@ class EvaluationRunner:
         if hasattr(controller, 'get_model_params'):
             model_params = controller.get_model_params()
         
+        # Helper to check if env is VecEnv
+        is_vec_env = hasattr(env, 'reset') and hasattr(env, 'step_async')
+        
+        # Access config (handle wrappers)
+        if hasattr(env, 'config'):
+            env_config = env.config
+        elif is_vec_env:
+            # Assumes all envs have same config
+            env_config = env.get_attr('config')[0]
+        else:
+            # Fallback for other wrappers
+            env_config = env.unwrapped.config
+
         # Reset environment
-        state, info = env.reset()
+        if is_vec_env:
+             state = env.reset()
+             # VecEnv reset returns only obs. info is usually empty at start or not returned.
+             # We need to simulate initial info? Or just wait for step.
+             # State is (n_envs, dim). We assume n_envs=1 for evaluation.
+             state = state[0] 
+             info = {} 
+        else:
+             state, info = env.reset()
+        
         terminated = False
         truncated = False
         
         # Calculate expected steps for progress bar
-        total_steps = int(env.config.sim_time * 1000 / env.config.kpm_interval_ms)
+        total_steps = int(env_config.sim_time * 1000 / env_config.kpm_interval_ms)
         
         # UI Management
         pbar = None
@@ -168,14 +190,26 @@ class EvaluationRunner:
             if hasattr(controller, 'get_rl_action'):
                 action_arr = controller.get_rl_action(state)
             else:
-                state_dict = self._parse_state(state, env.config)
+                state_dict = self._parse_state(state, env_config)
                 action = controller.get_action(state_dict)
                 action_arr = self._dict_to_action(action, env.action_space)
             t1 = time.time()
             inference_times.append((t1 - t0) * 1000.0) # ms
             
             # Execute step
-            next_state, reward, terminated, truncated, info = env.step(action_arr)
+            if is_vec_env:
+                # VecEnv expects stacked actions
+                # If action_arr is (action_dim,), wrap it to (1, action_dim)
+                # But if controller returns (action_dim), we just pass [action_arr]
+                next_state, reward, done, infos = env.step([action_arr])
+                next_state = next_state[0]
+                reward = reward[0]
+                terminated = done[0]
+                truncated = False # VecEnv handles auto-reset, so 'done' implies term/trunc.
+                info = infos[0]
+            else:
+                next_state, reward, terminated, truncated, info = env.step(action_arr)
+            
             actions_history.append(action_arr)
             
             # Periodic logging of RIC decisions (actions) during evaluation
@@ -282,8 +316,25 @@ class EvaluationRunner:
         # Calculate aggregate metrics
         
         # Phase 2: Collect RIC & Network Stats
-        e2_latency = np.mean(env.ns3.e2_loop_latencies) if hasattr(env.ns3, 'e2_loop_latencies') and env.ns3.e2_loop_latencies else 0.0
-        ric_overhead = ((getattr(env.ns3, 'kpm_msg_count', 0) + getattr(env.ns3, 'rc_msg_count', 0)) / env.config.sim_time)
+        ns3_obj = None
+        if hasattr(env, 'ns3'):
+            ns3_obj = env.ns3
+        elif is_vec_env:
+            # Try to get ns3 from the first env
+            try:
+                ns3_obj = env.get_attr('ns3')[0]
+            except:
+                pass
+        else:
+            if hasattr(env.unwrapped, 'ns3'):
+                ns3_obj = env.unwrapped.ns3
+        
+        e2_latency = 0.0
+        ric_overhead = 0.0
+        
+        if ns3_obj:
+             e2_latency = np.mean(ns3_obj.e2_loop_latencies) if hasattr(ns3_obj, 'e2_loop_latencies') and ns3_obj.e2_loop_latencies else 0.0
+             ric_overhead = ((getattr(ns3_obj, 'kpm_msg_count', 0) + getattr(ns3_obj, 'rc_msg_count', 0)) / env_config.sim_time)
         control_stability = self._calculate_control_stability(actions_history)
         
         # Collect Cumulative Handover Stats from last KPM
@@ -299,7 +350,7 @@ class EvaluationRunner:
         avg_inference = np.mean(inference_times) if inference_times else 0.0
         
         metrics = self._calculate_metrics(throughputs, delays, losses, queue_lengths, rb_utils, per_ue_stats, sinrs, rsrps, total_handovers,
-                                          ho_attempts, ho_successes, e2_loop_latency, ric_overhead, env.config.system_bandwidth_mhz, control_stability, avg_power_w, avg_inference, model_params)
+                                          ho_attempts, ho_successes, e2_latency, ric_overhead, env_config.system_bandwidth_mhz, control_stability, avg_power_w, avg_inference, model_params)
         
         # Print formatted results
         print(f"\n  {'─'*50}")

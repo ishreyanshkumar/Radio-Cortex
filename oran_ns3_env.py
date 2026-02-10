@@ -45,8 +45,6 @@ class NS3Config:
     topic_suffix: str = ""
     # Verbosity control for CLI output
     verbose: bool = True
-    # Whether to use BDH model as policy
-    use_bdh: bool = False
 
 
 @dataclass
@@ -770,41 +768,52 @@ class ORANns3Env(gym.Env):
         return state, info
     
     def step(self, action: np.ndarray) -> Tuple[np.ndarray, float, bool, bool, dict]:
-        rc_actions = self._parse_action(action)
-        self.ns3.send_rc_control(rc_actions)
-        
-        time.sleep(self.config.kpm_interval_ms / 1000.0)
-        e2_msg = self.ns3.receive_kpm_report(
-            wait_for_new=True,
-            max_wait_s=(self.config.kpm_interval_ms / 1000.0) * 1.5
-        )
-        next_state = self._extract_state(e2_msg)
-        
-        self.current_action = action
-        reward, breakdown = self._compute_reward(e2_msg)
-        self.prev_action = action.copy()
-        
-        self.episode_metrics.append({
-            'step': self.current_step,
-            'reward': reward,
-            **breakdown,
-        })
-        
-        self.current_step += 1
-        terminated = self.current_step >= self.max_steps
-        if self.ns3.ns3_process and self.ns3.ns3_process.poll() is not None:
-            terminated = True
-        truncated = False
-        
-        info = {
-            'step': self.current_step,
-            'e2_metrics': e2_msg,
-            'actions_applied': rc_actions,
-            'ns3_finished': bool(self.ns3.ns3_process and self.ns3.ns3_process.poll() is not None),
-            **breakdown,
-        }
-        
-        return next_state, reward, terminated, truncated, info
+        try:
+            rc_actions = self._parse_action(action)
+            self.ns3.send_rc_control(rc_actions)
+            
+            time.sleep(self.config.kpm_interval_ms / 1000.0)
+            e2_msg = self.ns3.receive_kpm_report(
+                wait_for_new=True,
+                max_wait_s=(self.config.kpm_interval_ms / 1000.0) * 1.5
+            )
+            next_state = self._extract_state(e2_msg)
+            
+            self.current_action = action
+            reward, breakdown = self._compute_reward(e2_msg)
+            self.prev_action = action.copy()
+            
+            self.episode_metrics.append({
+                'step': self.current_step,
+                'reward': reward,
+                **breakdown,
+            })
+            
+            self.current_step += 1
+            terminated = self.current_step >= self.max_steps
+            if self.ns3.ns3_process and self.ns3.ns3_process.poll() is not None:
+                terminated = True
+            truncated = False
+            
+            info = {
+                'step': self.current_step,
+                'e2_metrics': e2_msg,
+                'actions_applied': rc_actions,
+                'ns3_finished': bool(self.ns3.ns3_process and self.ns3.ns3_process.poll() is not None),
+                **breakdown,
+            }
+            
+            return next_state, reward, terminated, truncated, info
+        except Exception as e:
+            # If anything crashes (ns-3 died, Kafka timeout, etc.), gracefully
+            # end the episode rather than killing the worker process.
+            import traceback, sys
+            print(f"[ENV PID {os.getpid()}] step() error (returning done): {e}", file=sys.stderr, flush=True)
+            traceback.print_exc(file=sys.stderr)
+            fallback_state = np.zeros(self.observation_space.shape, dtype=np.float32)
+            # Create dummy E2Message to prevent KeyError in evaluation loops
+            dummy_msg = E2Message(timestamp=time.time(), ue_metrics={}, cell_metrics={})
+            return fallback_state, -10.0, True, False, {'step_error': str(e), 'e2_metrics': dummy_msg}
     
     def _extract_state(self, e2_msg: E2Message) -> np.ndarray:
         """Convert E2 KPM message to RL state vector"""
@@ -849,6 +858,19 @@ class ORANns3Env(gym.Env):
     
     def _parse_action(self, action: np.ndarray) -> Dict:
         """Convert RL action vector to E2SM-RC control parameters"""
+        # Ensure action is a flat 1-D array (VecEnv may pass scalars or 0-d arrays)
+        action = np.asarray(action, dtype=np.float64).flatten()
+        
+        expected_size = self.config.num_cells * 7 + self.config.num_ues
+        if action.size != expected_size:
+            # If size mismatch, pad or truncate to expected size
+            import sys
+            print(f"[ENV PID {os.getpid()}] _parse_action: size mismatch {action.size} vs expected {expected_size}", file=sys.stderr)
+            if action.size < expected_size:
+                action = np.pad(action, (0, expected_size - action.size), constant_values=0.0)
+            else:
+                action = action[:expected_size]
+        
         rc_actions = {}
         
         for cell_id in range(self.config.num_cells):

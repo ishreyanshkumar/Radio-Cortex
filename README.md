@@ -98,8 +98,8 @@ You can customize the training hyperparameters and environment settings via comm
 | `--scenario` | `flash_crowd` | ns-3 Scenario (12 available). Use `all` for randomized training. |
 | `--total-timesteps` | 100000 | Total training or evaluation steps. |
 | `--n-envs` | 4 | Number of parallel environments (vectorized). |
-| `--bdh` | `False` | Use BDH model (Transformer-based policy). |
-| `--model-path` | `models/radio_cortex.pt` | Path to save/load model checkpoint. |
+| `--model` | `bdh` | Policy architecture: `bdh` (Transformer), `nn` (MLP), `t1`/`t2` (Experimental Transformers). |
+| `--model-path` | `models/radiocortex_{model}.pt` | Path to save/load model checkpoint. |
 | `--device` | `None` | Compute device (`cpu` or `cuda`). |
 | `--config` | `None` | Path to JSON config file to override any argument. |
 
