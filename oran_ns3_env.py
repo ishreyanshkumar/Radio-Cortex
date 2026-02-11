@@ -378,7 +378,7 @@ class NS3Interface:
         
         # Start ns-3 in subprocess
         # Redirect output to files for debugging
-        telemetry_dir = "telemetry"
+        telemetry_dir = "logs"
         os.makedirs(telemetry_dir, exist_ok=True)
         self.log_file_out = open(os.path.join(telemetry_dir, f"ns3_out{self.config.topic_suffix}.log"), "w")
         self.log_file_err = open(os.path.join(telemetry_dir, f"ns3_err{self.config.topic_suffix}.log"), "w")

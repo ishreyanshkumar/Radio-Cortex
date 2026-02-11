@@ -5,7 +5,7 @@
 cd "$(dirname "$0")/.." || exit 1
 
 KAFKA_DIR="kafka_2.13-3.6.1"
-LOG_DIR="telemetry"
+LOG_DIR="logs"
 mkdir -p "$LOG_DIR"
 
 if [ ! -x "$KAFKA_DIR/bin/kafka-server-start.sh" ]; then

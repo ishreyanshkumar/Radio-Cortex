@@ -75,8 +75,8 @@ def make_env(config: NS3Config, env_id: int, seed: Optional[int] = None) -> Call
                     print(f"[VecEnv] Env {env_id}: retrying in {backoff}s...")
                     time.sleep(backoff)
                 else:
-                    os.makedirs("telemetry", exist_ok=True)
-                    with open(f"telemetry/worker_failure_{env_id}.log", "w") as f:
+                    os.makedirs("logs", exist_ok=True)
+                    with open(f"logs/worker_failure_{env_id}.log", "w") as f:
                         f.write(fail_msg)
                     raise  # All retries exhausted
     

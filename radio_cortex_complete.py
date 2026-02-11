@@ -46,7 +46,7 @@ except ImportError:
 from evaluation_baseline import (
     EvaluationRunner,
     BaselineController,
-    VisualizationSuite
+    ResultLogger
 )
 
 
@@ -591,6 +591,13 @@ def evaluate_single_scenario(
             try:
                 policy.load_state_dict(state_dict, strict=False)
                 print(f"      [INFO] Loaded {model_type.upper()} weights from {model_path}")
+                
+                # Load stored hyperparams if available
+                if 'hyperparams' in checkpoint:
+                     stored_params = checkpoint['hyperparams']
+                     print(f"      [INFO] Found stored hyperparameters: {list(stored_params.keys())}")
+                     # Merge into eval_config
+                     eval_config.update(stored_params)
             except Exception as e:
                 print(f"      [WARN] Could not load weights (using random init): {e}")
             
@@ -626,7 +633,8 @@ def evaluate_single_scenario(
             env.close()
 
     # Log results to central CSV (appending)
-    VisualizationSuite.log_to_csv(
+    # Log results to central CSV (appending)
+    ResultLogger.log_to_csv(
         results,
         scenario_name,
         config=eval_config

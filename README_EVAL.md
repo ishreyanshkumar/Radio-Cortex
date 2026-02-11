@@ -148,11 +148,8 @@ Each row includes a timestamp, all metrics, and config parameters — allowing y
 
 **Explore results interactively:**
 ```bash
-# Streamlit (Python)
-streamlit run results/visualize_results.py
-
-# Or standalone HTML dashboard (no Python needed)
-python3 -m http.server 8080 -d results
+# Standalone HTML dashboard
+python3 -m http.server 8080
 # Then open http://localhost:8080/dashboard.html
 ```
 

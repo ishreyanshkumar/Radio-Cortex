@@ -16,7 +16,7 @@ cd Radio-Cortex
 # Clone ns-allinone (Official Gitlab Repository)
 git clone https://gitlab.com/nsnam/ns-3-allinone.git
 cd ns-3-allinone
-./download.py -n ns-3.46.1
+./download.py ns-3.46.1
 cd ..
 ```
 
@@ -241,12 +241,9 @@ python3 radio_cortex_complete.py --mode eval --model t2 --scenario flash_crowd
 #### 4. Interaction & Results Visualization
 View metrics, radar charts, and comparison tables.
 ```bash
-# Option A: Standalone HTML (Recommended)
-python3 -m http.server 8080 -d results
+# Standalone HTML
+python3 -m http.server 8080
 # Open http://localhost:8080/dashboard.html
-
-# Option B: Streamlit (Python required)
-streamlit run results/visualize_results.py
 ```
 
 
@@ -503,33 +500,27 @@ Radio-Cortex features a high-fidelity convergence dashboard that replaces standa
 
 ## 📊 Monitoring & Analysis
 
-### 1. Plot Training Metrics
-You can plot the training progress (rewards, throughput) using this Python script. It reads from `telemetry/action_logs.jsonl`.
-```python
-import json
-import matplotlib.pyplot as plt
+### 1. View Training & Evaluation Dashboard
+The primary way to analyze results is via the interactive HTML dashboard.
 
-with open('telemetry/action_logs.jsonl') as f:
-    # Read line by line
-    data = [json.loads(line) for line in f]
+```bash
+# Start a simple HTTP server
+python3 -m http.server 8080
 
-rewards = [d['reward'] for d in data]
-steps = [d['step'] for d in data]
-
-plt.figure(figsize=(10, 5))
-plt.plot(steps, rewards)
-plt.xlabel('Steps')
-plt.ylabel('Reward')
-plt.title('Training Progress')
-plt.savefig('training_plot.png')
-print("Saved training_plot.png")
+# Open in Browser
+# http://localhost:8080/dashboard.html
 ```
 
-### 2. View Summary Stats
+The dashboard automatically loads `results/experiment_results.csv` and provides:
+- **Comparison Table**: Sort and filter runs.
+- **Radar Charts**: Visual health profile of the network (QoS, Reliability, etc.).
+- **Bar Charts**: Side-by-side metric comparison.
+
+### 2. Quick CLI Summary
 Quickly check the average metrics from the logs:
 ```bash
 python3 -c "import json; import numpy as np; 
-data = [json.loads(l) for l in open('telemetry/action_logs.jsonl')]; 
+data = [json.loads(l) for l in open('logs/action_logs.jsonl')]; 
 print(f'Mean Reward: {np.mean([d[\"reward\"] for d in data]):.4f}')"
 ```
 

@@ -94,6 +94,17 @@ class PPOTrainer:
         checkpoint_interval: int = 5,
         model_type: str = 'bdh'
     ):
+        self.hyperparams = {
+            'hidden_dim': hidden_dim,
+            'lr': lr,
+            'gamma': gamma,
+            'gae_lambda': gae_lambda,
+            'clip_epsilon': clip_epsilon,
+            'vf_coef': vf_coef,
+            'ent_coef': ent_coef,
+            'max_grad_norm': max_grad_norm,
+            'model_type': model_type
+        }
         self.env = env
         if device is None:
             self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
@@ -140,7 +151,7 @@ class PPOTrainer:
         
         # Logging
         self.action_history = []
-        self.telemetry_dir = "telemetry"
+        self.telemetry_dir = "logs"
         Path(self.telemetry_dir).mkdir(exist_ok=True)
         self.log_file = os.path.join(self.telemetry_dir, "action_logs.jsonl")
         
@@ -503,6 +514,14 @@ class PPOTrainer:
         print(f"Starting PPO training for {total_timesteps} timesteps")
         print(f"Device: {self.device}")
         
+        # Add training loop params
+        self.hyperparams.update({
+            'total_timesteps': total_timesteps,
+            'rollout_steps': rollout_steps,
+            'batch_size': batch_size,
+            'n_envs': self.n_envs
+        })
+        
         update = 0
         # Rich UI Setup
         console = Console()
@@ -795,10 +814,12 @@ class PPOTrainer:
     
     def save(self, path: str):
         """Save trained model"""
+        os.makedirs(os.path.dirname(path), exist_ok=True)
         torch.save({
             'policy_state_dict': self.policy.state_dict(),
             'optimizer_state_dict': self.optimizer.state_dict(),
             'total_steps': self.total_steps,
+            'hyperparams': getattr(self, 'hyperparams', {})
         }, path)
         print(f"Model saved to {path}")
     
