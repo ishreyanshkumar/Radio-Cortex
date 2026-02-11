@@ -86,22 +86,7 @@ Measures the "cost of intelligence" - how heavy the model is.
 
 ---
 
-### 🖥️ Evaluation Dashboard (Rich UI)
-
-The evaluation suite utilizes a multi-panel dashboard for real-time tracking:
-
-1. **Overall Progress**: Fixed progress bar at the top showing remaining scenarios.
-2. **Live Network Metrics**: Aggregated Tput, Delay, Loss across all environments.
-3. **Activity Heartbeat**: Pulses (`●`) during each environment step to confirm ns-3 data flow.
-4. **Per-UE Grid (2x2)**: Real-time visualization of the **top 5 UEs per environment**, enabling immediate identification of "bottleneck" users.
-
-**Legend:**
-- `--` indicates a default/unavailable value (e.g., RSRP=-140, Cell=-1)
-- Variance summary printed below table if non-zero
-
----
-
-## 4. Data Quality Indicator
+## 3. Data Quality Indicator
 
 Every 50 steps, a data quality summary is printed:
 ```
@@ -116,7 +101,7 @@ Every 50 steps, a data quality summary is printed:
 
 ---
 
-## 5. Excluded Metrics & Limitations
+## 4. Excluded Metrics & Limitations
 
 The following metrics were considered but **not implemented** due to simulator constraints:
 
@@ -127,31 +112,47 @@ The following metrics were considered but **not implemented** due to simulator c
 
 ---
 
-## 6. How to Run Evaluation
+## 5. How to Run Evaluation
 
-Run the evaluation mode comparing `Radio-Cortex` agent against `Static-RAN` baseline:
+For the full **🚀 CLI Reference Guide** (including all training and scenario flags), see the main [README.md](file:///home/hp/Radio-Cortex/README.md).
+
+### Quick Eval Commands
+
+Run independently using `--model`:
 
 ```bash
-# Run all scenarios sequentially (Benchmark Mode)
-python3 radio_cortex_complete.py --mode eval
+# ── Baseline only ──
+python3 radio_cortex_complete.py --mode eval --model base --scenario flash_crowd
 
-# Run only one specific scenario (Fast Test)
-python3 radio_cortex_complete.py --mode eval --scenario mobility_storm
+# ── AI agent only ──
+python3 radio_cortex_complete.py --mode eval --model bdh --scenario flash_crowd
 
-# Run specific architecture (e.g., Transformer 1)
-python3 radio_cortex_complete.py --mode eval --model t1 --scenario mobility_storm
-
-# Run parallel evaluation on 4 scenarios at once (Faster)
-python3 radio_cortex_complete.py --mode eval --n-envs 4
+# ── All scenarios in parallel ──
+python3 radio_cortex_complete.py --mode eval --model bdh --scenario all --n-envs 4
 ```
+
 
 > [!IMPORTANT]
 > **Performance Note:** Evaluation relies on the ns-3 binary. Ensure you have compiled the **optimized build** (see README.md) to avoid slow evaluation speeds.
 
 
 ### Outputs
-Results are saved in the `results/` directory:
-1.  **`*_comparison.png`:** Bar charts comparing all 20 metrics across 5 rows.
-2.  **`*_radar.png`:** Radar chart comparing the **6 composite health scores**.
-3.  **`*_metrics.tex`:** LaTeX table for paper inclusion.
-4.  **`*_metrics.csv`:** Spreadsheet-ready CSV report for detailed data analysis.
+
+All results are **appended** to a single master CSV:
+
+```
+results/experiment_results.csv
+```
+
+Each row includes a timestamp, all metrics, and config parameters — allowing you to build a dataset incrementally across runs.
+
+**Explore results interactively:**
+```bash
+# Streamlit (Python)
+streamlit run results/visualize_results.py
+
+# Or standalone HTML dashboard (no Python needed)
+python3 -m http.server 8080 -d results
+# Then open http://localhost:8080/dashboard.html
+```
+

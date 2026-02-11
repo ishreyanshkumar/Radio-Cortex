@@ -1,9 +1,11 @@
 #!/bin/bash
 
 
-SCRIPT_DIR=$(cd -- "$(dirname "${BASH_SOURCE[0]}")" && pwd)
-KAFKA_DIR="$SCRIPT_DIR/kafka_2.13-3.6.1"
-LOG_DIR="$SCRIPT_DIR/telemetry"
+# Move to the project root directory
+cd "$(dirname "$0")/.." || exit 1
+
+KAFKA_DIR="kafka_2.13-3.6.1"
+LOG_DIR="telemetry"
 mkdir -p "$LOG_DIR"
 
 if [ ! -x "$KAFKA_DIR/bin/kafka-server-start.sh" ]; then

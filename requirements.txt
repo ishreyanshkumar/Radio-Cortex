@@ -9,3 +9,5 @@ scipy
 rich
 seaborn
 wandb
+streamlit
+tqdm

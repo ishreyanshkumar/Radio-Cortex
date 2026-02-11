@@ -10,6 +10,8 @@ to prevent message crosstalk between simulations.
 """
 
 import copy
+import os
+import time
 import numpy as np
 import traceback
 from typing import Callable, List, Optional, Dict, Any
@@ -39,30 +41,44 @@ def make_env(config: NS3Config, env_id: int, seed: Optional[int] = None) -> Call
         Callable that creates the configured environment
     """
     def _init() -> ORANns3Env:
-        # Deep copy config to avoid shared state
-        cfg = copy.deepcopy(config)
-        try:
-            # Set unique topic suffix for this environment
-            cfg.topic_suffix = f"_{env_id}"
-            # Assuming kpm_interval_ms might be set in the base config,
-            # if not, it would default to NS3Config's default or be set here.
-            # For now, we'll just ensure topic_suffix is set.
-            
-            env = ORANns3Env(cfg)
-            if seed is not None:
-                env.reset(seed=seed + env_id) # Use env_id as rank for seeding
-            else:
-                # Use config seed + env_id to ensure diversity
-                base_seed = getattr(config, 'seed', 42)
-                env.reset(seed=base_seed + env_id)
-            return env
-        except Exception as e:
-            # Fatal error during initialization
-            fail_msg = f"Worker {env_id} failed to initialize: {str(e)}\n{traceback.format_exc()}"
-            print(fail_msg)
-            with open(f"worker_failure_{env_id}.log", "w") as f:
-                f.write(fail_msg)
-            raise # Re-raise the exception after logging
+        # Stagger environment launches to prevent simultaneous ns-3 spawns
+        # from overwhelming the LTE RRC stack and causing SIGSEGV crashes.
+        if env_id > 0:
+            stagger_delay = env_id * 3
+            print(f"[VecEnv] Env {env_id}: staggering init by {stagger_delay}s...")
+            time.sleep(stagger_delay)
+
+        max_retries = 3
+        for attempt in range(1, max_retries + 1):
+            cfg = copy.deepcopy(config)
+            try:
+                cfg.topic_suffix = f"_{env_id}"
+                env = ORANns3Env(cfg)
+                if seed is not None:
+                    env.reset(seed=seed + env_id)
+                else:
+                    base_seed = getattr(config, 'seed', 42)
+                    env.reset(seed=base_seed + env_id)
+                return env
+            except Exception as e:
+                fail_msg = f"Worker {env_id} init attempt {attempt}/{max_retries} failed: {str(e)}\n{traceback.format_exc()}"
+                print(fail_msg)
+                # Try to clean up the failed environment
+                try:
+                    if 'env' in dir() and env is not None:
+                        env.close()
+                except Exception:
+                    pass
+
+                if attempt < max_retries:
+                    backoff = attempt * 5
+                    print(f"[VecEnv] Env {env_id}: retrying in {backoff}s...")
+                    time.sleep(backoff)
+                else:
+                    os.makedirs("telemetry", exist_ok=True)
+                    with open(f"telemetry/worker_failure_{env_id}.log", "w") as f:
+                        f.write(fail_msg)
+                    raise  # All retries exhausted
     
     return _init
 

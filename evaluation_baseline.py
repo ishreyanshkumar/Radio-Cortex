@@ -995,3 +995,76 @@ class VisualizationSuite:
             print(df.to_csv(index=False))
         
         return df
+
+    @staticmethod
+    def log_to_csv(
+        results: Dict[str, EvaluationMetrics],
+        scenario_name: str,
+        config: dict = None,
+        save_path: str = "results/experiment_results.csv"
+    ):
+        """
+        Append evaluation results to a central CSV file.
+        
+        Each call appends one row per controller (Baseline / Radio-Cortex)
+        with a timestamp, all metrics, and config parameters.
+        Creates the file with headers if it doesn't exist.
+        """
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        config = config or {}
+        
+        rows = []
+        for controller_name, metrics in results.items():
+            row = {
+                "Timestamp": timestamp,
+                "Scenario": scenario_name,
+                "Controller": controller_name,
+                # Core Metrics
+                "Throughput_Mbps": metrics.avg_throughput,
+                "Avg_Delay_ms": metrics.avg_delay,
+                "PacketLoss_Ratio": metrics.avg_packet_loss,
+                "p95_Delay_ms": metrics.p95_delay,
+                "Max_PacketLoss": metrics.max_packet_loss,
+                "Jains_Fairness": metrics.jains_fairness,
+                "QoS_Violations": metrics.qos_violations,
+                "Recovery_Time_s": metrics.recovery_time,
+                "Total_Downtime_s": metrics.total_downtime,
+                "Congestion_Intensity": metrics.congestion_intensity,
+                "Satisfaction_Percent": metrics.satisfied_user_ratio * 100,
+                "Peak_Burst_Loss": metrics.peak_burst_loss,
+                "Cell_Edge_Tput": metrics.cell_edge_tput,
+                "Avg_Jitter_ms": metrics.avg_jitter,
+                "Avg_SINR_dB": metrics.avg_sinr,
+                "Avg_RSRP_dBm": metrics.avg_rsrp,
+                "Avg_HO_per_UE": metrics.avg_handover_count,
+                "Avg_Inference_ms": metrics.avg_inference_time,
+                # Efficiency
+                "SpectralEfficiency_bps_Hz": metrics.spectral_efficiency,
+                "EnergyEfficiency_Mbps_W": metrics.energy_efficiency,
+                "Model_Params": metrics.model_params,
+                # Phase 2
+                "HO_Success_Rate": metrics.handover_success_rate,
+                "E2_Loop_Latency_ms": metrics.e2_loop_latency,
+                "RIC_Overhead_Msgs_s": metrics.ric_message_overhead,
+                "Control_Stability": metrics.control_stability,
+                # Composite Scores
+                "QoS_Score": metrics.qos_score,
+                "Reliability_Score": metrics.reliability_score,
+                "Resource_Score": metrics.resource_score,
+                "Buffer_Score": metrics.buffer_score,
+                "PHY_Score": metrics.phy_score,
+                "RIC_Score": metrics.ric_score,
+                "Architecture_Score": metrics.architecture_score,
+            }
+            # Add config parameters (prefixed)
+            for key, value in config.items():
+                row[f"Config_{key}"] = value
+            rows.append(row)
+        
+        df = pd.DataFrame(rows)
+        os.makedirs(os.path.dirname(save_path), exist_ok=True)
+        
+        # Append if file exists, write header if new
+        write_header = not os.path.exists(save_path)
+        df.to_csv(save_path, mode='a', header=write_header, index=False)
+        print(f"  📊 Results appended to {save_path}")

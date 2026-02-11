@@ -1,6 +1,9 @@
 #!/bin/bash
 # Script to run Kafka natively (since Docker is unavailable)
 
+# Move to the project root directory
+cd "$(dirname "$0")/.." || exit 1
+
 KAFKA_VER="3.6.1"
 SCALA_VER="2.13"
 KAFKA_TGZ="kafka_${SCALA_VER}-${KAFKA_VER}.tgz"
@@ -18,21 +21,19 @@ if [ ! -d "$KAFKA_DIR" ]; then
     tar -xzf "$KAFKA_TGZ"
 fi
 
-cd "$KAFKA_DIR"
-
 # 2. Cleanup previous logs
 rm -rf /tmp/kafka-logs /tmp/zookeeper
 
 # 3. Start Zookeeper
 echo "Starting Zookeeper..."
-mkdir -p ../telemetry
-bin/zookeeper-server-start.sh config/zookeeper.properties > ../telemetry/zookeeper.log 2>&1 &
+mkdir -p telemetry
+"$KAFKA_DIR/bin/zookeeper-server-start.sh" "$KAFKA_DIR/config/zookeeper.properties" > telemetry/zookeeper.log 2>&1 &
 ZOOKEEPER_PID=$!
 sleep 5
 
 # 4. Start Kafka Broker
 echo "Starting Kafka Broker..."
-bin/kafka-server-start.sh config/server.properties > ../telemetry/kafka.log 2>&1 &
+"$KAFKA_DIR/bin/kafka-server-start.sh" "$KAFKA_DIR/config/server.properties" > telemetry/kafka.log 2>&1 &
 KAFKA_PID=$!
 sleep 5
 

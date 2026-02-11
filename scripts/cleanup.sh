@@ -19,6 +19,10 @@ echo -e "Cleaning log files (.log, .jsonl)..."
 rm -f *.log *.jsonl
 rm -f results/*.log results/*.jsonl
 
+# 3. Remove telemetry logs
+echo -e "Cleaning telemetry logs..."
+rm -f telemetry/*.log telemetry/*.jsonl
+
 # 3. Optional: Remove results and models (commented out by default)
 # echo -e "Cleaning results and models..."
 # rm -rf results/*

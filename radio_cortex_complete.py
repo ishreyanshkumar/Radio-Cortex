@@ -517,143 +517,122 @@ def evaluate_single_scenario(
         num_cells=config.num_cells
     )
     
-    # 1. Evaluate Baseline (Static RAN - No AI)
-    env = create_oran_env(config)
-    # Worker function to notify of start with full name
-    controller_label = f"Baseline ({scenario_name})"
-    env = create_oran_env(config)
-    try:
-        results['Baseline'] = evaluator.evaluate_controller(
-            baseline, env, controller_label,
-            progress_queue=progress_queue,
-            task_id=f"{scenario_idx}_baseline"
-        )
-    finally:
-        env.close()
+    # Build config dict for CSV logging
+    eval_config = {
+        'num_ues': config.num_ues,
+        'num_cells': config.num_cells,
+        'sim_time': config.sim_time,
+        'kpm_interval_ms': config.kpm_interval_ms,
+        'system_bandwidth_mhz': config.system_bandwidth_mhz,
+        'model_type': getattr(config, 'model_type', 'unknown'),
+        'model_path': model_path,
+    }
 
-    # 2. Evaluate Radio-Cortex (PPO RL Agent)
-    controller_label = f"Radio-Cortex ({scenario_name})"
-    try:
-        checkpoint = torch.load(model_path, map_location='cpu')
-        state_dict = checkpoint['policy_state_dict']
-        
-        # Detect dimensions from state_dict (if standard MLP)
-        stored_action_dim = 0
-        stored_state_dim = 0
-        try:
-            if 'actor_mean.0.bias' in state_dict:
-                stored_action_dim = state_dict['actor_mean.0.bias'].shape[0]
-            if 'feature_net.0.weight' in state_dict:
-                 stored_state_dim = state_dict['feature_net.0.weight'].shape[1]
-        except Exception:
-            pass
-        
-        # Verify if it matches current config
-        expected_state_dim = config.num_ues * 12 + config.num_cells * 5
-        expected_action_dim = config.num_cells * 7 + config.num_ues
-        
-        # Detect model type from config or checkpoint
-        model_type = getattr(config, 'model_type', 'bdh')
-        print(f"      [INFO] Initializing {model_type.upper()} Policy...")
-        
-        if model_type == 'bdh':
-            from policies.bdh_policy import BDHPolicy
-            policy = BDHPolicy(expected_state_dim, expected_action_dim, device='cpu').to('cpu')
-        elif model_type == 't1':
-            from policies.transformer1 import TransformerPolicy1
-            policy = TransformerPolicy1(expected_state_dim, expected_action_dim, device='cpu').to('cpu')
-        elif model_type == 't2':
-            from policies.transformer2 import TransformerPolicy2
-            policy = TransformerPolicy2(expected_state_dim, expected_action_dim, device='cpu').to('cpu')
-        else:  # 'nn' or default
-            state_dim = expected_state_dim
-            action_dim = expected_action_dim
-            if stored_action_dim != expected_action_dim or stored_state_dim != expected_state_dim:
-                detected_ues = stored_action_dim - (config.num_cells * 7)
-                config.num_ues = detected_ues
-                state_dim = stored_state_dim
-                action_dim = stored_action_dim
-            from policies.neural_networks import ActorCritic
-            policy = ActorCritic(state_dim, action_dim).to('cpu')
-        
-        # Load weights
-        try:
-            policy.load_state_dict(state_dict, strict=False)
-            print(f"      [INFO] Loaded {model_type.upper()} weights from {model_path}")
-        except Exception as e:
-            print(f"      [WARN] Could not load weights (using random init): {e}")
-        
-    except Exception as e:
-        print(f"      [ERROR] Could not load model {model_path}: {e}")
-        raise
-        
-    rc_agent = RadioCortexAgent(config.num_ues, config.num_cells, policy_model=policy)
-    
-    # Check for VecNormalize stats
-    vec_normalize_path = str(Path(model_path).parent / f"vec_normalize_{Path(model_path).stem}.pkl")
-    use_vec_normalize = os.path.exists(vec_normalize_path) and VEC_ENV_AVAILABLE
-    
-    if use_vec_normalize:
-        print(f"      [INFO] Found VecNormalize stats at {vec_normalize_path}. Wrapping env...")
-        # Create dummy vec env to support VecNormalize
-        def make_env():
-            return create_oran_env(config)
-        
-        # We need to import inside function or ensure it's available
-        from stable_baselines3.common.vec_env import DummyVecEnv, VecNormalize
-        env = DummyVecEnv([make_env])
-        env = VecNormalize.load(vec_normalize_path, env)
-        # Disable training mode for eval
-        env.training = False
-        env.norm_reward = False
-    else:
+    # Decoupled evaluation: run ONLY baseline or ONLY AI based on model_type
+    if model_path == "base":
+        # ── Baseline ONLY ──
         env = create_oran_env(config)
+        controller_label = f"Baseline ({scenario_name})"
+        try:
+            results['Baseline'] = evaluator.evaluate_controller(
+                baseline, env, controller_label,
+                progress_queue=progress_queue,
+                task_id=f"{scenario_idx}_baseline"
+            )
+        finally:
+            env.close()
+    else:
+        # ── RL Model ONLY ──
+        controller_label = f"Radio-Cortex ({scenario_name})"
+        try:
+            checkpoint = torch.load(model_path, map_location='cpu')
+            state_dict = checkpoint['policy_state_dict']
+            
+            # Detect dimensions from state_dict (if standard MLP)
+            stored_action_dim = 0
+            stored_state_dim = 0
+            try:
+                if 'actor_mean.0.bias' in state_dict:
+                    stored_action_dim = state_dict['actor_mean.0.bias'].shape[0]
+                if 'feature_net.0.weight' in state_dict:
+                     stored_state_dim = state_dict['feature_net.0.weight'].shape[1]
+            except Exception:
+                pass
+            
+            # Verify if it matches current config
+            expected_state_dim = config.num_ues * 12 + config.num_cells * 5
+            expected_action_dim = config.num_cells * 7 + config.num_ues
+            
+            # Detect model type from config or checkpoint
+            model_type = getattr(config, 'model_type', 'bdh')
+            print(f"      [INFO] Initializing {model_type.upper()} Policy...")
+            
+            if model_type == 'bdh':
+                from policies.bdh_policy import BDHPolicy
+                policy = BDHPolicy(expected_state_dim, expected_action_dim, device='cpu').to('cpu')
+            elif model_type == 't1':
+                from policies.transformer1 import TransformerPolicy1
+                policy = TransformerPolicy1(expected_state_dim, expected_action_dim, device='cpu').to('cpu')
+            elif model_type == 't2':
+                from policies.transformer2 import TransformerPolicy2
+                policy = TransformerPolicy2(expected_state_dim, expected_action_dim, device='cpu').to('cpu')
+            else:  # 'nn' or default
+                state_dim = expected_state_dim
+                action_dim = expected_action_dim
+                if stored_action_dim != expected_action_dim or stored_state_dim != expected_state_dim:
+                    detected_ues = stored_action_dim - (config.num_cells * 7)
+                    config.num_ues = detected_ues
+                    state_dim = stored_state_dim
+                    action_dim = stored_action_dim
+                from policies.neural_networks import ActorCritic
+                policy = ActorCritic(state_dim, action_dim).to('cpu')
+            
+            # Load weights
+            try:
+                policy.load_state_dict(state_dict, strict=False)
+                print(f"      [INFO] Loaded {model_type.upper()} weights from {model_path}")
+            except Exception as e:
+                print(f"      [WARN] Could not load weights (using random init): {e}")
+            
+        except Exception as e:
+            print(f"      [ERROR] Could not load model {model_path}: {e}")
+            raise
+            
+        rc_agent = RadioCortexAgent(config.num_ues, config.num_cells, policy_model=policy)
+        
+        # Check for VecNormalize stats
+        vec_normalize_path = str(Path(model_path).parent / f"vec_normalize_{Path(model_path).stem}.pkl")
+        use_vec_normalize = os.path.exists(vec_normalize_path) and VEC_ENV_AVAILABLE
+        
+        if use_vec_normalize:
+            print(f"      [INFO] Found VecNormalize stats at {vec_normalize_path}. Wrapping env...")
+            def make_env():
+                return create_oran_env(config)
+            from stable_baselines3.common.vec_env import DummyVecEnv, VecNormalize
+            env = DummyVecEnv([make_env])
+            env = VecNormalize.load(vec_normalize_path, env)
+            env.training = False
+            env.norm_reward = False
+        else:
+            env = create_oran_env(config)
 
-    try:
-        results['Radio-Cortex'] = evaluator.evaluate_controller(
-            rc_agent, env, controller_label,
-            progress_queue=progress_queue,
-            task_id=f"{scenario_idx}_rl"
-        )
-    finally:
-        env.close()
+        try:
+            results['Radio-Cortex'] = evaluator.evaluate_controller(
+                rc_agent, env, controller_label,
+                progress_queue=progress_queue,
+                task_id=f"{scenario_idx}_rl"
+            )
+        finally:
+            env.close()
 
-    # Generate visualizations (Worker can do this efficiently)
-    results_dir = Path("results")
-    results_dir.mkdir(parents=True, exist_ok=True)
-    
-    VisualizationSuite.plot_comparison(
+    # Log results to central CSV (appending)
+    VisualizationSuite.log_to_csv(
         results,
         scenario_name,
-        save_path=str(results_dir / f"{scenario_name}_comparison.png")
-    )
-    VisualizationSuite.plot_radar(
-        results,
-        scenario_name,
-        save_path=str(results_dir / f"{scenario_name}_radar.png")
-    )
-    
-    # Generate LaTeX Table
-    VisualizationSuite.generate_latex_table(
-        {scenario_name: results},
-        save_path=str(results_dir / f"{scenario_name}_metrics.tex")
-    )
-
-    # Generate CSV Report
-    VisualizationSuite.generate_csv(
-        {scenario_name: results},
-        save_path=str(results_dir / f"{scenario_name}_metrics.csv")
+        config=eval_config
     )
     
     return scenario_name, results
-
-
-
-# ============================================================================
-# Demo Mode
-# ============================================================================
-
-
 
 # ============================================================================
 # Main Entry Point
@@ -680,8 +659,8 @@ def main():
         help='ns-3 Scenario (e.g., flash_crowd, mobility_storm, traffic_burst). Use "all" to rotate through all scenarios.'
     )
     primary.add_argument('--total-timesteps', type=int, default=100000, help='Total training/eval steps')
-    primary.add_argument('--model', type=str, default='bdh', choices=['bdh', 'nn', 't1', 't2'],
-                         help='Policy architecture: bdh (default), nn (MLP), t1 (Transformer 1), t2 (Transformer 2)')
+    primary.add_argument('--model', type=str, default='bdh', choices=['bdh', 'nn', 't1', 't2', 'base'],
+                         help='Policy architecture: bdh (default), nn (MLP), t1 (Transformer 1), t2 (Transformer 2), base (baseline only)')
     primary.add_argument('--n-envs', type=int, default=4, help='Number of parallel environments')
     primary.add_argument('--model-path', type=str, default=None, help='Path to save/load model (default: models/radiocortex_{model}.pt)')
     primary.add_argument('--device', type=str, default=None, help='Compute device (cpu/cuda)')
@@ -789,8 +768,11 @@ def main():
         )
     
     elif args.mode == 'eval':
-        if args.model_path is None:
-             args.model_path = f"models/radiocortex_{args.model}.pt"
+        # Handle 'base' model special case
+        if args.model == 'base':
+            args.model_path = "base"
+        elif args.model_path is None:
+            args.model_path = f"models/radiocortex_{args.model}.pt"
 
         results = evaluate_radio_cortex(
             config=config,

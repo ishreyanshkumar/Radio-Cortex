@@ -1,6 +1,9 @@
 #!/bin/bash
 set -e
 
+# Move to the project root directory
+cd "$(dirname "$0")/.." || exit 1
+
 # Transformer 1 Training
 echo "Testing Transformer 1 Training..."
 /home/hp/.venv/bin/python radio_cortex_complete.py --mode train --model t1 --total-timesteps 1000 --n-envs 1

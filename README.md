@@ -55,13 +55,13 @@ cd ../../..
 #### A. Bootstrap & Start Kafka
 Kafka and Zookeeper must be running for the E2 interface to function. If this is a fresh setup, use the bootstrap script:
 ```bash
-bash run_kafka_native.sh
+bash scripts/run_kafka_native.sh
 ```
 *Note: This will download Kafka binaries, install `librdkafka-dev`, and start the services.*
 
 For subsequent starts, you can use:
 ```bash
-./start_kafka.sh
+./scripts/start_kafka.sh
 ```
 
 #### B. Start Training
@@ -98,7 +98,7 @@ You can customize the training hyperparameters and environment settings via comm
 | `--scenario` | `flash_crowd` | ns-3 Scenario (12 available). Use `all` for randomized training. |
 | `--total-timesteps` | 100000 | Total training or evaluation steps. |
 | `--n-envs` | 4 | Number of parallel environments (vectorized). |
-| `--model` | `bdh` | Policy architecture: `bdh` (Transformer), `nn` (MLP), `t1`/`t2` (Experimental Transformers). |
+| `--model` | `bdh` | Policy architecture: `bdh` (Transformer), `nn` (MLP), `t1`/`t2` (Experimental Transformers), `base` (baseline only, no AI). |
 | `--model-path` | `models/radiocortex_{model}.pt` | Path to save/load model checkpoint. |
 | `--device` | `None` | Compute device (`cpu` or `cuda`). |
 | `--config` | `None` | Path to JSON config file to override any argument. |
@@ -172,112 +172,84 @@ Radio-Cortex supports 12 diverse scenarios that stress-test different aspects of
 | `spectrum_crunch` | Resources | Multi-band management (Carrier Aggregation). | Spectral Efficiency |
 
 
-**Example: Run a custom scenario**
+### 🚀 CLI Training Reference
+
+Train the O-RAN Intelligent Controller using PPO (Proximal Policy Optimization).
+
+#### 1. Standard Training (Single Scenario)
 ```bash
-python3 radio_cortex_complete.py --mode train --scenario iot_tsunami --num-ues 50
+# General usage
+python3 radio_cortex_complete.py --mode train --scenario <name>
+
+# Example: High-load Flash Crowd training
+python3 radio_cortex_complete.py --mode train --scenario flash_crowd --num-ues 50
 ```
 
-**Example: Run full benchmark suite**
-```bash
-python3 radio_cortex_complete.py --mode eval
-```
-
-### 🎲 Multi-Scenario Training (Domain Randomization)
-
-Train a single robust model that cycles through **all 12 scenarios** automatically. Each episode randomly selects a different scenario, teaching the agent to generalize.
-
+#### 2. Multi-Scenario Training (Domain Randomization)
+Recommended for creating a "Universal Agent" that generalizes across all network conditions.
 ```bash
 python3 radio_cortex_complete.py --mode train --scenario all --total-timesteps 50000
 ```
 
-#### Why It Works
-The `RewardEngine` is **scenario-agnostic** — it only reads metrics (throughput, delay, loss, SINR, queue, load), not the scenario name. All 12 scenarios output the same KPM metrics, so the reward function works universally.
-
-#### Pros & Cons
-
-| ✅ Pros | ❌ Cons |
-|:---|:---|
-| **Generalization** — One model handles any condition | **Longer Training** — 3-5x more timesteps needed |
-| **Robustness** — Won't fail on unseen scenarios | **Jack of All Trades** — May not be "best" on any single scenario |
-| **Competition Advantage** — "Universal agent" is impressive | **Harder to Debug** — Issues harder to trace to specific scenario |
-| **No Wasted Data** — Every scenario contributes | **Reward Variance** — Different scenarios may have different reward scales |
-
-#### Mitigations
-
-| Issue | Solution |
-|:---|:---|
-| Long training time | Increase `--total-timesteps` to 50,000-100,000 |
-| Scenario bias | Already mitigated — reward is normalized and clipped per-component |
-| Debugging | Check `telemetry/action_logs.jsonl` to trace which scenario produced bad rewards |
-| Reward variance | Clipping bounds ([-10, +2]) prevent any scenario from dominating |
-
-
-### 🔍 Verification & Testing
-Before running a long training session, verify that the data pipeline is working.
-
-- **E2 Interface Check:** Confirm real KPM metrics (throughput, delay) are flowing from ns-3 via Kafka.
-  ```bash
-  python3 verify_kpm_data.py
-  ```
-- **RL Pipeline Check:** Train a tiny agent on a mock environment (no ns-3 needed) to verify the neural network and PPO logic.
-  ```bash
-  python3 quick_train.py
-  ```
-
-### 🏋️ Training Variations
-Train on specific scenarios or customize hyperparameters.
+#### 3. Parallel & Performance Training
+Scale simulations across CPU cores to drastically reduce wall-clock training time.
 ```bash
-python3 radio_cortex_complete.py --mode train --num-ues 50 --num-cells 10 --scenario mobility_storm
+# Run 4 parallel simulations (requires optimized build)
+python3 radio_cortex_complete.py --mode train --scenario all --n-envs 4
+
+# Custom architecture (e.g., Transformer 1)
+python3 radio_cortex_complete.py --mode train --model t1 --scenario all
 ```
 
-**Hyperparameter Tuning:**
+#### 4. Advanced Hyperparameter Tuning
 ```bash
-python3 radio_cortex_complete.py --mode train --learning-rate 0.0001 --gamma 0.995 --batch-size 128
+python3 radio_cortex_complete.py --mode train \
+    --learning-rate 0.0001 \
+    --gamma 0.995 \
+    --batch-size 128 \
+    --model-path models/custom_agent.pt
 ```
-
-**Using a Config File:**
-```bash
-python3 radio_cortex_complete.py --mode train --config experiments/exp1_config.json
-```
-
-#### ⚡ Performance Tuning (Recommended)
-
-To significantly speed up training (from >50s/step to <0.3s/step):
-
-1. **Compile Optimized Build** (Critical for parallel mode):
-   ```bash
-   cd ns-allinone-3.46.1/ns-3.46.1
-   ./ns3 configure -d optimized --enable-examples --enable-tests --disable-python
-   ./ns3 build -j$(nproc)
-   ```
-   *Radio-Cortex will automatically detect and prioritize this binary.*
-
-2. **Run in Parallel**:
-   Use `--n-envs 4` (or more, depending on CPU cores) to train multiple simulations simultaneously.
-   ```bash
-   python radio_cortex_complete.py --mode train --scenario all --n-envs 4
-   ```
-
-3. **Persistent Simulation**:
-   The environment automatically keeps Kafka connections alive across episodes to prevent rebalancing delays.
 
 ---
 
-## 📊 Evaluation & Benchmarking
-Evaluate a trained model against a static baseline (no AI control).
+## 📊 CLI Evaluation & Benchmarking
 
+Benchmarking compares the AI agent against the **Static-RAN** baseline. Results are appended to `results/experiment_results.csv`.
+
+#### 1. Baseline Benchmark (AI disabled)
+Run this first to establish a "ground truth" performance floor.
 ```bash
-# Run full evaluation suite (all 12 scenarios) in parallel (Recommended)
-python3 radio_cortex_complete.py --mode eval --n-envs 4
-
-# Sequential Evaluation (slower)
-python3 radio_cortex_complete.py --mode eval --n-envs 1
+python3 radio_cortex_complete.py --mode eval --model base --scenario flash_crowd
 ```
 
-**Outputs (saved in `results/`):**
-- **Comparison Plots (`*_comparison.png`):** Detailed bar charts comparing all KPIs (TP, Delay, Loss, SINR, etc.) for both AI and Baseline.
-- **Health Radar (`*_radar.png`):** High-level view across 6 composite scores (QoS, Reliability, Resources, Buffer, PHY, RIC).
-- **Metric Reports (`*_metrics.csv`, `*_metrics.tex`):** Raw data and ready-to-use LaTeX tables for reports.
+#### 2. AI Agent Evaluation
+```bash
+# Evaluate the default BDH model on mobility storm
+python3 radio_cortex_complete.py --mode eval --model bdh --scenario mobility_storm
+
+# Evaluate in parallel across 4 environments (Faster)
+python3 radio_cortex_complete.py --mode eval --model bdh --scenario all --n-envs 4
+```
+
+#### 3. Comparing Specific Architectures
+```bash
+# Compare Transformer 1 vs Transformer 2
+python3 radio_cortex_complete.py --mode eval --model t1 --scenario flash_crowd
+python3 radio_cortex_complete.py --mode eval --model t2 --scenario flash_crowd
+```
+
+#### 4. Interaction & Results Visualization
+View metrics, radar charts, and comparison tables.
+```bash
+# Option A: Standalone HTML (Recommended)
+python3 -m http.server 8080 -d results
+# Open http://localhost:8080/dashboard.html
+
+# Option B: Streamlit (Python required)
+streamlit run results/visualize_results.py
+```
+
+
 
 **Metrics Tracked:**
 (For detailed formulas and definitions, see [`README_EVAL.md`](README_EVAL.md))
@@ -404,7 +376,7 @@ Computes saliency maps (gradient * input) to understand which state features (e.
 *   `_saliency()`: Backpropagates from the action mean to the input state.
 *   usage: `python interpret_policy.py --checkpoint models/radio_cortex.pt`
 
-### 6. `train_quick.sh`
+### 6. `scripts/train_quick.sh`
 **Role:** Fast Verification.
 Runs `radio_cortex_complete.py` with minimal steps (100 timesteps) to verify the pipeline implementation quickly.
 
@@ -491,7 +463,7 @@ graph LR
 ## 🐛 Troubleshooting
 
 ### "Failed to connect to Kafka"
--   Ensure you ran `./start_kafka.sh`.
+-   Ensure you ran `./scripts/start_kafka.sh`.
 -   Check logs: `cat kafka.log` or `cat zookeeper.log`.
 -   Verify ports: `netstat -tuln | grep 9092`
 

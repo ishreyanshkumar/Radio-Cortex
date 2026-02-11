@@ -419,7 +419,7 @@ class NS3Interface:
         )
         if self.config.verbose:
             print(f"ns-3 process started (PID: {self.ns3_process.pid}, Logs: ns3_out{self.config.topic_suffix}.log)")
-        time.sleep(2) # Give ns-3 time to initialize
+        time.sleep(4) # Give ns-3 time to initialize (increased for parallel stability)
         
         # Connect to Kafka (if not already connected)
         if not self.kafka_consumer:

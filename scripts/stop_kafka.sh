@@ -1,6 +1,8 @@
 #!/bin/bash
-SCRIPT_DIR=$(cd -- "$(dirname "${BASH_SOURCE[0]}")" && pwd)
-KAFKA_DIR="$SCRIPT_DIR/kafka_2.13-3.6.1"
+# Move to the project root directory
+cd "$(dirname "$0")/.." || exit 1
+
+KAFKA_DIR="kafka_2.13-3.6.1"
 
 if [ ! -x "$KAFKA_DIR/bin/kafka-server-stop.sh" ]; then
 	echo "Kafka binaries not found in $KAFKA_DIR. Nothing to stop." >&2
