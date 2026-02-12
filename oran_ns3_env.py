@@ -14,7 +14,7 @@ import time
 import sys
 import os
 import random
-from typing import Dict, List, Tuple, Optional
+from typing import Dict, List, Tuple, Optional, Union
 from dataclasses import dataclass
 from enum import Enum
 

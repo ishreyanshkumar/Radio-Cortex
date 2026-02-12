@@ -35,8 +35,8 @@ if command -v apt-get &> /dev/null; then
 fi
 
 cd ns-3-allinone/ns-3.46.1
-./ns3 configure -d optimized --enable-examples --enable-tests
-./ns3 build
+USER=nonroot ./ns3 configure -d optimized --enable-examples --enable-tests
+USER=nonroot ./ns3 build
 
 echo "Linking scenario..."
 cd scratch
