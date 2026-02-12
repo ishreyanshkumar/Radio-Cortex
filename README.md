@@ -493,18 +493,6 @@ graph LR
 
 ---
 
-## 🐛 Troubleshooting
-
-### "Failed to connect to Kafka"
--   Ensure you ran `./scripts/start_kafka.sh`.
--   Check logs: `cat kafka.log` or `cat zookeeper.log`.
--   Verify ports: `netstat -tuln | grep 9092`
-
-### "No KPM data received"
--   Wait a few seconds for ns-3 to initialize.
--   Check `ns3.log` (created in project root) to see if the simulation crashed.
--   Ensure `oran-congestion-scenario` compiled successfully.
-
 ### 🖥️ Convergence Dashboard (Rich UI)
 
 Radio-Cortex features a high-fidelity convergence dashboard that replaces standard text logs with mission-critical training metrics.
