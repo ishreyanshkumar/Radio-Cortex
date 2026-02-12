@@ -61,9 +61,15 @@ mkdir -p "$MODEL_DIR"
 
 run_stage() {
     local stage=$1
-    local timesteps=$2
-    local scenario=$3
-    local desc=$4
+    local desc=$2
+    
+    # Get configuration from STAGES array
+    local config_str=${STAGES[$stage]}
+    
+    # Extract scenario and timesteps from config_str
+    # Format: --scenario <scENario> --total-timesteps <steps>
+    local scenario=$(echo "$config_str" | grep -oP '(?<=--scenario )\S+')
+    local timesteps=$(echo "$config_str" | grep -oP '(?<=--total-timesteps )\d+')
 
     echo ""
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
@@ -91,8 +97,7 @@ run_stage() {
         echo "  [DRY RUN] Would run: python3 radio_cortex_complete.py --mode train \\"
         echo "      --scenario $scenario --model $MODEL --n-envs $N_ENVS \\"
         echo "      --total-timesteps $timesteps --model-path $model_path \\"
-        echo "      --sim-time $SIM_TIME --learning-rate $LR --batch-size $BATCH_SIZE \\"
-        echo "      --rollout-steps $ROLLOUT_STEPS --gamma $GAMMA"
+        echo "      --sim-time $SIM_TIME --learning-rate $LR --batch-size $BATCH_SIZE"
         return 0
     fi
 
@@ -117,8 +122,6 @@ run_stage() {
         --log-interval "$LOG_INTERVAL" \
         --checkpoint-interval "$CHECKPOINT_INTERVAL" \
         $DEVICE_FLAG
-
-    echo "  ✅ Stage $stage complete → $model_path"
 }
 
 # =============================================================================
@@ -132,6 +135,77 @@ run_stage() {
 # automatically adjusts difficulty based on agent performance.
 # =============================================================================
 
+# ==============================================================================
+# CURRICULUM STAGES DEFINITION
+# ==============================================================================
+
+declare -A STAGES
+
+# Stage 1: Foundation - Flash Crowd Mastery
+# Goal: Learn basic load balancing.
+# Duration: 10,000 steps (Plan: 5k * 2)
+STAGES[1]="--scenario flash_crowd --total-timesteps 10000"
+
+# Stage 2: Energy Patterns Introduction
+# Mix: Flash Crowd: 20%, Sleepy Campus: 80%
+# Duration: 16,000 steps (Plan: 8k * 2)
+STAGES[2]="--scenario flash_crowd:0.2,sleepy_campus:0.8 --total-timesteps 16000"
+
+# Stage 3: PHY Layer Robustness
+# Mix: Flash: 15%, Sleepy: 15%, Urban Canyon: 70%
+# Duration: 20,000 steps (Plan: 10k * 2)
+STAGES[3]="--scenario flash_crowd:0.15,sleepy_campus:0.15,urban_canyon:0.7 --total-timesteps 20000"
+
+# Stage 4: Handover Dynamics - Mobility Storm
+# Mix: Flash: 10%, Sleepy: 10%, Urban: 10%, Mobility: 70%
+# Duration: 30,000 steps (Plan: 15k * 2)
+STAGES[4]="--scenario flash_crowd:0.1,sleepy_campus:0.1,urban_canyon:0.1,mobility_storm:0.7 --total-timesteps 30000"
+
+# Stage 5: Extreme Overload - Traffic Burst
+# Mix: Prev 4: 8% each (32%), Traffic Burst: 68%
+# Duration: 40,000 steps (Plan: 20k * 2)
+STAGES[5]="--scenario flash_crowd:0.08,sleepy_campus:0.08,urban_canyon:0.08,mobility_storm:0.08,traffic_burst:0.68 --total-timesteps 40000"
+
+# Stage 6: Multi-Objective - Mixed Reality Slicing
+# Mix: Prev 5: 7% each (35%), Mixed Reality: 65%
+# Duration: 40,000 steps (Plan: 20k * 2)
+STAGES[6]="--scenario flash_crowd:0.07,sleepy_campus:0.07,urban_canyon:0.07,mobility_storm:0.07,traffic_burst:0.07,mixed_reality:0.65 --total-timesteps 40000"
+
+# Stage 7: Non-Stationarity - Adversarial Environment
+# Mix: Prev 6: 6% each (36%), Adversarial: 64%
+# Duration: 36,000 steps (Plan: 18k * 2)
+STAGES[7]="--scenario flash_crowd:0.06,sleepy_campus:0.06,urban_canyon:0.06,mobility_storm:0.06,traffic_burst:0.06,mixed_reality:0.06,adversarial:0.64 --total-timesteps 36000"
+
+# Stage 8: Advanced Handover - Ping-Pong Prevention
+# Mix: Prev 7: 5% each (35%), Ping-Pong: 65%
+# Duration: 50,000 steps (Plan: 25k * 2)
+STAGES[8]="--scenario flash_crowd:0.05,sleepy_campus:0.05,urban_canyon:0.05,mobility_storm:0.05,traffic_burst:0.05,mixed_reality:0.05,adversarial:0.05,ping_pong:0.65 --total-timesteps 50000"
+
+# Stage 9: Mass Coordination - Commuter Rush
+# Mix: Prev 8: 4.5% each (36%), Commuter Rush: 64%
+# Duration: 60,000 steps (Plan: 30k * 2)
+STAGES[9]="--scenario flash_crowd:0.045,sleepy_campus:0.045,urban_canyon:0.045,mobility_storm:0.045,traffic_burst:0.045,mixed_reality:0.045,adversarial:0.045,ping_pong:0.045,commuter_rush:0.64 --total-timesteps 60000"
+
+# Stage 10: Control Plane - IoT Tsunami
+# Mix: Prev 9: 4% each (36%), IoT Tsunami: 64%
+# Duration: 70,000 steps (Plan: 35k * 2)
+STAGES[10]="--scenario flash_crowd:0.04,sleepy_campus:0.04,urban_canyon:0.04,mobility_storm:0.04,traffic_burst:0.04,mixed_reality:0.04,adversarial:0.04,ping_pong:0.04,commuter_rush:0.04,iot_tsunami:0.64 --total-timesteps 70000"
+
+# Stage 11: URLLC Excellence - Ambulance Priority
+# Mix: Prev 10: 3.5% each (35%), Ambulance: 65%
+# Duration: 80,000 steps (Plan: 40k * 2)
+STAGES[11]="--scenario flash_crowd:0.035,sleepy_campus:0.035,urban_canyon:0.035,mobility_storm:0.035,traffic_burst:0.035,mixed_reality:0.035,adversarial:0.035,ping_pong:0.035,commuter_rush:0.035,iot_tsunami:0.035,ambulance:0.65 --total-timesteps 80000"
+
+# Stage 12: Spectrum Mastery - Carrier Aggregation
+# Mix: Prev 11: 3.2% each (35.2%), Spectrum Crunch: 64.8%
+# Duration: 100,000 steps (Plan: 50k * 2)
+STAGES[12]="--scenario flash_crowd:0.032,sleepy_campus:0.032,urban_canyon:0.032,mobility_storm:0.032,traffic_burst:0.032,mixed_reality:0.032,adversarial:0.032,ping_pong:0.032,commuter_rush:0.032,iot_tsunami:0.032,ambulance:0.032,spectrum_crunch:0.648 --total-timesteps 100000"
+
+# Stage 13: Multi-Scenario Mixing (Consolidation)
+# Mix: Uniform random (8.33% each)
+# Duration: 100,000 steps (Plan: 50k * 2)
+STAGES[13]="--scenario all --total-timesteps 100000"
+
 echo ""
 echo "╔══════════════════════════════════════════════════════════════╗"
 echo "║     RADIO-CORTEX: 14-STAGE CURRICULUM TRAINING             ║"
@@ -139,43 +213,43 @@ echo "║     Model: $MODEL | Envs: $N_ENVS | Start: Stage $START_STAGE         
 echo "╚══════════════════════════════════════════════════════════════╝"
 
 # Stage 1: Flash Crowd (easiest – learn basic throughput control)
-[[ $START_STAGE -le 1 ]]  && run_stage 1  10000 "flash_crowd"         "Flash Crowd (Bootstrap)"
+[[ $START_STAGE -le 1 ]]  && run_stage 1  "Flash Crowd (Bootstrap)"
 
 # Stage 2: Sleepy Campus (easy – learn energy awareness)
-[[ $START_STAGE -le 2 ]]  && run_stage 2  16000 "sleepy_campus"       "Sleepy Campus (Energy)"
+[[ $START_STAGE -le 2 ]]  && run_stage 2  "Sleepy Campus (Energy)"
 
 # Stage 3: Urban Canyon (medium – learn SINR recovery)
-[[ $START_STAGE -le 3 ]]  && run_stage 3  20000 "urban_canyon"        "Urban Canyon (PHY Recovery)"
+[[ $START_STAGE -le 3 ]]  && run_stage 3  "Urban Canyon (PHY Recovery)"
 
 # Stage 4: Mobility Storm (medium – learn handover control)
-[[ $START_STAGE -le 4 ]]  && run_stage 4  30000 "mobility_storm"      "Mobility Storm (Handovers)"
+[[ $START_STAGE -le 4 ]]  && run_stage 4  "Mobility Storm (Handovers)"
 
 # Stage 5: Traffic Burst (medium – learn burst absorption)
-[[ $START_STAGE -le 5 ]]  && run_stage 5  40000 "traffic_burst"       "Traffic Burst (Queue Mgmt)"
+[[ $START_STAGE -le 5 ]]  && run_stage 5  "Traffic Burst (Queue Mgmt)"
 
 # Stage 6: Mixed Reality (hard – learn slice isolation)
-[[ $START_STAGE -le 6 ]]  && run_stage 6  40000 "mixed_reality"       "Mixed Reality (Slicing)"
+[[ $START_STAGE -le 6 ]]  && run_stage 6  "Mixed Reality (Slicing)"
 
 # Stage 7: Adversarial (hard – learn stability under chaos)
-[[ $START_STAGE -le 7 ]]  && run_stage 7  36000 "adversarial"         "Adversarial (Stability)"
+[[ $START_STAGE -le 7 ]]  && run_stage 7  "Adversarial (Stability)"
 
 # Stage 8: Handover Ping-Pong (hard – learn hysteresis tuning)
-[[ $START_STAGE -le 8 ]]  && run_stage 8  50000 "handover_ping_pong"  "Ping-Pong (Hysteresis)"
+[[ $START_STAGE -le 8 ]]  && run_stage 8  "Ping-Pong (Hysteresis)"
 
 # Stage 9: Commuter Rush (hard – learn mass mobility)
-[[ $START_STAGE -le 9 ]]  && run_stage 9  60000 "commuter_rush"       "Commuter Rush (Scale)"
+[[ $START_STAGE -le 9 ]]  && run_stage 9  "Commuter Rush (Scale)"
 
 # Stage 10: IoT Tsunami (hard – learn massive device scheduling)
-[[ $START_STAGE -le 10 ]] && run_stage 10 70000 "iot_tsunami"         "IoT Tsunami (Device Scale)"
+[[ $START_STAGE -le 10 ]] && run_stage 10 "IoT Tsunami (Device Scale)"
 
 # Stage 11: Ambulance (critical – learn QoS priority)
-[[ $START_STAGE -le 11 ]] && run_stage 11 80000 "ambulance"           "Ambulance (QoS Priority)"
+[[ $START_STAGE -le 11 ]] && run_stage 11 "Ambulance (QoS Priority)"
 
 # Stage 12: Spectrum Crunch (critical – learn spectrum efficiency)
-[[ $START_STAGE -le 12 ]] && run_stage 12 100000 "spectrum_crunch"    "Spectrum Crunch (Efficiency)"
+[[ $START_STAGE -le 12 ]] && run_stage 12 "Spectrum Crunch (Efficiency)"
 
 # Stage 13: Multi-Mix (all 12 scenarios, generalization)
-[[ $START_STAGE -le 13 ]] && run_stage 13 100000 "all"                "Multi-Mix (Generalization)"
+[[ $START_STAGE -le 13 ]] && run_stage 13 "Multi-Mix (Generalization)"
 
 # Stage 14: Adaptive (infinite – continuous improvement)
 if [[ $START_STAGE -le 14 ]]; then

@@ -36,11 +36,9 @@ class NS3Config:
     e2_port: int = 36421
     kpm_interval_ms: int = 100  # E2SM-KPM reporting interval
     system_bandwidth_mhz: float = 10.0 # System Bandwidth
-    # Scenario to run (12 available: flash_crowd, mobility_storm, traffic_burst, handover_ping_pong, 
-    # sleepy_campus, ambulance, adversarial, commuter_rush, mixed_reality, urban_canyon, iot_tsunami, spectrum_crunch)
-    scenario: str = "flash_crowd"
-    # Multi-scenario training: if set, reset() will randomly pick from this list each episode
-    scenarios: Optional[List[str]] = None
+    # Scenario Selection (Multi-scenario Training)
+    scenarios: Optional[Union[List[str], Dict[str, float]]] = None  # List of names OR {name: weight}
+    scenario: str = 'flash_crowd'     # Currently active scenarion
     # Topic suffix for parallel environment isolation (e.g., "_0", "_1")
     topic_suffix: str = ""
     # Verbosity control for CLI output
@@ -790,10 +788,21 @@ class ORANns3Env(gym.Env):
             } for u in range(self.config.num_ues)}
         }
         
-        # Multi-scenario training: randomly select a scenario each episode
-        # This Domain Randomization ensures the policy is robust to different traffic patterns.
+        # Multi-scenario training: select scenario for this episode
         if self.config.scenarios:
-            self.config.scenario = random.choice(self.config.scenarios)
+            if isinstance(self.config.scenarios, dict):
+                # Weighted sampling from dictionary
+                scenarios = list(self.config.scenarios.keys())
+                weights = list(self.config.scenarios.values())
+                # Normalize weights if they don't sum to 1
+                total_w = sum(weights)
+                if total_w > 0:
+                    weights = [w / total_w for w in weights]
+                    self.config.scenario = np.random.choice(scenarios, p=weights)
+            else:
+                # Uniform random from list
+                self.config.scenario = random.choice(self.config.scenarios)
+                
             if self.config.verbose:
                 print(f"\n🎲 [Multi-Scenario] Starting episode with scenario: {self.config.scenario}")
         

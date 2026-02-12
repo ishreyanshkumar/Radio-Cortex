@@ -741,32 +741,39 @@ def main():
     
     # Execute mode
     if args.mode == 'train':
-        # Multi-scenario training: if --scenario all, rotate through all scenarios
-        ALL_SCENARIOS = [
-            "flash_crowd", "mobility_storm", "traffic_burst", "handover_ping_pong",
-            "sleepy_campus", "ambulance", "adversarial", "commuter_rush",
-            "mixed_reality", "urban_canyon", "iot_tsunami", "spectrum_crunch"
-        ]
-        
-        if config.scenario == "all":
-            # ----------------------------------------------------------------
-            # MULTI-SCENARIO TRAINING (Domain Randomization)
-            # ----------------------------------------------------------------
-            # Providing "all" triggers the agent to cycle through ALL 12 available
-            # scenarios. This improves generalization by preventing the agent
-            # from overfitting to a single traffic pattern.
-            #
-            # The environment's reset() method will randomly select a new
-            # scenario from this list at the start of each episode.
-            config.scenarios = ALL_SCENARIOS
-            config.scenario = ALL_SCENARIOS[0]  # Initial placeholder (randomized on reset)
-            print(f"🎲 Multi-Scenario Training ENABLED: rotating through {len(ALL_SCENARIOS)} scenarios")
+        # Multi-scenario training support:
+        # Handle weighted scenarios (e.g. "sc1:0.8,sc2:0.2") OR comma-separated list
+        if ',' in args.scenario or ':' in args.scenario:
+            if ':' in args.scenario:
+                # Parse weights: "sc1:0.8,sc2:0.2" -> {"sc1": 0.8, "sc2": 0.2}
+                pairs = args.scenario.split(',')
+                scenarios_dict = {}
+                for p in pairs:
+                    if ':' in p:
+                        name, weight = p.split(':')
+                        scenarios_dict[name.strip()] = float(weight)
+                    else:
+                        scenarios_dict[p.strip()] = 1.0 # Default weight
+                config.scenarios = scenarios_dict
+                config.scenario = list(scenarios_dict.keys())[0]
+            else:
+                # Simple list: "sc1,sc2,sc3"
+                config.scenarios = [s.strip() for s in args.scenario.split(',')]
+                config.scenario = config.scenarios[0]
+        elif args.scenario == 'all':
+            # Rotate through all standard scenarios if "all" specified
+            config.scenarios = [
+                'flash_crowd', 'sleepy_campus', 'urban_canyon', 'mobility_storm',
+                'traffic_burst', 'mixed_reality', 'adversarial', 'ping_pong',
+                'commuter_rush', 'iot_tsunami', 'ambulance', 'spectrum_crunch'
+            ]
+            config.scenario = config.scenarios[0]
+        else:
+            config.scenario = args.scenario
+
         if args.model_path is None:
             args.model_path = f"models/radiocortex_{args.model}.pt"
 
-        if config.scenario is None:
-            config.scenario = "flash_crowd"
-            
         trainer = train_radio_cortex(
             config=config,
             total_timesteps=args.total_timesteps,
