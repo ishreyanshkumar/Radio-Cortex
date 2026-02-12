@@ -1,6 +1,6 @@
 # Radio-Cortex: O-RAN RL Congestion Control
 
-Radio-Cortex is a closed-loop control system that uses Reinforcement Learning (RL) to optimize network parameters (Tx Power, Schedulers) in an O-RAN compliant ns-3 simulation. It demonstrates a real-time feedback loop where an RL agent (PPO) receives KPM (Key Performance Metrics) from ns-3 via Kafka and sends back RC (RAN Control) actions.
+Radio-Cortex is a closed-loop control system that uses Reinforcement Learning (RL) to optimize network parameters (Tx Power, Scheduler Weight, Hysteresis) in an O-RAN compliant ns-3 simulation. It demonstrates a real-time feedback loop where an RL agent (PPO) receives KPM (Key Performance Metrics) from ns-3 via Kafka and sends back RC (RAN Control) actions.
 
 ### 🏆 Key Innovations & Solved Challenges
 Radio-Cortex pushes the boundary of O-RAN intelligence by solving three fundamental problems in applying RL to wireless networks:
@@ -9,13 +9,13 @@ Radio-Cortex pushes the boundary of O-RAN intelligence by solving three fundamen
     -   *Problem*: Standard Neural Networks require fixed input sizes (breaking when UEs join/leave). Furthermore, standard Transformers use "Causal Masking," which blinds early tokens (Cells) from seeing later tokens (UEs).
     -   *Solution*: We adapted the **Dragon Hatchling (BDH)** architecture into a **Bidirectional Policy**. By removing the causal mask, we allow Base Stations to fully "attend" to all User tokens simultaneously, regardless of their position in the sequence. This creates a truly **Scale-Free Agent** that trains on 5 UEs but successfully controls 100 UEs without retraining.
 
-2.  **Hybrid Reward Engine (Multi-Objective Safety)**:
-    -   *Problem*: Network optimization is a zero-sum game (e.g., High Throughput vs. Low Energy). Naive RL agents often "reward hack" by starving edge users to maximize average stats.
-    -   *Solution*: We implemented a **Two-Stage Safety Clipping** engine. It fuses **Logarithmic Utility** (for $\alpha$-fairness), **Quadratic Barriers** (for SLA guarantees), and **IQX Models** (for QoE/Packet Loss) into a single scalar. This prevents any single metric from dominating the gradient, ensuring stable, fair convergence.
+2.  **Curriculum Reward Engine (Multi-Objective Safety)**:
+    -   *Problem*: Network optimization is a zero-sum game (e.g., High Throughput vs. Low Energy). Naive RL agents often "reward hack" or receive persistently negative rewards, causing learning collapse.
+    -   *Solution*: We implemented a **3-Level Curriculum Reward Engine** with *Survival Bias*. **Level 0 (Bootstrap)**: Only Throughput reward + a constant `+1.0` bias (guarantees positive rewards). **Level 1 (Quality)**: Adds Delay and Queue penalties at >50% UE satisfaction. **Level 2 (Reliability)**: Adds Loss, Energy, and Load penalties at >80% satisfaction. This ensures stable, progressive learning.
 
-3.  **Robust Differential Control (Delta-Action)**:
-    -   *Problem*: RL agents often output erratic "bang-bang" control actions (e.g., oscillating Tx Power between Min/Max), causing signaling storms and network instability.
-    -   *Solution*: We utilize **Differential Control Heads**. Instead of absolute values, the agent outputs continuous *deltas* (e.g., $\Delta P_{tx} = +0.5$ dBm). This forces the agent to learn smooth, hill-climbing optimization trajectories that respect physical hardware constraints.
+3.  **Compressed Action Space (29-Dim Differential Control)**:
+    -   *Problem*: RL agents often output erratic "bang-bang" control actions and large action spaces (41+ dims) cause slow convergence.
+    -   *Solution*: We compressed the action space to **29 dimensions** (3 per cell: TxPower, SchedulerWeight, Hysteresis + 20 UE priority weights) and use **Differential Control** (deltas instead of absolute values). Fixed parameters (HARQ, NoiseFigure, MacDelay) are set to sensible defaults. This gives a 29% reduction while retaining all high-impact control levers.
 
 ## 🚀 End-to-End Installation Guide
 
@@ -313,39 +313,37 @@ python3 -m http.server 8080
 | | RIC Message Overhead | E2 messages per second. |
 | | Control Stability | AI decision consistency score (0-100). |
 
-### 🧠 Hybrid Reward Engine
+### 🧠 Curriculum Reward Engine
 
-Radio-Cortex uses a multi-objective **"Hybrid Reward Engine"** that balances individual user experience with global network efficiency. The engine uses a **Two-Stage Safety Clipping** mechanism to prevent any single metric from dominating the gradients:
+Radio-Cortex uses a **3-Level Curriculum Reward Engine** that progressively introduces penalties as the agent improves. A **Survival Bias** of `+1.0` ensures rewards are always positive during the bootstrap phase.
 
-#### � 1. UE-Level Utility (User Satisfaction)
-Computed per-UE and averaged across the network to ensure fairness. Uses E2SM-KPM `ue_metrics`.
+#### 📊 Curriculum Levels
 
-*   **Throughput ($\alpha$-fairness):** $r_{tput} = \text{clip}\left( W_{tput} \cdot \log(1 + \frac{T}{T_{max}}), [-0.5, 5.0] \right)$
-    Logarithmic utility ensures the agent prioritizes users with low throughput over those already well-served.
-*   **Delay (Two-Tier):** $r_{delay} = \text{clip}\left( -\left( W_{d1} \cdot \frac{D}{D_{max}} + W_{d2} \cdot \frac{\max(0, D - D_{sla})^2}{D_{max}^2} \right), [-5.0, 0.0] \right)$
-    Combines linear penalty for general delay and a **Quadratic SLA Barrier** that penalizes exponentially if delay exceeds 50ms.
-*   **Packet Loss (IQX Model):** $r_{loss} = \text{clip}\left( -W_{loss} \cdot (\exp(\beta \cdot L) - 1), [-5.0, 0.0] \right)$
-    Penalizes loss exponentially, capturing the non-linear impact of packet drops on QoE using the Independent Quality X (IQX) model.
-*   **Spectral Efficiency:** $r_{se} = \text{clip}\left( W_{se} \cdot \log_2(1 + SINR), [0.0, 2.0] \right)$
-    Uses Shannon Capacity to provide a "keep-alive" signal, rewarding good channel quality even during silent periods.
+| Level | Trigger | Active Components | Reward Range |
+|:---|:---|:---|:---|
+| **0 (Bootstrap)** | Start | Throughput + SE + Bias | **+1.1 to +2.0** (always positive) |
+| **1 (Quality)** | >50% UE satisfied | + Delay + Queue penalties | ~+0.5 to +1.5 |
+| **2 (Reliability)** | >80% UE satisfied | + Loss + Energy + Load penalties | ~-0.5 to +1.0 |
+
+#### 📐 1. UE-Level Utility (User Satisfaction)
+Computed per-UE and averaged across the network to ensure fairness.
+
+*   **Throughput ($\alpha$-fairness):** $r_{tput} = W_{tput} \cdot \log(1 + T/T_{max})$
+*   **Delay (Two-Tier, Level ≥ 1):** Linear penalty + Quadratic SLA Barrier (both gated by curriculum)
+*   **Packet Loss (IQX, Level ≥ 2):** $r_{loss} = -W_{loss} \cdot (\exp(\beta \cdot L) - 1)$
+*   **Spectral Efficiency:** $r_{se} = W_{se} \cdot \log_2(1 + SINR)$
 
 #### 🏗️ 2. Cell-Level Utility (Network Efficiency)
-Computed per-cell to optimize infrastructure scaling. Uses E2SM-KPM `cell_metrics`.
 
-*   **Energy Efficiency:** $r_{energy} = \text{clip}\left( -W_{energy} \cdot \frac{RB_{used}}{RB_{max}}, [-2.0, 0.0] \right)$
-    Penalizes excessive Resource Block (RB) usage to encourage power-efficient scheduling.
-*   **Load Balancing:** $r_{load} = \text{clip}\left( -W_{load} \cdot \sigma(Loads), [-2.0, 0.0] \right)$
-    Penalizes high standard deviation in cell loads, driving the agent to distribute users across base stations.
-*   **Queue Congestion:** $r_{queue} = \text{clip}\left( -W_{queue} \cdot \frac{Q}{Q_{max}}, [-2.0, 0.0] \right)$
-    Penalizes growing buffers as an "early warning" signal to prevent delay spikes before they hit the application layer.
+*   **Queue Congestion (Level ≥ 1):** Early warning signal for delay spikes.
+*   **Energy Efficiency (Level ≥ 2):** Penalizes excessive RB usage.
+*   **Load Balancing (Level ≥ 2):** Penalizes high variance in cell loads.
 
-#### ⚖️ 3. Agent Stability (Action Smoothing)
-*   **Action Smoothing:** $r_{smooth} = \text{clip}\left( -W_{smooth} \cdot \frac{\|a_t - a_{t-1}\|}{\text{range}(a)}, [-1.0, 0.0] \right)$
-    Penalizes "jerky" or oscillatory control decisions to ensure network stability and reduce signaling overhead.
+#### ⚖️ 3. Agent Stability + Survival Bias
+*   **Action Smoothing:** Penalizes jerky control decisions.
+*   **Survival Bias:** Constant `+1.0` added to ensure positive rewards at Level 0.
 
-#### 🔴 Stage 2: Total Reward Clipping
-Finally, the aggregate reward is clipped once more to ensure overall learning stability:
-$$R_{total} = \text{clip}\left( \sum r_{ue} + \sum r_{cell} + r_{smooth}, [-10.0, 2.0] \right)$$
+$$R_{total} = \text{clip}\left( \sum r_{ue} + \sum r_{cell} + r_{smooth} + \text{BIAS}, [-10.0, 5.0] \right)$$
 
 ---
 
@@ -378,10 +376,11 @@ This script manages the lifecycle of the training process, initializes the agent
 converts ns-3 simulation into a standard OpenAI Gym interface (observation, action, reward).
 
 *   **`ORANns3Env`**: The Gym Environment class.
-    *   `step(action)`: Takes an RL action, sends it to ns-3, waits for the next KPM report, and returns (state, reward, done).
+    *   `step(action)`: Takes an RL action (29 dims), sends it to ns-3, waits for the next KPM report, and returns (state, reward, done).
     *   `reset()`: Restarts the ns-3 simulation subprocess.
     *   `_compute_reward(e2_msg)`: Delegates to `RewardEngine`.
-    *   **`RewardEngine`**: Hybrid reward logic combining 8 components: Throughput (Log Utility), Delay (Linear+SLA), Packet Loss (IQX), Spectral Efficiency, Energy Efficiency, Load Balancing, Queue Congestion, and Action Smoothing.
+    *   **`RewardEngine`**: 3-Level Curriculum reward engine with Survival Bias. Combines 8 components (Throughput, Delay, Loss, SE, Energy, Load, Queue, Smoothing) gated by curriculum levels.
+    *   **Action Space**: 29 dimensions — 3 per cell (TxPower, SchedulerWeight, Hysteresis) + 20 UE priority weights. Uses differential control (deltas).
 *   **`NS3Interface`**: Handles low-level communication.
     *   `start_simulation()`: Spawns the `./ns3 run ...` subprocess.
     *   `send_rc_control(actions)`: Serializes actions to JSON and sends via Kafka `e2_rc_control` topic.
@@ -397,10 +396,12 @@ Implements the PPO algorithm from scratch using PyTorch.
     *   `update_policy()`: Performs the Gradient Descent update steps on the Actor and Critic networks.
 
 ### 4. Policy Architectures Supported:
-*   **BDH** (Default): Baby Dragon Hatchling (Scale-Free Transformer)
-*   **GPT-2** (`gpt2`): Standard Decoder-Only Transformer
+All policies use **state-dependent exploration** (learned log-std heads) for adaptive exploration.
+
+*   **BDH** (Default): Baby Dragon Hatchling (Scale-Free Transformer) — UE/Cell tokenization, bidirectional attention
+*   **GPT-2** (`gpt2`): Standard Decoder-Only Transformer — Causal attention over time
 *   **Transformer-XL** (`trxl`): Segment-Level Recurrence
-*   **Linear Transformer** (`linear`): O(T) Kernel Attention
+*   **Linear Transformer** (`linear`): O(T) Kernel Attention (Katharopoulos)
 *   **Universal Transformer** (`universal`): Weight Sharing
 *   **Reformer** (`reformer`): Bucketed Attention
 *   **MLP** (`nn`): Simple Feed-Forward Baseline
@@ -555,15 +556,22 @@ print(f'Mean Reward: {np.mean([d[\"reward\"] for d in data]):.4f}')"
 
 ## 🔬 Advanced Workflows
 
-### Curriculum Learning Loop
-Train on progressively harder scenarios (Small -> Medium -> Large network).
+### Built-in Reward Curriculum
+Radio-Cortex features an **automatic 3-level reward curriculum** that handles progressive difficulty internally:
+- **Level 0 (Bootstrap)**: Agent learns throughput maximization with guaranteed positive rewards (+1.0 bias)
+- **Level 1 (Quality)**: Delay and Queue penalties activate when >50% UEs are satisfied
+- **Level 2 (Reliability)**: Full penalty set activates when >80% UEs are satisfied
+
+The curriculum level and success rate are displayed in the training dashboard (`Lvl` and `Succ` columns).
+
+### Network Size Curriculum (Manual)
+Train on progressively harder scenarios (Small → Medium → Large network).
 
 ```bash
 # Stage 1: Small Network
 python3 radio_cortex_complete.py --mode train --num-ues 5 --num-cells 2 --total-timesteps 5000 --model-path models/stage1.pt
 
-# Stage 2: Medium Network (Load Stage 1 model?? - currently training from scratch)
-# To implement true curriculum, you'd load the previous model.
+# Stage 2: Medium Network
 python3 radio_cortex_complete.py --mode train --num-ues 20 --num-cells 3 --total-timesteps 10000 --model-path models/stage2.pt
 
 # Stage 3: Large Network
