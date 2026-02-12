@@ -143,7 +143,7 @@ def main() -> None:
     state, names = _build_state_and_names(metrics, num_ues, num_cells)
 
     state_dim = len(state)
-    action_dim = num_cells * 7 + num_ues  # Matches current ORANns3Env
+    action_dim = num_cells * 3 + num_ues  # Matches current ORANns3Env
 
     if args.action_index < 0 or args.action_index >= action_dim:
         print(f"Error: action-index must be in [0, {action_dim - 1}]")

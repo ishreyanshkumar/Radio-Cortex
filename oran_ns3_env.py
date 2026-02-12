@@ -946,7 +946,7 @@ class ORANns3Env(gym.Env):
     def _parse_action(self, action: np.ndarray) -> Dict:
         """
         Convert RL action to E2SM-RC control messages.
-        Simplified: 2 dims per cell (TxPower, SchedulerWeight) + 1 per UE.
+        Simplified: 3 dims per cell (TxPower, SchedulerWeight, Hysteresis) + 1 per UE.
         Fixed params (HARQ, Hysteresis, etc.) use sensible defaults.
         """
         # Ensure action is a flat 1-D array (VecEnv may pass scalars or 0-d arrays)

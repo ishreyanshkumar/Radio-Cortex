@@ -378,26 +378,30 @@ class EvaluationRunner:
         return metrics
 
     def _parse_state(self, state_arr, config) -> Dict:
-        """Convert flattened numpy state back to dict for heuristic controllers"""
+        """Convert flattened numpy state back to dict for heuristic controllers.
+        
+        State layout (from _extract_state in oran_ns3_env.py):
+          Per-UE (12 features): throughput, delay, loss, sinr, rsrp, rsrq,
+                                ul_rbs, rb_allocated, cqi, rsrp_var, rsrq_var, buffer
+          Per-Cell (5 features): queue_length, rb_utilization, tx_power, cell_load, avg_rb_request
+        """
         state_dict = {}
         
-        # We mainly need cell metrics for the Heuristic controller
-        offset = config.num_ues * 4
-        
-        # Approximate packet loss per cell from state_arr
-        # State: [UE_DL_TP, UE_DL_LOSS, UE_DL_DELAY, UE_SINR] * num_ues
-        # Heuristic needs cell-level loss. We average UE losses.
-        ue_losses = state_arr[1:offset:4]
+        ue_features = 12
+        cell_features = 5
+        ue_offset = config.num_ues * ue_features
+
+        # Extract per-UE packet loss (index 2 within each 12-feature block)
+        ue_losses = state_arr[2:ue_offset:ue_features]
         global_avg_loss = np.mean(ue_losses) if len(ue_losses) > 0 else 0.0
         
         for cell_id in range(config.num_cells):
-            idx = offset + cell_id * 3
-            state_dict[f'cell_{cell_id}_queue'] = state_arr[idx] * 1000
-            state_dict[f'cell_{cell_id}_rb_util'] = state_arr[idx+1] 
-            state_dict[f'cell_{cell_id}_power'] = state_arr[idx+2] * 36.0 + 10.0
+            idx = ue_offset + cell_id * cell_features
+            state_dict[f'cell_{cell_id}_queue'] = state_arr[idx] * 1000       # queue_length (scaled)
+            state_dict[f'cell_{cell_id}_rb_util'] = state_arr[idx + 1]        # rb_utilization
+            state_dict[f'cell_{cell_id}_power'] = state_arr[idx + 2] * 36.0 + 10.0  # tx_power (denorm)
             
-            # Real-ish association: UEs are usually assigned to cells based on index
-            # for sim simplicity (num_ues / num_cells).
+            # Approximate cell-level loss from associated UEs
             ues_per_cell = config.num_ues // config.num_cells
             start_ue = cell_id * ues_per_cell
             end_ue = (cell_id + 1) * ues_per_cell

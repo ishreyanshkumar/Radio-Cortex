@@ -9,7 +9,7 @@ This file integrates all components:
 4. Evaluation suite
 
 Usage:
-    python radio_cortex_complete.py --mode train --scenario all
+    python radio_cortex_complete.py --mode train --scenario flash_crowd
     python radio_cortex_complete.py --mode eval
 """
 
