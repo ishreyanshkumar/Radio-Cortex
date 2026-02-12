@@ -4,54 +4,76 @@ Radio-Cortex is a closed-loop control system that uses Reinforcement Learning (R
 
 
 ## 🚀 End-to-End Installation Guide
-
-Follow these steps to set up the environment from scratch.
-
+ 
+For a complete, automated setup on Linux:
+```bash
+# 1. Clone the Repositories
+git clone https://github.com/ishreyanshkumar/Radio-Cortex.git
+cd Radio-Cortex
+ 
+# 2. Run the End-to-End Setup Script
+# This will:
+# - Create a virtual environment (.venv)
+# - Install dependencies
+# - Clone and Build ns-3 (Optimized)
+# - Link scenarios
+# - Start Kafka
+bash setup.sh
+```
+ 
+---
+ 
+### Manual Installation Steps (Alternative)
+ 
+If the script fails or you prefer manual control, follow these steps:
+ 
 ### 1. Clone the Repositories
 ```bash
 # Clone the main project
 git clone https://github.com/ishreyanshkumar/Radio-Cortex.git
 cd Radio-Cortex
-
+ 
 # Clone ns-allinone (Official Gitlab Repository)
 git clone https://gitlab.com/nsnam/ns-3-allinone.git
 cd ns-3-allinone
 ./download.py ns-3.46.1
 cd ..
 ```
-
+ 
 ### 2. Set up Python Virtual Environment
 ```bash
 # Create venv in the parent directory (or project root)
 python3 -m venv .venv
-
+ 
 # Activate the virtual environment
 source .venv/bin/activate
-
+ 
 # Install dependencies
 pip install -r requirements.txt
 ```
-
+ 
 ### 3. Build ns-3 & Link Scenario
 ns-3 requires specific libraries (like `librdkafka`) for the O-RAN interface to work.
 ```bash
 # 1. Install librdkafka (system-level)
 sudo apt-get install librdkafka-dev
-
+ 
 # 2. Build ns-3
 cd ns-3-allinone/ns-3.46.1
-
+ 
 ./ns3 configure -d optimized --enable-examples --enable-tests
 ./ns3 build
-
+ 
 # 3. Link the Radio-Cortex scenario into ns-3 scratch
 cd scratch
+rm -rf *  # CLEANUP: Remove default examples to avoid build conflicts
 ln -sf ../../../oran-congestion-scenario.cc .
+ln -sf ../../../CMakeLists.txt .  # Link CMakeLists to register the scenario
 cd ../../..
 ```
-
+ 
 ### 4. Running the Training
-
+ 
 #### A. Bootstrap & Start Kafka
 Kafka and Zookeeper must be running for the E2 interface to function. If this is a fresh setup, use the bootstrap script:
 ```bash
@@ -68,12 +90,14 @@ For subsequent starts, you can use:
 ```bash
 # Ensure venv is active
 source .venv/bin/activate
+```
 
 ### Quick Start
 1. **Train Model**: `python3 radio_cortex_complete.py --mode train --scenario all`
 2. **Clean Workspace**: `bash scripts/cleanup.sh`
 
 # Run Training (Fast Parallel Mode)
+```bash
 python3 radio_cortex_complete.py --mode train --scenario all --n-envs 4 --total-timesteps 50000
 ```
 
@@ -358,13 +382,14 @@ Implements the PPO algorithm from scratch using PyTorch.
     *   `compute_gae()`: Calculates Generalized Advantage Estimation for stable learning.
     *   `update_policy()`: Performs the Gradient Descent update steps on the Actor and Critic networks.
 
-### 4. `neural_networks.py`
-**Role:** Neural Network Architectures.
-Contains the PyTorch definitions for the RL agents.
-
-*   **`ActorCritic`**: The default PPO network.
-    *   `Actor`: Maps state -> action (Gaussian distribution).
-    *   `Critic`: Maps state -> value estimate.
+### 4. Policy Architectures Supported:
+*   **BDH** (Default): Bi-Directional History (Sparse Attention)
+*   **GPT-2** (`gpt2`): Standard Decoder-Only Transformer
+*   **Transformer-XL** (`trxl`): Segment-Level Recurrence
+*   **Linear Transformer** (`linear`): O(T) Kernel Attention
+*   **Universal Transformer** (`universal`): Weight Sharing
+*   **Reformer** (`reformer`): Bucketed Attention
+*   **MLP** (`nn`): Simple Feed-Forward Baseline
 
 ### 5. `interpret_policy.py`
 **Role:** Model Interpretability.

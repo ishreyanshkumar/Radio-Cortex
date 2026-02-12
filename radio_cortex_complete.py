@@ -161,8 +161,15 @@ def train_radio_cortex(
             env = make_vec_env(config, n_envs=n_envs, normalize_obs=True, normalize_reward=True)
             is_vec_env = True
     else:
-        env = create_oran_env(config)
-        is_vec_env = False
+        # Also use VecNormalize for single environment if available (Critical for reward stability)
+        if VEC_ENV_AVAILABLE:
+            print(f"\n🚀 Creating 1 single environment with VecNormalize...")
+            env = make_vec_env(config, n_envs=1, normalize_obs=True, normalize_reward=True)
+            is_vec_env = True
+        else:
+            print("[WARNING] Vectorized env not available. Using raw environment.")
+            env = create_oran_env(config)
+            is_vec_env = False
 
     # Resolve device AFTER forking
     if device is None:
@@ -570,12 +577,21 @@ def evaluate_single_scenario(
             if model_type == 'bdh':
                 from policies.bdh_policy import BDHPolicy
                 policy = BDHPolicy(expected_state_dim, expected_action_dim, device='cpu').to('cpu')
-            elif model_type == 't1':
-                from policies.transformer1 import TransformerPolicy1
-                policy = TransformerPolicy1(expected_state_dim, expected_action_dim, device='cpu').to('cpu')
-            elif model_type == 't2':
-                from policies.transformer2 import TransformerPolicy2
-                policy = TransformerPolicy2(expected_state_dim, expected_action_dim, device='cpu').to('cpu')
+            elif model_type == 'gpt2':
+                from policies.policy_gpt2 import GPT2Policy
+                policy = GPT2Policy(expected_state_dim, expected_action_dim, device='cpu').to('cpu')
+            elif model_type == 'trxl':
+                from policies.policy_trxl import TrXLPolicy
+                policy = TrXLPolicy(expected_state_dim, expected_action_dim, device='cpu').to('cpu')
+            elif model_type == 'linear':
+                from policies.policy_linear import LinearPolicy
+                policy = LinearPolicy(expected_state_dim, expected_action_dim, device='cpu').to('cpu')
+            elif model_type == 'universal':
+                from policies.policy_universal import UniversalPolicy
+                policy = UniversalPolicy(expected_state_dim, expected_action_dim, device='cpu').to('cpu')
+            elif model_type == 'reformer':
+                from policies.policy_reformer import ReformerPolicy
+                policy = ReformerPolicy(expected_state_dim, expected_action_dim, device='cpu').to('cpu')
             else:  # 'nn' or default
                 state_dim = expected_state_dim
                 action_dim = expected_action_dim
@@ -667,8 +683,9 @@ def main():
         help='ns-3 Scenario (e.g., flash_crowd, mobility_storm, traffic_burst). Use "all" to rotate through all scenarios.'
     )
     primary.add_argument('--total-timesteps', type=int, default=100000, help='Total training/eval steps')
-    primary.add_argument('--model', type=str, default='bdh', choices=['bdh', 'nn', 't1', 't2', 'base'],
-                         help='Policy architecture: bdh (default), nn (MLP), t1 (Transformer 1), t2 (Transformer 2), base (baseline only)')
+    primary.add_argument('--model', type=str, default='bdh', 
+                         choices=['bdh', 'nn', 'gpt2', 'trxl', 'linear', 'universal', 'reformer', 'base'],
+                         help='Policy architecture: bdh (default), nn (MLP), gpt2, trxl, linear, universal, reformer, base')
     primary.add_argument('--n-envs', type=int, default=4, help='Number of parallel environments')
     primary.add_argument('--model-path', type=str, default=None, help='Path to save/load model (default: models/radiocortex_{model}.pt)')
     primary.add_argument('--device', type=str, default=None, help='Compute device (cpu/cuda)')

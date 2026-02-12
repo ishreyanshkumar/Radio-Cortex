@@ -78,8 +78,8 @@ class RewardEngine:
         # ── Weights ──────────────────────────────────────────────
         self.W_TPUT      = 1.0      # Throughput (Log Utility)
         self.W_DELAY_LIN = 0.5      # Linear Delay Penalty
-        self.W_DELAY_BAR = 5.0      # Quadratic SLA Barrier
-        self.W_LOSS      = 2.0      # Packet Loss (IQX)
+        self.W_DELAY_BAR = 1.0      # Quadratic SLA Barrier (Relaxed from 5.0)
+        self.W_LOSS      = 1.0      # Packet Loss (IQX) (Relaxed from 2.0)
         self.W_SE        = 0.05     # Spectral Efficiency (keep-alive signal)
         self.W_ENERGY    = 0.5      # Energy Efficiency
         self.W_LOAD      = 1.0      # Load Balancing
@@ -89,15 +89,15 @@ class RewardEngine:
         # ── Thresholds / Normalizers ─────────────────────────────
         self.T_MAX     = 100.0      # Max Throughput (Mbps)
         self.D_MAX     = 100.0      # Normalizing Delay (ms)
-        self.D_SLA     = 50.0       # SLA Threshold (ms) — barrier kicks in after this
-        self.BETA_LOSS = 5.0        # IQX Sensitivity parameter
+        self.D_SLA     = 60.0       # SLA Threshold (ms) — barrier kicks in after this (Relaxed from 50.0)
+        self.BETA_LOSS = 3.0        # IQX Sensitivity parameter (Relaxed from 5.0)
         self.EPSILON   = 1e-6       # Safe log
         self.Q_MAX     = 1000.0     # Queue length normalizer (NEW)
 
         # ── Clip bounds (Stage 1 — per component) ───────────────
         self.CLIP_TPUT   = (-0.5, 5.0)    # log(1+x) for x≥0 is ≥0, but allow small neg for numerical safety
         self.CLIP_DELAY  = (-5.0, 0.0)    # Delay is ALWAYS a penalty (≤0)
-        self.CLIP_LOSS   = (-5.0, 0.0)    # Loss is ALWAYS a penalty (≤0)
+        self.CLIP_LOSS   = (-10.0, 0.0)   # Loss is ALWAYS a penalty (≤0) (Widened from -5.0)
         self.CLIP_SE     = (0.0, 2.0)     # SE is ALWAYS a bonus (≥0)
         self.CLIP_ENERGY = (-2.0, 0.0)    # Energy is ALWAYS a penalty (≤0)
         self.CLIP_LOAD   = (-2.0, 0.0)    # Load imbalance is ALWAYS a penalty (≤0)
@@ -105,7 +105,7 @@ class RewardEngine:
         self.CLIP_SMOOTH = (-1.0, 0.0)    # Smoothing is ALWAYS a penalty (≤0)
 
         # ── Clip bounds (Stage 2 — total) ────────────────────────
-        self.CLIP_TOTAL = (-10.0, 2.0)
+        self.CLIP_TOTAL = (-50.0, 5.0)
 
     def compute(self,
                 e2_msg: E2Message,
@@ -301,7 +301,7 @@ class NS3Interface:
         ns3_path = 'ns3'
         if not os.path.exists(ns3_path):
             # Check for standard nested structure
-            nested_path = os.path.join('ns-allinone-3.46.1', 'ns-3.46.1', 'ns3')
+            nested_path = os.path.join('ns-3-allinone', 'ns-3.46.1', 'ns3')
             if os.path.exists(nested_path):
                 ns3_path = nested_path
             elif os.path.exists(os.path.join('..', 'ns3')):

@@ -125,12 +125,21 @@ class PPOTrainer:
         
         if model_type == 'bdh':
             self.policy = BDHPolicy(state_dim, action_dim, device=device).to(device)
-        elif model_type == 't1':
-            from policies.transformer1 import TransformerPolicy1
-            self.policy = TransformerPolicy1(state_dim, action_dim, device=device).to(device)
-        elif model_type == 't2':
-            from policies.transformer2 import TransformerPolicy2
-            self.policy = TransformerPolicy2(state_dim, action_dim, device=device).to(device)
+        elif model_type == 'gpt2':
+            from policies.policy_gpt2 import GPT2Policy
+            self.policy = GPT2Policy(state_dim, action_dim, device=device).to(device)
+        elif model_type == 'trxl':
+            from policies.policy_trxl import TrXLPolicy
+            self.policy = TrXLPolicy(state_dim, action_dim, device=device).to(device)
+        elif model_type == 'linear':
+            from policies.policy_linear import LinearPolicy
+            self.policy = LinearPolicy(state_dim, action_dim, device=device).to(device)
+        elif model_type == 'universal':
+            from policies.policy_universal import UniversalPolicy
+            self.policy = UniversalPolicy(state_dim, action_dim, device=device).to(device)
+        elif model_type == 'reformer':
+            from policies.policy_reformer import ReformerPolicy
+            self.policy = ReformerPolicy(state_dim, action_dim, device=device).to(device)
         else:
             # Default to Neural Network (MLP)
             self.policy = ActorCritic(state_dim, action_dim, hidden_dim).to(device)
