@@ -107,19 +107,16 @@ source .venv/bin/activate
 ```
 
 ### Quick Start
-1. **Train Model**: `python3 radio_cortex_complete.py --mode train --scenario all`
-2. **Clean Workspace**: `bash scripts/cleanup.sh`
-
-# Run Training (Fast Parallel Mode)
-```bash
-python3 radio_cortex_complete.py --mode train --scenario all --n-envs 4 --total-timesteps 50000
-```
+1. **Curriculum Training** (recommended): `bash scripts/train_curriculum.sh`
+2. **Single Scenario**: `python3 radio_cortex_complete.py --mode train --scenario flash_crowd --total-timesteps 200000`
+3. **Clean Workspace**: `bash scripts/cleanup.sh`
 
 ## 🛠️ Utilities
 
 The `scripts/` directory contains multi-language utilities to assist with development:
 
 - **Cleanup**: `bash scripts/cleanup.sh` - Removes logs, residuals, and caches.
+- **Curriculum Training**: `bash scripts/train_curriculum.sh` - 14-stage progressive training.
 - **Log Analyzer (Go)**: `go run scripts/log_analyzer.go`
 
 ---
@@ -133,9 +130,9 @@ You can customize the training hyperparameters and environment settings via comm
 | Argument | Default | Description |
 |:---|:---|:---|
 | `--mode` | `train` | Operation mode: `train` or `eval`. |
-| `--scenario` | `flash_crowd` | ns-3 Scenario (12 available). Use `all` for randomized training. |
+| `--scenario` | `flash_crowd` | ns-3 Scenario (12 available). Use `all` for random rotation. |
 | `--total-timesteps` | 100000 | Total training or evaluation steps. |
-| `--n-envs` | 4 | Number of parallel environments (vectorized). |
+| `--n-envs` | 4 | Number of parallel environments (vectorized). 16 recommended for BDH. |
 | `--model` | `bdh` | Policy architecture: `bdh` (Transformer), `nn` (MLP), `t1`/`t2` (Experimental Transformers), `base` (baseline only, no AI). |
 | `--model-path` | `models/radiocortex_{model}.pt` | Path to save/load model checkpoint. |
 | `--device` | `None` | Compute device (`cpu` or `cuda`). |
@@ -171,8 +168,23 @@ To reach convergence in minutes rather than hours, use these settings:
 
 **Recommended "Fast & Robust" Command:**
 ```bash
-python3 radio_cortex_complete.py --mode train --scenario all --n-envs 8 --sim-time 30.0 --total-timesteps 50000
+python3 radio_cortex_complete.py --mode train --scenario flash_crowd --n-envs 16 --sim-time 30.0 --total-timesteps 200000
 ```
+
+#### Optimal Hyperparameters (16 envs + BDH)
+
+| Parameter | Default | Optimal (BDH 16-env) | Rationale |
+|:---|:---:|:---:|:---|
+| `--learning-rate` | 3e-4 | **1e-4** | Lower LR stabilizes BDH transformer gradients |
+| `--batch-size` | 256 | **512** | 16 envs × 256 rollout = 4096 samples; larger batch gives stable updates |
+| `--rollout-steps` | 128 | **256** | More transitions per rollout for richer gradient estimates |
+| `--gamma` | 0.99 | **0.995** | Longer horizon helps with delayed rewards (mobility, queue) |
+| `--clip-epsilon` | 0.2 | **0.15** | Tighter clipping prevents large policy jumps |
+| `--ent-coef` | 0.01 | **0.005** | BDH's state-dependent logstd already adapts exploration |
+| `--sim-time` | 60.0 | **30.0** | Sweet spot for episode length vs training speed |
+
+> [!TIP]
+> All optimal hyperparameters are baked into `scripts/train_curriculum.sh`. Just run it.
 
 #### 3. Advanced RL Tuning
 | Argument | Default | Description |
@@ -214,29 +226,33 @@ Radio-Cortex supports 12 diverse scenarios that stress-test different aspects of
 
 Train the O-RAN Intelligent Controller using PPO (Proximal Policy Optimization).
 
-#### 1. Standard Training (Single Scenario)
+#### 1. Curriculum Training (Recommended)
+The 14-stage curriculum progressively introduces harder scenarios while maintaining proficiency on earlier ones.
 ```bash
-# General usage
-python3 radio_cortex_complete.py --mode train --scenario <name>
+# Full curriculum (Stages 1-14, ~652k timesteps)
+bash scripts/train_curriculum.sh
 
-# Example: High-load Flash Crowd training
-python3 radio_cortex_complete.py --mode train --scenario flash_crowd --num-ues 50
+# Resume from Stage 5 (e.g., after a crash)
+bash scripts/train_curriculum.sh --start 5
+
+# Preview the plan without executing
+bash scripts/train_curriculum.sh --dry-run
 ```
 
-#### 2. Multi-Scenario Training (Domain Randomization)
-Recommended for creating a "Universal Agent" that generalizes across all network conditions.
+#### 2. Single Scenario Training
 ```bash
-python3 radio_cortex_complete.py --mode train --scenario all --total-timesteps 50000
+# General usage
+python3 radio_cortex_complete.py --mode train --scenario <name> --total-timesteps 200000
+
+# Example: Flash Crowd with 50 UEs
+python3 radio_cortex_complete.py --mode train --scenario flash_crowd --num-ues 50 --total-timesteps 200000
 ```
 
 #### 3. Parallel & Performance Training
-Scale simulations across CPU cores to drastically reduce wall-clock training time.
 ```bash
-# Run 4 parallel simulations (requires optimized build)
-python3 radio_cortex_complete.py --mode train --scenario all --n-envs 4
-
-# Custom architecture (e.g., Transformer 1)
-python3 radio_cortex_complete.py --mode train --model t1 --scenario all
+# Run 16 parallel simulations on BDH (requires optimized build)
+python3 radio_cortex_complete.py --mode train --scenario flash_crowd --model bdh --n-envs 16 \
+    --total-timesteps 200000 --learning-rate 1e-4 --batch-size 512 --rollout-steps 256
 ```
 
 #### 4. Advanced Hyperparameter Tuning
@@ -244,7 +260,7 @@ python3 radio_cortex_complete.py --mode train --model t1 --scenario all
 python3 radio_cortex_complete.py --mode train \
     --learning-rate 0.0001 \
     --gamma 0.995 \
-    --batch-size 128 \
+    --batch-size 512 \
     --model-path models/custom_agent.pt
 ```
 
@@ -556,26 +572,46 @@ print(f'Mean Reward: {np.mean([d[\"reward\"] for d in data]):.4f}')"
 
 ## 🔬 Advanced Workflows
 
-### Built-in Reward Curriculum
-Radio-Cortex features an **automatic 3-level reward curriculum** that handles progressive difficulty internally:
-- **Level 0 (Bootstrap)**: Agent learns throughput maximization with guaranteed positive rewards (+1.0 bias)
-- **Level 1 (Quality)**: Delay and Queue penalties activate when >50% UEs are satisfied
-- **Level 2 (Reliability)**: Full penalty set activates when >80% UEs are satisfied
-
-The curriculum level and success rate are displayed in the training dashboard (`Lvl` and `Succ` columns).
-
-### Network Size Curriculum (Manual)
-Train on progressively harder scenarios (Small → Medium → Large network).
+### Scenario Curriculum (14-Stage)
+The curriculum script trains on progressively harder scenarios. Each stage loads the previous checkpoint.
 
 ```bash
-# Stage 1: Small Network
-python3 radio_cortex_complete.py --mode train --num-ues 5 --num-cells 2 --total-timesteps 5000 --model-path models/stage1.pt
+# Run the full 14-stage curriculum
+bash scripts/train_curriculum.sh
 
-# Stage 2: Medium Network
-python3 radio_cortex_complete.py --mode train --num-ues 20 --num-cells 3 --total-timesteps 10000 --model-path models/stage2.pt
+# Resume from a specific stage
+bash scripts/train_curriculum.sh --start 7
+```
 
-# Stage 3: Large Network
-python3 radio_cortex_complete.py --mode train --num-ues 40 --num-cells 5 --total-timesteps 20000 --model-path models/stage3.pt
+| Stage | Steps | Primary Scenario | Skill Learned |
+|:---:|:---:|:---|:---|
+| 1 | 10k | Flash Crowd | Basic throughput control |
+| 2 | 16k | Sleepy Campus | Energy awareness |
+| 3 | 20k | Urban Canyon | SINR recovery |
+| 4 | 30k | Mobility Storm | Handover control |
+| 5 | 40k | Traffic Burst | Queue management |
+| 6 | 40k | Mixed Reality | Slice isolation |
+| 7 | 36k | Adversarial | Stability under chaos |
+| 8 | 50k | Handover Ping-Pong | Hysteresis tuning |
+| 9 | 60k | Commuter Rush | Mass mobility |
+| 10 | 70k | IoT Tsunami | Device scale |
+| 11 | 80k | Ambulance | QoS priority |
+| 12 | 100k | Spectrum Crunch | Spectral efficiency |
+| 13 | 100k | All (Multi-Mix) | Generalization |
+| 14 | ∞ | Adaptive | Continuous improvement |
+
+**Total: ~652,000 timesteps** to full mastery.
+
+### Network Size Curriculum (Manual)
+```bash
+# Stage 1: Small Network (5 UEs)
+python3 radio_cortex_complete.py --mode train --num-ues 5 --num-cells 2 --total-timesteps 10000 --model-path models/stage1.pt
+
+# Stage 2: Medium Network (20 UEs)
+python3 radio_cortex_complete.py --mode train --num-ues 20 --num-cells 3 --total-timesteps 20000 --model-path models/stage2.pt
+
+# Stage 3: Large Network (40 UEs)
+python3 radio_cortex_complete.py --mode train --num-ues 40 --num-cells 5 --total-timesteps 40000 --model-path models/stage3.pt
 ```
 
 ### Batch Experiments (Bash Loop)
