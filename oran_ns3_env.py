@@ -187,7 +187,7 @@ class RewardEngine:
         d_barrier = np.maximum(delays - self.D_SLA, 0.0) ** 2              # Tier 2: explodes past SLA
         r_delay = float(-np.mean(
             w_delay_eff * d_norm
-            + (self.W_DELAY_BAR / self.D_MAX ** 2) * d_barrier
+            + w_delay_eff * (self.W_DELAY_BAR / self.D_MAX ** 2) * d_barrier
         ))
         r_delay = float(np.clip(r_delay, *self.CLIP_DELAY))
 
