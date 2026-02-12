@@ -238,7 +238,7 @@ class BDHPolicy(nn.Module):
         out_ue = output_emb[:, self.num_cells:, :]
         
         # 5. Decode Actions
-        act_cell = self.cell_action_head(out_cell)  # (B, 3, 7)
+        act_cell = self.cell_action_head(out_cell)  # (B, 3, 3)
         logstd_cell = self.cell_logstd_head(out_cell)
         
         act_ue = self.ue_action_head(out_ue)        # (B, 20, 1)

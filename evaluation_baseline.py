@@ -218,10 +218,10 @@ class EvaluationRunner:
             step_count = step_i # step_i is current loop index
             if not progress_queue and controller_name == "Radio-Cortex" and step_count % 10 == 0:
                 # Format detailed action summary for display
-                num_cells = (len(action_arr) - env.config.num_ues) // 7
+                num_cells = (len(action_arr) - env.config.num_ues) // 3
                 if num_cells > 0:
-                    c0_actions = action_arr[:7]
-                    ue_priorities = action_arr[num_cells*7:]
+                    c0_actions = action_arr[:3]
+                    ue_priorities = action_arr[num_cells*3:]
                     avg_ue_prio = np.mean(ue_priorities) if len(ue_priorities) > 0 else 0
                     print(f"\n  Step {step_count:>3} │ 🤖 RIC Decision (Cell 0): Power={c0_actions[0]:.1f}dBm │ Scheduler={int(c0_actions[1])} │ Avg UE Prio={avg_ue_prio:.2f}")
             
@@ -409,8 +409,7 @@ class EvaluationRunner:
 
     def _dict_to_action(self, action_dict, action_space) -> np.ndarray:
         """Convert controller action dict to numpy array"""
-        # Action: [tx_power, scheduler, harq, hyster, mac_delay, noise, weight] per cell
-        # defaults
+        # Action: [TxPower, SchedulerWeight, Hysteresis] per cell + UE priorities
         flat_action = []
         num_cells = len(action_dict['tx_power'])
         
@@ -418,29 +417,13 @@ class EvaluationRunner:
              # 1. Tx Power
              flat_action.append(action_dict['tx_power'][i])
              
-             # 2. Scheduler
-             sched = action_dict['scheduler'][i]
-             sched_val = 0.0 if sched == 'PF' else 1.0 # Simple map
-             flat_action.append(sched_val)
-             
-             # 3. HARQ
-             flat_action.append(float(action_dict['harq_retx'][i]))
-             
-             # 4. Hysteresis (default 3.0)
-             flat_action.append(3.0)
-             
-             # 5. MacChDelay (default 0.0)
-             flat_action.append(0.0)
-             
-             # 6. NoiseFigure (default 5.0)
-             flat_action.append(5.0)
-             
-             # 7. SchedulerWeight (default 1.0)
+             # 2. Scheduler Weight (default 1.0)
              flat_action.append(1.0)
              
+             # 3. Hysteresis (default 3.0)
+             flat_action.append(3.0)
+             
         # Pad for UE priority weights (oran_ns3_env expects these)
-        # We need to know num_ues. accessing env config would be better but pass it via argument?
-        # Or just pad with zeros to match action_space size.
         current_len = len(flat_action)
         target_len = action_space.shape[0]
         if current_len < target_len:

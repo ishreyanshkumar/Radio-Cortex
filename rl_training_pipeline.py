@@ -261,11 +261,11 @@ class PPOTrainer:
                     avg_tput, avg_delay, avg_loss = 0.0, 0.0, 0.0
                 
                 # Format detailed action summary for display
-                # Per cell: [Power, Sched, Harq, Hyst, Delay, NF, Weight]
-                num_cells = (len(action_denorm) - self.env.config.num_ues) // 7
+                # Per cell: [TxPower, SchedulerWeight, Hysteresis]
+                num_cells = (len(action_denorm) - self.env.config.num_ues) // 3
                 if num_cells > 0:
-                    c0_actions = action_denorm[:7]
-                    ue_priorities = action_denorm[num_cells*7:]
+                    c0_actions = action_denorm[:3]
+                    ue_priorities = action_denorm[num_cells*3:]
                     avg_ue_prio = np.mean(ue_priorities) if len(ue_priorities) > 0 else 0
                     
                     # print(f"\n[Step {self.total_steps}] 🤖 RIC Decision (Cell 0): Power={c0_actions[0]:.1f}dBm | Sched={int(c0_actions[1])} | Avg UE Prio={avg_ue_prio:.2f}")
