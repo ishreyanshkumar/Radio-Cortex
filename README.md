@@ -8,15 +8,11 @@ Radio-Cortex is a closed-loop control system that uses Reinforcement Learning (R
 ### 🏆 Key Innovations & Solved Challenges
 Radio-Cortex addresses critical RL scaling issues in O-RAN:
 
-1.  **Infinite Memory (BDH Architecture)**:
-    -   *Problem*: Standard Transformers have limited context windows and cannot remember past congestion events.
-    -   *Solution*: Implemented **Bi-Directional History (BDH)** with a recurrent memory mechanism ($\rho, \sigma$) that compresses history into a fixed-size state. This allows the agent to reason about long-term traffic patterns with $O(1)$ inference cost.
-
-2.  **Scale-Free State Space**:
+1.  **Scale-Free Architecture (Baby Dragon Hatchling)**:
     -   *Problem*: Neural Networks typically require fixed input sizes, breaking when the number of UEs changes.
-    -   *Solution*: Refactored `BDHPolicy` to process UEs and Cells as **sets of tokens** via shared encoders. The model is now agnostic to the number of devices (train on 5 UEs, deploy on 100).
+    -   *Solution*: We utilize the **Baby Dragon Hatchling (BDH)** architecture, a flexible Transformer-based model. By processing UEs and Cells as sets of tokens via shared encoders, the model is agnostic to the number of devices (train on 5 UEs, deploy on 100).
 
-3.  **Robust Differential Control**:
+2.  **Robust Differential Control**:
     -   *Problem*: RL agents often output erratic, "bang-bang" control actions (e.g., toggling power between min/max), leading to instability.
     -   *Solution*: Implemented **Differential Control** where the agent outputs *deltas* (e.g., +0.5 dBm) instead of absolute values. This ensures smooth, hill-climbing optimization trajectories.
 
@@ -398,7 +394,7 @@ Implements the PPO algorithm from scratch using PyTorch.
     *   `update_policy()`: Performs the Gradient Descent update steps on the Actor and Critic networks.
 
 ### 4. Policy Architectures Supported:
-*   **BDH** (Default): Bi-Directional History (Sparse Attention)
+*   **BDH** (Default): Baby Dragon Hatchling (Scale-Free Transformer)
 *   **GPT-2** (`gpt2`): Standard Decoder-Only Transformer
 *   **Transformer-XL** (`trxl`): Segment-Level Recurrence
 *   **Linear Transformer** (`linear`): O(T) Kernel Attention
