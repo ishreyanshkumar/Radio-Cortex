@@ -89,7 +89,8 @@ def make_vec_env(
     normalize_obs: bool = True,
     normalize_reward: bool = True,
     use_subprocess: bool = True,
-    seed: Optional[int] = None, # Added seed parameter
+    seed: Optional[int] = None,
+    vec_env_cls: Optional[Any] = None, # Added custom VecEnv class support
 ) -> VecEnv:
     """
     Create a vectorized environment with parallel execution and normalization.
@@ -100,6 +101,7 @@ def make_vec_env(
         normalize_obs: Whether to normalize observations
         normalize_reward: Whether to normalize rewards
         use_subprocess: Use SubprocVecEnv (True) or DummyVecEnv (False)
+        vec_env_cls: Optional custom VecEnv class (overrides use_subprocess)
         
     Returns:
         VecNormalize-wrapped vectorized environment
@@ -114,7 +116,13 @@ def make_vec_env(
     env_fns = [make_env(config, i, seed) for i in range(n_envs)]
     
     # Create vectorized environment
-    if use_subprocess and n_envs > 1:
+    if vec_env_cls is not None:
+        print(f"[VecEnv] Creating {vec_env_cls.__name__} with {n_envs} environments")
+        if vec_env_cls == SubprocVecEnv:
+             vec_env = vec_env_cls(env_fns, start_method='spawn')
+        else:
+             vec_env = vec_env_cls(env_fns)
+    elif use_subprocess and n_envs > 1:
         print(f"[VecEnv] Creating SubprocVecEnv with {n_envs} parallel environments")
         # Use 'spawn' to avoid CUDA initialization deadlocks in forked processes
         vec_env = SubprocVecEnv(env_fns, start_method='spawn')

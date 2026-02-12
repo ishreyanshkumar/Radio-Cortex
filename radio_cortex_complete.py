@@ -39,6 +39,7 @@ from rl_training_pipeline import PPOTrainer, evaluate_policy
 # Optional: Vectorized environment support
 try:
     from vec_env_wrapper import make_vec_env, save_vec_normalize, load_vec_normalize
+    from stable_baselines3.common.vec_env import SubprocVecEnv, DummyVecEnv
     VEC_ENV_AVAILABLE = True
 except ImportError:
     VEC_ENV_AVAILABLE = False
@@ -148,28 +149,21 @@ def train_radio_cortex(
     # Create environment (single or vectorized)
     vec_normalize_path = str(Path(save_path).parent / f"vec_normalize_{Path(save_path).stem}.pkl")
     
-    if n_envs > 1:
-        if not VEC_ENV_AVAILABLE:
-            print("[WARNING] Vectorized env requested but stable-baselines3 not installed.")
-            print("          Falling back to single environment. Install: pip install stable-baselines3")
-            n_envs = 1
-            env = create_oran_env(config)
-            is_vec_env = False
-        else:
-            print(f"\n🚀 Creating {n_envs} parallel environments with VecNormalize...")
-            # IMPORTANT: Create parallel envs BEFORE initializing CUDA to avoid fork issues
-            env = make_vec_env(config, n_envs=n_envs, normalize_obs=True, normalize_reward=True)
-            is_vec_env = True
+    # Create environments (ALWAYS use VecEnv + VecNormalize for consistency)
+    if not VEC_ENV_AVAILABLE:
+        print("[WARNING] Stable-baselines3 not installed. Cannot use VecNormalize/VecEnv.")
+        print("          Training may be unstable due to unscaled rewards! Install: pip install stable-baselines3")
+        env = create_oran_env(config)
+        is_vec_env = False
     else:
-        # Also use VecNormalize for single environment if available (Critical for reward stability)
-        if VEC_ENV_AVAILABLE:
-            print(f"\n🚀 Creating 1 single environment with VecNormalize...")
-            env = make_vec_env(config, n_envs=1, normalize_obs=True, normalize_reward=True)
-            is_vec_env = True
-        else:
-            print("[WARNING] Vectorized env not available. Using raw environment.")
-            env = create_oran_env(config)
-            is_vec_env = False
+        # If n_envs=1, use DummyVecEnv for simpler debugging but still get normalization
+        vec_env_cls = SubprocVecEnv if n_envs > 1 else DummyVecEnv
+        print(f"\n🚀 Creating {n_envs} environment(s) with {vec_env_cls.__name__} and VecNormalize...")
+        
+        # IMPORTANT: Create parallel envs BEFORE initializing CUDA to avoid fork issues
+        env = make_vec_env(config, n_envs=n_envs, vec_env_cls=vec_env_cls, 
+                          normalize_obs=True, normalize_reward=True)
+        is_vec_env = True
 
     # Resolve device AFTER forking
     if device is None:

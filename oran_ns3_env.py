@@ -78,8 +78,8 @@ class RewardEngine:
         # ── Weights ──────────────────────────────────────────────
         self.W_TPUT      = 1.0      # Throughput (Log Utility)
         self.W_DELAY_LIN = 0.5      # Linear Delay Penalty
-        self.W_DELAY_BAR = 1.0      # Quadratic SLA Barrier (Relaxed from 5.0)
-        self.W_LOSS      = 1.0      # Packet Loss (IQX) (Relaxed from 2.0)
+        self.W_DELAY_BAR = 1.0      # Quadratic SLA Barrier (Softened)
+        self.W_LOSS      = 0.5      # Packet Loss (IQX) (Softened)
         self.W_SE        = 0.05     # Spectral Efficiency (keep-alive signal)
         self.W_ENERGY    = 0.5      # Energy Efficiency
         self.W_LOAD      = 1.0      # Load Balancing
@@ -96,8 +96,8 @@ class RewardEngine:
 
         # ── Clip bounds (Stage 1 — per component) ───────────────
         self.CLIP_TPUT   = (-0.5, 5.0)    # log(1+x) for x≥0 is ≥0, but allow small neg for numerical safety
-        self.CLIP_DELAY  = (-5.0, 0.0)    # Delay is ALWAYS a penalty (≤0)
-        self.CLIP_LOSS   = (-10.0, 0.0)   # Loss is ALWAYS a penalty (≤0) (Widened from -5.0)
+        self.CLIP_DELAY  = (-50.0, 0.0)    # Delay is ALWAYS a penalty (≤0)
+        self.CLIP_LOSS   = (-50.0, 0.0)    # Loss is ALWAYS a penalty (≤0)
         self.CLIP_SE     = (0.0, 2.0)     # SE is ALWAYS a bonus (≥0)
         self.CLIP_ENERGY = (-2.0, 0.0)    # Energy is ALWAYS a penalty (≤0)
         self.CLIP_LOAD   = (-2.0, 0.0)    # Load imbalance is ALWAYS a penalty (≤0)
@@ -105,7 +105,7 @@ class RewardEngine:
         self.CLIP_SMOOTH = (-1.0, 0.0)    # Smoothing is ALWAYS a penalty (≤0)
 
         # ── Clip bounds (Stage 2 — total) ────────────────────────
-        self.CLIP_TOTAL = (-50.0, 5.0)
+        self.CLIP_TOTAL = (-100.0, 10.0)
 
     def compute(self,
                 e2_msg: E2Message,
@@ -481,7 +481,7 @@ class NS3Interface:
             last_record = None
 
             while True:
-                records = self.kafka_consumer.poll(timeout_ms=30000)
+                records = self.kafka_consumer.poll(timeout_ms=100)
                 if records:
                     for partition, messages in records.items():
                         if messages:
@@ -811,7 +811,7 @@ class ORANns3Env(gym.Env):
             time.sleep(self.config.kpm_interval_ms / 1000.0)
             e2_msg = self.ns3.receive_kpm_report(
                 wait_for_new=True,
-                max_wait_s=(self.config.kpm_interval_ms / 1000.0) * 1.5
+                max_wait_s=(self.config.kpm_interval_ms / 1000.0) * 5.0
             )
             next_state = self._extract_state(e2_msg)
             

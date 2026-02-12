@@ -1,5 +1,6 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -22,10 +23,14 @@
             --text-secondary: #94a3b8;
             --text-muted: #64748b;
             --border: #1e293b;
-            --glass: rgba(255,255,255,0.04);
+            --glass: rgba(255, 255, 255, 0.04);
         }
 
-        * { margin: 0; padding: 0; box-sizing: border-box; }
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
 
         body {
             font-family: 'Inter', -apple-system, sans-serif;
@@ -35,7 +40,11 @@
             line-height: 1.6;
         }
 
-        .container { max-width: 1400px; margin: 0 auto; padding: 2rem; }
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            padding: 2rem;
+        }
 
         header {
             text-align: center;
@@ -43,6 +52,7 @@
             border-bottom: 1px solid var(--border);
             margin-bottom: 2rem;
         }
+
         header h1 {
             font-size: 2rem;
             font-weight: 700;
@@ -52,7 +62,11 @@
             -webkit-text-fill-color: transparent;
             margin-bottom: 0.5rem;
         }
-        header p { color: var(--text-secondary); font-size: 0.95rem; }
+
+        header p {
+            color: var(--text-secondary);
+            font-size: 0.95rem;
+        }
 
         /* Upload zone */
         .upload-zone {
@@ -65,14 +79,31 @@
             background: var(--glass);
             margin-bottom: 2rem;
         }
-        .upload-zone:hover, .upload-zone.dragover {
+
+        .upload-zone:hover,
+        .upload-zone.dragover {
             border-color: var(--accent-cyan);
-            background: rgba(0,212,255,0.05);
+            background: rgba(0, 212, 255, 0.05);
         }
-        .upload-zone .icon { font-size: 2.5rem; margin-bottom: 0.75rem; }
-        .upload-zone p { color: var(--text-secondary); }
-        .upload-zone .hint { font-size: 0.8rem; color: var(--text-muted); margin-top: 0.5rem; }
-        #fileInput { display: none; }
+
+        .upload-zone .icon {
+            font-size: 2.5rem;
+            margin-bottom: 0.75rem;
+        }
+
+        .upload-zone p {
+            color: var(--text-secondary);
+        }
+
+        .upload-zone .hint {
+            font-size: 0.8rem;
+            color: var(--text-muted);
+            margin-top: 0.5rem;
+        }
+
+        #fileInput {
+            display: none;
+        }
 
         /* Score cards */
         .score-grid {
@@ -81,6 +112,7 @@
             gap: 1rem;
             margin-bottom: 2rem;
         }
+
         .score-card {
             background: var(--bg-card);
             border-radius: 14px;
@@ -90,17 +122,39 @@
             position: relative;
             overflow: hidden;
         }
+
         .score-card::before {
             content: '';
             position: absolute;
-            top: 0; left: 0; right: 0;
+            top: 0;
+            left: 0;
+            right: 0;
             height: 3px;
             background: var(--card-accent, var(--accent-cyan));
         }
-        .score-card:hover { transform: translateY(-2px); border-color: var(--card-accent, var(--accent-cyan)); }
-        .score-card .label { font-size: 0.75rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.5px; }
-        .score-card .value { font-size: 1.75rem; font-weight: 700; margin: 0.25rem 0; }
-        .score-card .unit { font-size: 0.8rem; color: var(--text-secondary); }
+
+        .score-card:hover {
+            transform: translateY(-2px);
+            border-color: var(--card-accent, var(--accent-cyan));
+        }
+
+        .score-card .label {
+            font-size: 0.75rem;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .score-card .value {
+            font-size: 1.75rem;
+            font-weight: 700;
+            margin: 0.25rem 0;
+        }
+
+        .score-card .unit {
+            font-size: 0.8rem;
+            color: var(--text-secondary);
+        }
 
         /* Filters */
         .filters {
@@ -110,8 +164,15 @@
             flex-wrap: wrap;
             align-items: center;
         }
-        .filters label { color: var(--text-secondary); font-size: 0.85rem; font-weight: 500; }
-        .filters select, .filters input {
+
+        .filters label {
+            color: var(--text-secondary);
+            font-size: 0.85rem;
+            font-weight: 500;
+        }
+
+        .filters select,
+        .filters input {
             background: var(--bg-card);
             color: var(--text-primary);
             border: 1px solid var(--border);
@@ -122,7 +183,11 @@
             outline: none;
             min-width: 160px;
         }
-        .filters select:focus, .filters input:focus { border-color: var(--accent-cyan); }
+
+        .filters select:focus,
+        .filters input:focus {
+            border-color: var(--accent-cyan);
+        }
 
         /* Chart containers */
         .charts-grid {
@@ -131,7 +196,12 @@
             gap: 1.5rem;
             margin-bottom: 2rem;
         }
-        @media (max-width: 900px) { .charts-grid { grid-template-columns: 1fr; } }
+
+        @media (max-width: 900px) {
+            .charts-grid {
+                grid-template-columns: 1fr;
+            }
+        }
 
         .chart-panel {
             background: var(--bg-card);
@@ -139,13 +209,17 @@
             padding: 1.5rem;
             border: 1px solid var(--border);
         }
+
         .chart-panel h3 {
             font-size: 0.95rem;
             font-weight: 600;
             color: var(--text-secondary);
             margin-bottom: 1rem;
         }
-        .chart-panel canvas { width: 100% !important; }
+
+        .chart-panel canvas {
+            width: 100% !important;
+        }
 
         /* Data table */
         .table-wrapper {
@@ -156,8 +230,20 @@
             overflow-x: auto;
             margin-bottom: 2rem;
         }
-        .table-wrapper h3 { font-size: 0.95rem; font-weight: 600; color: var(--text-secondary); margin-bottom: 1rem; }
-        table { width: 100%; border-collapse: collapse; font-size: 0.8rem; }
+
+        .table-wrapper h3 {
+            font-size: 0.95rem;
+            font-weight: 600;
+            color: var(--text-secondary);
+            margin-bottom: 1rem;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 0.8rem;
+        }
+
         thead th {
             background: var(--bg-secondary);
             color: var(--accent-cyan);
@@ -168,9 +254,21 @@
             position: sticky;
             top: 0;
         }
-        tbody tr { border-bottom: 1px solid var(--border); transition: background 0.2s; }
-        tbody tr:hover { background: var(--bg-card-hover); }
-        tbody td { padding: 0.5rem 0.75rem; color: var(--text-secondary); white-space: nowrap; }
+
+        tbody tr {
+            border-bottom: 1px solid var(--border);
+            transition: background 0.2s;
+        }
+
+        tbody tr:hover {
+            background: var(--bg-card-hover);
+        }
+
+        tbody td {
+            padding: 0.5rem 0.75rem;
+            color: var(--text-secondary);
+            white-space: nowrap;
+        }
 
         /* Buttons */
         .btn {
@@ -187,13 +285,32 @@
             cursor: pointer;
             transition: all 0.2s;
         }
-        .btn:hover { border-color: var(--accent-cyan); background: var(--bg-card-hover); }
-        .btn-primary { background: linear-gradient(135deg, var(--accent-cyan), var(--accent-purple)); border: none; font-weight: 600; }
-        .btn-primary:hover { opacity: 0.9; }
 
-        .actions { display: flex; gap: 0.75rem; margin-bottom: 2rem; flex-wrap: wrap; }
+        .btn:hover {
+            border-color: var(--accent-cyan);
+            background: var(--bg-card-hover);
+        }
 
-        .hidden { display: none !important; }
+        .btn-primary {
+            background: linear-gradient(135deg, var(--accent-cyan), var(--accent-purple));
+            border: none;
+            font-weight: 600;
+        }
+
+        .btn-primary:hover {
+            opacity: 0.9;
+        }
+
+        .actions {
+            display: flex;
+            gap: 0.75rem;
+            margin-bottom: 2rem;
+            flex-wrap: wrap;
+        }
+
+        .hidden {
+            display: none !important;
+        }
 
         /* Radar labels */
         .radar-legend {
@@ -202,6 +319,7 @@
             gap: 0.75rem;
             margin-top: 0.75rem;
         }
+
         .radar-legend span {
             display: flex;
             align-items: center;
@@ -209,9 +327,15 @@
             font-size: 0.75rem;
             color: var(--text-secondary);
         }
-        .radar-legend .dot { width: 10px; height: 10px; border-radius: 50%; }
+
+        .radar-legend .dot {
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+        }
     </style>
 </head>
+
 <body>
     <div class="container">
         <header>
@@ -277,33 +401,34 @@
         let currentSort = { col: 'Timestamp', asc: false }; // Default sort by newest
 
         // Columns to treat as Scores (for Radar etc)
-        const SCORE_COLS = ['QoS_Score','Reliability_Score','Resource_Score','Buffer_Score','PHY_Score','RIC_Score','Architecture_Score'];
-        const CHART_COLORS = ['#00d4ff','#f87171','#34d399','#fbbf24','#8b5cf6','#f472b6'];
+        const SCORE_COLS = ['QoS_Score', 'Reliability_Score', 'Resource_Score', 'Buffer_Score', 'PHY_Score', 'RIC_Score', 'Architecture_Score'];
+        const CHART_COLORS = ['#00d4ff', '#f87171', '#34d399', '#fbbf24', '#8b5cf6', '#f472b6'];
 
         // Columns to hide from the main table view (but show in tooltip)
         // Columns to hide from the main table view (but show in tooltip)
-        const HIDE_COLS = ['Controller', '_originalIndex', 'Config_model_type', 'Config_model_path']; 
-        
+        const HIDE_COLS = ['Controller', '_originalIndex', 'Config_model_type', 'Config_model_path'];
+
         // Priority columns to show First
         const PRIORITY_COLS = ['Model', 'Scenario', 'Throughput_Mbps'];
-        const CARD_COLORS = ['#00d4ff','#8b5cf6','#34d399','#fbbf24','#f472b6','#f87171','#60a5fa'];
+        const CARD_COLORS = ['#00d4ff', '#8b5cf6', '#34d399', '#fbbf24', '#f472b6', '#f87171', '#60a5fa'];
 
         // CSV parsing
         function parseCSV(text) {
             const lines = text.trim().split('\n');
             let rawHeaders = lines[0].split(',').map(h => h.trim());
             const rows = [];
-            
+
             for (let i = 1; i < lines.length; i++) {
                 const vals = lines[i].split(',');
-                if (vals.length !== rawHeaders.length) continue;
-                const row = { _originalIndex: i-1 }; // Store original index for selection
-                
+                // Relaxed parsing: allow rows with missing columns (e.g. older runs)
+                // if (vals.length !== rawHeaders.length) continue;
+                const row = { _originalIndex: i - 1 }; // Store original index for selection
+
                 rawHeaders.forEach((h, j) => {
                     const v = vals[j]?.trim();
                     row[h] = isNaN(v) || v === '' ? v : parseFloat(v);
                 });
-                
+
                 // Derive 'Model' column
                 if (row['Config_model_type']) {
                     row['Model'] = row['Config_model_type'];
@@ -313,13 +438,13 @@
 
                 rows.push(row);
             }
-            
+
             headers = rawHeaders;
             if (!headers.includes('Model')) {
                 // Ensure Model is available in headers for sorting/display logic
                 headers.push('Model');
             }
-            
+
             return rows;
         }
 
@@ -367,10 +492,10 @@
         // Score cards
         function renderCards() {
             const grid = document.getElementById('scoreGrid');
-            
+
             // ZERO STATE: If nothing selected, show zeros/dashes
             if (selectedIndices.size === 0) {
-                 const cards = [
+                const cards = [
                     { label: 'Avg Score', value: '—', unit: '/ 100', color: CARD_COLORS[0] },
                     { label: 'Avg Throughput', value: '0.00', unit: 'Mbps', color: CARD_COLORS[1] },
                     { label: 'Avg Satisfaction', value: '0.0', unit: '%', color: CARD_COLORS[2] },
@@ -392,10 +517,10 @@
             // CALCULATE AVERAGE OF SELECTIONS
             const selectedRows = [...selectedIndices].map(idx => allData[idx]);
             const count = selectedRows.length;
-            
+
             // Helper: aggregate a key
-            const getAvg = (key, scale=1) => {
-                let sum = 0; 
+            const getAvg = (key, scale = 1) => {
+                let sum = 0;
                 let n = 0;
                 selectedRows.forEach(r => {
                     const val = parseFloat(r[key]);
@@ -408,20 +533,20 @@
             // Iterate all SCORE_COLS for each row, compute row average, then average across rows.
             let sumOfRowAvgs = 0;
             let validRowAvgs = 0;
-            
+
             selectedRows.forEach(r => {
-                let rowSum = 0; 
+                let rowSum = 0;
                 let rowCnt = 0;
                 SCORE_COLS.forEach(c => {
-                   const val = parseFloat(r[c]);
-                   if (!isNaN(val)) { rowSum += val; rowCnt++; }
+                    const val = parseFloat(r[c]);
+                    if (!isNaN(val)) { rowSum += val; rowCnt++; }
                 });
                 if (rowCnt > 0) {
                     sumOfRowAvgs += (rowSum / rowCnt);
                     validRowAvgs++;
                 }
             });
-            
+
             const avgCompositeScore = validRowAvgs ? (sumOfRowAvgs / validRowAvgs) : 0;
 
             const cards = [
@@ -447,9 +572,9 @@
             const canvas = document.getElementById('radarChart');
             const legendDiv = document.getElementById('radarLegend');
             const availableScores = SCORE_COLS.filter(c => c in (allData[0] || {}));
-            
+
             // Render basic empty chart if nothing selected
-            let labels = availableScores.map(c => c.replace('_Score','').replace('_',' '));
+            let labels = availableScores.map(c => c.replace('_Score', '').replace('_', ' '));
             let datasets = [];
 
             if (selectedIndices.size > 0) {
@@ -457,7 +582,7 @@
                     const row = allData[idx];
                     const scores = availableScores.map(c => row[c] || 0);
                     const color = CHART_COLORS[i % CHART_COLORS.length];
-                    
+
                     // Fix Timestamp parsing: Handle "YYYY-MM-DD HH:MM:SS" (space separator)
                     let timeShort = '';
                     if (row.Timestamp) {
@@ -511,13 +636,13 @@
             const canvas = document.getElementById('barChart');
             // Only show bar chart data for SELECTED rows
             // We can group them by controller or scenario
-            
+
             let labels = [];
             let datasets = [];
 
             if (selectedIndices.size > 0) {
                 const selectedRows = [...selectedIndices].map(idx => allData[idx]);
-                
+
                 // Labels for bar chart: Model + computed timestamp
                 labels = selectedRows.map(r => {
                     let timeShort = '';
@@ -547,9 +672,9 @@
                     responsive: true,
                     scales: {
                         x: { grid: { color: '#1e293b' }, ticks: { color: '#94a3b8', font: { size: 10 } } },
-                        y: { 
-                            grid: { color: '#1e293b' }, 
-                            ticks: { color: '#94a3b8' }, 
+                        y: {
+                            grid: { color: '#1e293b' },
+                            ticks: { color: '#94a3b8' },
                             title: { display: true, text: 'Mbps', color: '#64748b' },
                             beginAtZero: true
                         }
@@ -565,18 +690,18 @@
             // We want 'Model' first (if present), then 'Scenario', then metrics.
             // If 'Model' column is missing in data, we might need to rely on 'Controller' 
             // or create a fake 'Model' column from Controller.
-            
+
             // Check if 'Model' exists in headers.
-            let tableCols = headers.filter(c => !HIDE_COLS.includes(c)); 
-            
+            let tableCols = headers.filter(c => !HIDE_COLS.includes(c));
+
             // Re-order: Put Model/Scenario/Tput First
             const orderedCols = [];
             if (headers.includes('Model')) orderedCols.push('Model');
             else if (headers.includes('Controller')) orderedCols.push('Controller'); // Fallback
-            
+
             if (headers.includes('Scenario')) orderedCols.push('Scenario');
             if (headers.includes('Throughput_Mbps')) orderedCols.push('Throughput_Mbps');
-            
+
             // Add remaining
             tableCols.forEach(c => {
                 if (!orderedCols.includes(c) && !c.startsWith('Config_')) orderedCols.push(c);
@@ -585,7 +710,7 @@
             document.getElementById('tableHead').innerHTML = '<tr><th style="width:40px">Compare</th>' + orderedCols.map(c => {
                 const isSorted = currentSort.col === c;
                 const arrow = isSorted ? (currentSort.asc ? ' ▲' : ' ▼') : '';
-                return `<th style="cursor:pointer; user-select:none" onclick="toggleSort('${c}')">${c.replace(/_/g,' ')}${arrow}</th>`
+                return `<th style="cursor:pointer; user-select:none" onclick="toggleSort('${c}')">${c.replace(/_/g, ' ')}${arrow}</th>`
             }).join('') + '</tr>';
 
             // Create a selection map for colors: { index: color }
@@ -593,12 +718,12 @@
             [...selectedIndices].forEach((idx, i) => {
                 selectionColors[idx] = CHART_COLORS[i % CHART_COLORS.length];
             });
-            
+
             // NOTE: We now use `filteredData` which is essentially `allData` (sorted) since filters are removed.
             document.getElementById('tableBody').innerHTML = filteredData.map(r => {
                 const isSelected = selectedIndices.has(r._originalIndex);
                 const color = isSelected ? selectionColors[r._originalIndex] : 'transparent';
-                
+
                 // Apply a border-left or background tint slightly
                 const style = isSelected ? `style="background: ${color}22; border-left: 4px solid ${color}"` : '';
 
@@ -622,8 +747,8 @@
                         let v = r[c];
                         if (typeof v === 'number') v = v.toFixed(4).replace(/\.?0+$/, '');
                         return `<td>${v ?? '—'}</td>`;
-                    }).join('') + 
-                '</tr>';
+                    }).join('') +
+                    '</tr>';
             }).join('');
         }
 
@@ -633,32 +758,32 @@
             } else {
                 currentSort.col = col;
                 currentSort.asc = true; // Default to asc for new col
-                
+
                 // If it's a score or numeric metric, default to desc usually makes more sense?
                 if (col === 'Timestamp' || col.includes('Score') || col === 'Throughput_Mbps') {
                     currentSort.asc = false;
                 }
             }
-            
+
             // Apply sorting to filteredData (which is effectively allData now)
             filteredData.sort((a, b) => {
                 let va = a[currentSort.col];
                 let vb = b[currentSort.col];
-                
+
                 if (va === undefined) va = '';
                 if (vb === undefined) vb = '';
 
                 if (typeof va === 'number' && typeof vb === 'number') {
                     return currentSort.asc ? va - vb : vb - va;
                 }
-                
+
                 va = String(va).toLowerCase();
                 vb = String(vb).toLowerCase();
                 if (va < vb) return currentSort.asc ? -1 : 1;
                 if (va > vb) return currentSort.asc ? 1 : -1;
                 return 0;
             });
-            
+
             render();
         }
 
@@ -692,14 +817,15 @@
                     allData = parseCSV(text);
                     if (allData.length) {
                         filteredData = [...allData];
-                uploadZone.classList.add('hidden');
-                document.getElementById('dashboard').classList.remove('hidden');
-                selectedIndices.clear(); // Reset selection on new file
-                render();
+                        uploadZone.classList.add('hidden');
+                        document.getElementById('dashboard').classList.remove('hidden');
+                        selectedIndices.clear(); // Reset selection on new file
+                        render();
                     }
                 })
-                .catch(() => {}); // Silently ignore - user will upload manually
+                .catch(() => { }); // Silently ignore - user will upload manually
         });
     </script>
 </body>
+
 </html>
