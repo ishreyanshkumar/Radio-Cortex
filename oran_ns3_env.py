@@ -719,16 +719,18 @@ class ORANns3Env(gym.Env):
         )
         
         # Action space: per-cell + per-UE controls (SIMPLIFIED)
-        # Per-cell: [TxPower, SchedulerWeight]  (2 per cell — high-impact levers only)
+        # Per-cell: [TxPower, SchedulerWeight, Hysteresis]  (3 per cell — high-impact levers)
         # Per-UE: [priority_weight] for each UE
-        # Fixed defaults (not RL-controlled): SchedulerType=0(PF), MaxHarq=4, Hysteresis=2dB, MacDelay=0, NoiseFig=5dB
+        # Fixed defaults (not RL-controlled): SchedulerType=0(PF), MaxHarq=4, MacDelay=0, NoiseFig=5dB
         per_cell_low = [
             10.0,  # TxPower min (dBm)
             0.0,   # SchedulerWeight min
+            0.0,   # Hysteresis min (dB)
         ]
         per_cell_high = [
             46.0,  # TxPower max
             5.0,   # SchedulerWeight max
+            6.0,   # Hysteresis max (dB)
         ]
 
         # Per-UE priority weight bounds
@@ -950,7 +952,7 @@ class ORANns3Env(gym.Env):
         # Ensure action is a flat 1-D array (VecEnv may pass scalars or 0-d arrays)
         action = np.asarray(action, dtype=np.float64).flatten()
         
-        expected_size = self.config.num_cells * 2 + self.config.num_ues
+        expected_size = self.config.num_cells * 3 + self.config.num_ues
         if action.size != expected_size:
             import sys
             if action.size < expected_size:
@@ -961,10 +963,10 @@ class ORANns3Env(gym.Env):
         rc_actions = {'cell': [], 'ue': []}
         offset = 0
         
-        # 1. Cell Actions (2 dims per cell: TxPower, SchedulerWeight)
+        # 1. Cell Actions (3 dims per cell: TxPower, SchedulerWeight, Hysteresis)
         for c in range(self.config.num_cells):
-            cell_act = action[offset : offset + 2]
-            offset += 2
+            cell_act = action[offset : offset + 3]
+            offset += 3
             
             # Tx Power: +/- 1.0 dBm step (differential)
             delta_p = cell_act[0] * 1.0 
@@ -976,6 +978,12 @@ class ORANns3Env(gym.Env):
             delta_w = cell_act[1] * 0.1
             self.current_params['cell'][c]['scheduler_weight'] = np.clip(
                 self.current_params['cell'][c]['scheduler_weight'] + delta_w, 0.0, 5.0
+            )
+
+            # Hysteresis: +/- 0.5 dB step (differential) — important for mobility scenarios
+            delta_hys = cell_act[2] * 0.5
+            self.current_params['cell'][c]['hysteresis'] = np.clip(
+                self.current_params['cell'][c]['hysteresis'] + delta_hys, 0.0, 6.0
             )
 
             # Send ALL params to ns-3 (fixed ones use defaults from current_params)
