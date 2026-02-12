@@ -52,7 +52,7 @@ def make_env(config: NS3Config, env_id: int, seed: Optional[int] = None) -> Call
         for attempt in range(1, max_retries + 1):
             cfg = copy.deepcopy(config)
             try:
-                cfg.topic_suffix = f"_{env_id}"
+                cfg.topic_suffix = f"{config.topic_suffix}_{env_id}"
                 env = ORANns3Env(cfg)
                 if seed is not None:
                     env.reset(seed=seed + env_id)

@@ -512,7 +512,8 @@ class NS3Interface:
                 self.kpm_msg_count += 1
                 return self._parse_kpm(kpm_data)
             else:
-                raise RuntimeError(f"No KPM data found on Kafka topic {kpm_topic}. Ensure ns-3 is running and producing data.")
+                topic_name = f"e2_kpm_stream{self.config.topic_suffix}"
+                raise RuntimeError(f"No KPM data found on Kafka topic {topic_name}. Ensure ns-3 is running and producing data.")
             
         except Exception as e:
             if "TimeoutError" in str(type(e)):
@@ -708,6 +709,22 @@ class ORANns3Env(gym.Env):
         self.max_steps = int(self.config.sim_time * 1000 / self.config.kpm_interval_ms)
         self.episode_metrics = []
         
+        # Differential Control State Tracking
+        self.current_params = {
+            'cell': {c: {
+                'tx_power': 23.0,       # dBm
+                'scheduler_type': 0,    # Discrete
+                'max_harq': 4.0, 
+                'hysteresis': 2.0,      # dB
+                'mac_delay': 0.0,       # ms
+                'noise_figure': 5.0,    # dB
+                'scheduler_weight': 1.0 
+            } for c in range(self.config.num_cells)},
+            'ue': {u: {
+                'priority_weight': 1.0
+            } for u in range(self.config.num_ues)}
+        }
+        
     def reset(self, seed=None, options=None) -> Tuple[np.ndarray, dict]:
         """Reset environment and start new ns-3 simulation episode"""
         start_reset = time.time()
@@ -715,6 +732,25 @@ class ORANns3Env(gym.Env):
         
         if seed is not None:
             self.config.seed = seed
+            
+        # Initialize sorted indices (default identity)
+        self.sorted_ue_indices = list(range(self.config.num_ues))
+        
+        # Reset Differential Control State to Defaults
+        self.current_params = {
+            'cell': {c: {
+                'tx_power': 23.0,       # dBm
+                'scheduler_type': 0,    # Discrete (Handled absolutely for now or via small steps)
+                'max_harq': 4.0, 
+                'hysteresis': 2.0,      # dB
+                'mac_delay': 0.0,       # ms
+                'noise_figure': 5.0,    # dB
+                'scheduler_weight': 1.0 
+            } for c in range(self.config.num_cells)},
+            'ue': {u: {
+                'priority_weight': 1.0
+            } for u in range(self.config.num_ues)}
+        }
         
         # Multi-scenario training: randomly select a scenario each episode
         # This Domain Randomization ensures the policy is robust to different traffic patterns.
@@ -820,10 +856,23 @@ class ORANns3Env(gym.Env):
         state = []
         
         # UE metrics
+        # UE metrics with Canonical Sorting
+        # Collect all UE metrics first
+        ue_data = []
         for ue_id in range(self.config.num_ues):
             ue = e2_msg.ue_metrics.get(ue_id, {})
-
-
+            # Sorting Key: Buffer Occupancy (Descending), then UE ID (Ascending) for ties
+            sort_key = (-ue.get('buffer_occupancy', 0.0), ue_id)
+            ue_data.append((ue_id, ue, sort_key))
+            
+        # Sort UEs
+        ue_data.sort(key=lambda x: x[2])
+        
+        # Update sorted indices for action mapping
+        self.sorted_ue_indices = [x[0] for x in ue_data]
+        
+        # Flatten state based on sorted order
+        for _, ue, _ in ue_data:
             # Map expanded UE features (11 total):
             # throughput, delay, packet_loss, sinr, rsrp, rsrq,
             # ul_rbs, rb_allocated, cqi, rsrp_var, rsrq_var, buffer_occupancy
@@ -857,7 +906,10 @@ class ORANns3Env(gym.Env):
         return np.array(state, dtype=np.float32)
     
     def _parse_action(self, action: np.ndarray) -> Dict:
-        """Convert RL action vector to E2SM-RC control parameters"""
+        """
+        Convert RL action (continuous [-1, 1]) to E2SM-RC control messages
+        using DIFFERENTIAL CONTROL (deltas).
+        """
         # Ensure action is a flat 1-D array (VecEnv may pass scalars or 0-d arrays)
         action = np.asarray(action, dtype=np.float64).flatten()
         
@@ -865,33 +917,103 @@ class ORANns3Env(gym.Env):
         if action.size != expected_size:
             # If size mismatch, pad or truncate to expected size
             import sys
-            print(f"[ENV PID {os.getpid()}] _parse_action: size mismatch {action.size} vs expected {expected_size}", file=sys.stderr)
+            # print(f"[ENV PID {os.getpid()}] size mismatch {action.size} vs {expected_size}", file=sys.stderr)
             if action.size < expected_size:
                 action = np.pad(action, (0, expected_size - action.size), constant_values=0.0)
             else:
                 action = action[:expected_size]
-        
-        rc_actions = {}
-        
-        for cell_id in range(self.config.num_cells):
-            # action layout per cell: 7 values
-            idx = cell_id * 7
-            sched_type = int(np.clip(int(action[idx + 1]), 0, len(SchedulerType) - 1))
-            rc_actions[f'cell_{cell_id}'] = {
-                'TxPower': float(action[idx]),
-                'SchedulerType': SchedulerType(sched_type).name,
-                'MaxHarqTx': int(np.clip(int(action[idx + 2]), 1, 8)),
-                'Hysteresis': float(action[idx + 3]),
-                'MacChDelay': float(action[idx + 4]),
-                'NoiseFigure': float(action[idx + 5]),
-                'SchedulerWeight': float(action[idx + 6]),
-            }
-        # Per-UE priority weights (remaining part of the action vector)
-        base = self.config.num_cells * 7
-        for ue_id in range(self.config.num_ues):
-            rc_actions.setdefault('ues', {})
-            rc_actions['ues'][f'ue_{ue_id}'] = {'priority_weight': float(action[base + ue_id])}
 
+        rc_actions = {'cell': [], 'ue': []}
+        offset = 0
+        
+        # 1. Cell Actions
+        for c in range(self.config.num_cells):
+            # 7 dimensions per cell
+            cell_act = action[offset : offset + 7]
+            offset += 7
+            
+            # --- Differential Updates ---
+            # Scale action [-1, 1] to a delta step size
+            
+            # Tx Power: +/- 1.0 dBm step
+            delta_p = cell_act[0] * 1.0 
+            self.current_params['cell'][c]['tx_power'] = np.clip(
+                self.current_params['cell'][c]['tx_power'] + delta_p, 10.0, 46.0
+            )
+
+            # Scheduler Type: Discrete (Round to nearest) - Absolute control for discrete is safer or small steps?
+            # Let's keep it absolute for discrete: [-1, 1] -> [0, 2]
+            sched_type = int(round(0 + (cell_act[1] + 1) * 0.5 * (2 - 0)))
+            self.current_params['cell'][c]['scheduler_type'] = np.clip(sched_type, 0, 2)
+            
+            # Max HARQ: +/- 1 step
+            delta_harq = cell_act[2] * 1.0
+            self.current_params['cell'][c]['max_harq'] = np.clip(
+                self.current_params['cell'][c]['max_harq'] + delta_harq, 1.0, 8.0
+            )
+
+            # Hysteresis: +/- 0.5 dB
+            delta_hys = cell_act[3] * 0.5
+            self.current_params['cell'][c]['hysteresis'] = np.clip(
+                self.current_params['cell'][c]['hysteresis'] + delta_hys, 0.0, 6.0
+            )
+
+            # Mac Delay: +/- 1.0 ms
+            delta_delay = cell_act[4] * 1.0
+            self.current_params['cell'][c]['mac_delay'] = np.clip(
+                self.current_params['cell'][c]['mac_delay'] + delta_delay, 0.0, 10.0
+            )
+
+            # Noise Figure: +/- 0.5 dB
+            delta_nf = cell_act[5] * 0.5
+            self.current_params['cell'][c]['noise_figure'] = np.clip(
+                self.current_params['cell'][c]['noise_figure'] + delta_nf, 0.0, 10.0
+            )
+            
+            # Scheduler Weight: +/- 0.1
+            delta_w = cell_act[6] * 0.1
+            self.current_params['cell'][c]['scheduler_weight'] = np.clip(
+                self.current_params['cell'][c]['scheduler_weight'] + delta_w, 0.0, 5.0
+            )
+
+            rc_actions['cell'].append({
+                'cell_id': c,
+                'tx_power_dbm': float(self.current_params['cell'][c]['tx_power']),
+                'scheduler_type': int(self.current_params['cell'][c]['scheduler_type']),
+                'max_harq_tx': int(round(self.current_params['cell'][c]['max_harq'])),
+                'hysteresis_db': float(self.current_params['cell'][c]['hysteresis']),
+                'mac_ch_delay': int(round(self.current_params['cell'][c]['mac_delay'])),
+                'noise_figure_db': float(self.current_params['cell'][c]['noise_figure']),
+                'scheduler_weight': float(self.current_params['cell'][c]['scheduler_weight']),
+            })
+
+        # 2. UE Actions
+        # Apply to PHYSICAL UEs using sorted_ue_indices map
+        # Action index i corresponds to "i-th most critical UE"
+        
+        # Ensure we don't go out of bounds if sorted_ue_indices isn't populated (e.g. init)
+        if not hasattr(self, 'sorted_ue_indices') or len(self.sorted_ue_indices) != self.config.num_ues:
+             self.sorted_ue_indices = list(range(self.config.num_ues))
+        
+        for i in range(self.config.num_ues):
+            if offset >= len(action): break
+            
+            ue_act = action[offset] # Scalar
+            offset += 1
+            
+            physical_ue_id = self.sorted_ue_indices[i]
+            
+            # Priority Weight: +/- 0.2
+            delta_prio = ue_act * 0.2
+            self.current_params['ue'][physical_ue_id]['priority_weight'] = np.clip(
+                self.current_params['ue'][physical_ue_id]['priority_weight'] + delta_prio, 0.0, 10.0
+            )
+            
+            rc_actions['ue'].append({
+                'ue_id': physical_ue_id,
+                'priority_weight': float(self.current_params['ue'][physical_ue_id]['priority_weight'])
+            })
+            
         return rc_actions
     
     def _compute_reward(self, e2_msg: E2Message) -> Tuple[float, Dict]:

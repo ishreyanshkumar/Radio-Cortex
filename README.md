@@ -5,6 +5,21 @@ Radio-Cortex is a closed-loop control system that uses Reinforcement Learning (R
 
 ## 🚀 End-to-End Installation Guide
  
+### 🏆 Key Innovations & Solved Challenges
+Radio-Cortex addresses critical RL scaling issues in O-RAN:
+
+1.  **Infinite Memory (BDH Architecture)**:
+    -   *Problem*: Standard Transformers have limited context windows and cannot remember past congestion events.
+    -   *Solution*: Implemented **Bi-Directional History (BDH)** with a recurrent memory mechanism ($\rho, \sigma$) that compresses history into a fixed-size state. This allows the agent to reason about long-term traffic patterns with $O(1)$ inference cost.
+
+2.  **Scale-Free State Space**:
+    -   *Problem*: Neural Networks typically require fixed input sizes, breaking when the number of UEs changes.
+    -   *Solution*: Refactored `BDHPolicy` to process UEs and Cells as **sets of tokens** via shared encoders. The model is now agnostic to the number of devices (train on 5 UEs, deploy on 100).
+
+3.  **Robust Differential Control**:
+    -   *Problem*: RL agents often output erratic, "bang-bang" control actions (e.g., toggling power between min/max), leading to instability.
+    -   *Solution*: Implemented **Differential Control** where the agent outputs *deltas* (e.g., +0.5 dBm) instead of absolute values. This ensures smooth, hill-climbing optimization trajectories.
+
 For a complete, automated setup on Linux:
 ```bash
 # 1. Clone the Repositories
@@ -18,7 +33,7 @@ cd Radio-Cortex
 # - Clone and Build ns-3 (Optimized)
 # - Link scenarios
 # - Start Kafka
-bash setup.sh
+bash scripts/setup.sh
 ```
  
 ---

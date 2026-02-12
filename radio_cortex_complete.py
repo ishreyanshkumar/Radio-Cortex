@@ -698,6 +698,7 @@ def main():
     infra.add_argument('--sim-time', type=float, default=60.0, help='Simulation duration per episode (seconds)')
     infra.add_argument('--kpm-interval', type=int, default=100, help='KPM Reporting Interval (ms)')
     infra.add_argument('--system-bandwidth-mhz', type=float, default=10.0, help='System Bandwidth (5.0, 10.0, 20.0)')
+    infra.add_argument('--topic-suffix', type=str, default="", help='Kafka topic suffix for parallel runs')
 
     # --- Hyperparameters Group ---
     hyper = parser.add_argument_group('Advanced PPO / RL Tuning')
@@ -737,7 +738,8 @@ def main():
         kpm_interval_ms=args.kpm_interval,
         seed=42,
         scenario=args.scenario,
-        system_bandwidth_mhz=args.system_bandwidth_mhz
+        system_bandwidth_mhz=args.system_bandwidth_mhz,
+        topic_suffix=args.topic_suffix
     )
     
     # Attach model_type to config for downstream usage (eval workers, etc.)

@@ -124,7 +124,10 @@ class PPOTrainer:
         print(f"[PPOTrainer] Initializing Policy: {model_type.upper()}")
         
         if model_type == 'bdh':
-            self.policy = BDHPolicy(state_dim, action_dim, device=device).to(device)
+            from policies.bdh_policy import BDHPolicy
+            # Extract config if available (DummyVecEnv usually wraps envs)
+            env_config = getattr(env.envs[0], 'config', None) if hasattr(env, 'envs') and len(env.envs) > 0 else getattr(env, 'config', None)
+            self.policy = BDHPolicy(state_dim, action_dim, device=device, env_config=env_config).to(device)
         elif model_type == 'gpt2':
             from policies.policy_gpt2 import GPT2Policy
             self.policy = GPT2Policy(state_dim, action_dim, device=device).to(device)
