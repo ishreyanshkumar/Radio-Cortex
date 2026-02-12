@@ -2,19 +2,22 @@
 
 Radio-Cortex is a closed-loop control system that uses Reinforcement Learning (RL) to optimize network parameters (Tx Power, Schedulers) in an O-RAN compliant ns-3 simulation. It demonstrates a real-time feedback loop where an RL agent (PPO) receives KPM (Key Performance Metrics) from ns-3 via Kafka and sends back RC (RAN Control) actions.
 
+### 🏆 Key Innovations & Solved Challenges
+Radio-Cortex pushes the boundary of O-RAN intelligence by solving three fundamental problems in applying RL to wireless networks:
+
+1.  **Scale-Free "Dragon" Architecture (Bidirectional BDH)**:
+    -   *Problem*: Standard Neural Networks require fixed input sizes (breaking when UEs join/leave). Furthermore, standard Transformers use "Causal Masking," which blinds early tokens (Cells) from seeing later tokens (UEs).
+    -   *Solution*: We adapted the **Dragon Hatchling (BDH)** architecture into a **Bidirectional Policy**. By removing the causal mask, we allow Base Stations to fully "attend" to all User tokens simultaneously, regardless of their position in the sequence. This creates a truly **Scale-Free Agent** that trains on 5 UEs but successfully controls 100 UEs without retraining.
+
+2.  **Hybrid Reward Engine (Multi-Objective Safety)**:
+    -   *Problem*: Network optimization is a zero-sum game (e.g., High Throughput vs. Low Energy). Naive RL agents often "reward hack" by starving edge users to maximize average stats.
+    -   *Solution*: We implemented a **Two-Stage Safety Clipping** engine. It fuses **Logarithmic Utility** (for $\alpha$-fairness), **Quadratic Barriers** (for SLA guarantees), and **IQX Models** (for QoE/Packet Loss) into a single scalar. This prevents any single metric from dominating the gradient, ensuring stable, fair convergence.
+
+3.  **Robust Differential Control (Delta-Action)**:
+    -   *Problem*: RL agents often output erratic "bang-bang" control actions (e.g., oscillating Tx Power between Min/Max), causing signaling storms and network instability.
+    -   *Solution*: We utilize **Differential Control Heads**. Instead of absolute values, the agent outputs continuous *deltas* (e.g., $\Delta P_{tx} = +0.5$ dBm). This forces the agent to learn smooth, hill-climbing optimization trajectories that respect physical hardware constraints.
 
 ## 🚀 End-to-End Installation Guide
- 
-### 🏆 Key Innovations & Solved Challenges
-Radio-Cortex addresses critical RL scaling issues in O-RAN:
-
-1.  **Scale-Free Architecture (Baby Dragon Hatchling)**:
-    -   *Problem*: Neural Networks typically require fixed input sizes, breaking when the number of UEs changes.
-    -   *Solution*: We utilize the **Baby Dragon Hatchling (BDH)** architecture, a flexible Transformer-based model. By processing UEs and Cells as sets of tokens via shared encoders, the model is agnostic to the number of devices (train on 5 UEs, deploy on 100).
-
-2.  **Robust Differential Control**:
-    -   *Problem*: RL agents often output erratic, "bang-bang" control actions (e.g., toggling power between min/max), leading to instability.
-    -   *Solution*: Implemented **Differential Control** where the agent outputs *deltas* (e.g., +0.5 dBm) instead of absolute values. This ensures smooth, hill-climbing optimization trajectories.
 
 For a complete, automated setup on Linux:
 ```bash
