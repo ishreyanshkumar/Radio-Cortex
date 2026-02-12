@@ -76,16 +76,16 @@ class RewardEngine:
         self.config = config
 
         # ── Weights ──────────────────────────────────────────────
-        self.W_TPUT      = 5.0      # Throughput (Log Utility) (Proposed: 5.0)
-        self.W_DELAY_LIN = 0.1      # Linear Delay Penalty (Proposed: 0.1)
-        self.W_DELAY_BAR = 1.0      # Quadratic SLA Barrier (Relaxed from 5.0)
-        self.W_LOSS      = 0.5      # Packet Loss (IQX) (Proposed: 0.5)
+        self.W_TPUT      = 1.0      # Throughput (Log Utility)
+        self.W_DELAY_LIN = 0.5      # Linear Delay Penalty
+        self.W_DELAY_BAR = 1.0      # Quadratic SLA Barrier
+        self.W_LOSS      = 1.0      # Packet Loss (IQX)
         self.W_SE        = 0.05     # Spectral Efficiency (keep-alive signal)
         self.W_ENERGY    = 0.5      # Energy Efficiency
         self.W_LOAD      = 1.0      # Load Balancing
         self.W_QUEUE     = 0.3      # Queue Congestion (NEW)
         self.W_SMOOTH    = 0.05     # Action Smoothing
-        self.BIAS        = 1.0      # Survival Bias (NEW)
+        self.BIAS        = 1.0      # Survival Bias (Ensures Level 0 is positive)
 
         # ── Thresholds / Normalizers ─────────────────────────────
         self.T_MAX     = 100.0      # Max Throughput (Mbps)
