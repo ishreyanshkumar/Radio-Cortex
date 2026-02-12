@@ -718,25 +718,16 @@ class ORANns3Env(gym.Env):
             dtype=np.float32
         )
         
-        # Action space: per-cell + per-UE controls
-        # Per-cell: [TxPower, SchedulerType, MaxHarqTx, Hysteresis, MacChDelay, NoiseFigure, SchedulerWeight]
+        # Action space: per-cell + per-UE controls (SIMPLIFIED)
+        # Per-cell: [TxPower, SchedulerWeight]  (2 per cell — high-impact levers only)
         # Per-UE: [priority_weight] for each UE
+        # Fixed defaults (not RL-controlled): SchedulerType=0(PF), MaxHarq=4, Hysteresis=2dB, MacDelay=0, NoiseFig=5dB
         per_cell_low = [
             10.0,  # TxPower min (dBm)
-            0.0,   # SchedulerType (discrete index)
-            1.0,   # MaxHarqTx min
-            0.0,   # Hysteresis min (dB)
-            0.0,   # MacChDelay min (TTIs)
-            0.0,   # NoiseFigure min (dB)
             0.0,   # SchedulerWeight min
         ]
         per_cell_high = [
             46.0,  # TxPower max
-            2.0,   # SchedulerType max
-            8.0,   # MaxHarqTx max
-            6.0,   # Hysteresis max
-            10.0,  # MacChDelay max (TTIs)
-            10.0,  # NoiseFigure max (dB)
             5.0,   # SchedulerWeight max
         ]
 
@@ -952,17 +943,16 @@ class ORANns3Env(gym.Env):
     
     def _parse_action(self, action: np.ndarray) -> Dict:
         """
-        Convert RL action (continuous [-1, 1]) to E2SM-RC control messages
-        using DIFFERENTIAL CONTROL (deltas).
+        Convert RL action to E2SM-RC control messages.
+        Simplified: 2 dims per cell (TxPower, SchedulerWeight) + 1 per UE.
+        Fixed params (HARQ, Hysteresis, etc.) use sensible defaults.
         """
         # Ensure action is a flat 1-D array (VecEnv may pass scalars or 0-d arrays)
         action = np.asarray(action, dtype=np.float64).flatten()
         
-        expected_size = self.config.num_cells * 7 + self.config.num_ues
+        expected_size = self.config.num_cells * 2 + self.config.num_ues
         if action.size != expected_size:
-            # If size mismatch, pad or truncate to expected size
             import sys
-            # print(f"[ENV PID {os.getpid()}] size mismatch {action.size} vs {expected_size}", file=sys.stderr)
             if action.size < expected_size:
                 action = np.pad(action, (0, expected_size - action.size), constant_values=0.0)
             else:
@@ -971,56 +961,24 @@ class ORANns3Env(gym.Env):
         rc_actions = {'cell': [], 'ue': []}
         offset = 0
         
-        # 1. Cell Actions
+        # 1. Cell Actions (2 dims per cell: TxPower, SchedulerWeight)
         for c in range(self.config.num_cells):
-            # 7 dimensions per cell
-            cell_act = action[offset : offset + 7]
-            offset += 7
+            cell_act = action[offset : offset + 2]
+            offset += 2
             
-            # --- Differential Updates ---
-            # Scale action [-1, 1] to a delta step size
-            
-            # Tx Power: +/- 1.0 dBm step
+            # Tx Power: +/- 1.0 dBm step (differential)
             delta_p = cell_act[0] * 1.0 
             self.current_params['cell'][c]['tx_power'] = np.clip(
                 self.current_params['cell'][c]['tx_power'] + delta_p, 10.0, 46.0
             )
-
-            # Scheduler Type: Discrete (Round to nearest) - Absolute control for discrete is safer or small steps?
-            # Let's keep it absolute for discrete: [-1, 1] -> [0, 2]
-            sched_type = int(round(0 + (cell_act[1] + 1) * 0.5 * (2 - 0)))
-            self.current_params['cell'][c]['scheduler_type'] = np.clip(sched_type, 0, 2)
             
-            # Max HARQ: +/- 1 step
-            delta_harq = cell_act[2] * 1.0
-            self.current_params['cell'][c]['max_harq'] = np.clip(
-                self.current_params['cell'][c]['max_harq'] + delta_harq, 1.0, 8.0
-            )
-
-            # Hysteresis: +/- 0.5 dB
-            delta_hys = cell_act[3] * 0.5
-            self.current_params['cell'][c]['hysteresis'] = np.clip(
-                self.current_params['cell'][c]['hysteresis'] + delta_hys, 0.0, 6.0
-            )
-
-            # Mac Delay: +/- 1.0 ms
-            delta_delay = cell_act[4] * 1.0
-            self.current_params['cell'][c]['mac_delay'] = np.clip(
-                self.current_params['cell'][c]['mac_delay'] + delta_delay, 0.0, 10.0
-            )
-
-            # Noise Figure: +/- 0.5 dB
-            delta_nf = cell_act[5] * 0.5
-            self.current_params['cell'][c]['noise_figure'] = np.clip(
-                self.current_params['cell'][c]['noise_figure'] + delta_nf, 0.0, 10.0
-            )
-            
-            # Scheduler Weight: +/- 0.1
-            delta_w = cell_act[6] * 0.1
+            # Scheduler Weight: +/- 0.1 step (differential)
+            delta_w = cell_act[1] * 0.1
             self.current_params['cell'][c]['scheduler_weight'] = np.clip(
                 self.current_params['cell'][c]['scheduler_weight'] + delta_w, 0.0, 5.0
             )
 
+            # Send ALL params to ns-3 (fixed ones use defaults from current_params)
             rc_actions['cell'].append({
                 'cell_id': c,
                 'tx_power_dbm': float(self.current_params['cell'][c]['tx_power']),
