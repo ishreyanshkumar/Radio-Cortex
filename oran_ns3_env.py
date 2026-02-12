@@ -76,15 +76,16 @@ class RewardEngine:
         self.config = config
 
         # ── Weights ──────────────────────────────────────────────
-        self.W_TPUT      = 1.0      # Throughput (Log Utility)
-        self.W_DELAY_LIN = 0.5      # Linear Delay Penalty
-        self.W_DELAY_BAR = 1.0      # Quadratic SLA Barrier (Softened)
-        self.W_LOSS      = 0.5      # Packet Loss (IQX) (Softened)
+        self.W_TPUT      = 5.0      # Throughput (Log Utility) (Proposed: 5.0)
+        self.W_DELAY_LIN = 0.1      # Linear Delay Penalty (Proposed: 0.1)
+        self.W_DELAY_BAR = 1.0      # Quadratic SLA Barrier (Relaxed from 5.0)
+        self.W_LOSS      = 0.5      # Packet Loss (IQX) (Proposed: 0.5)
         self.W_SE        = 0.05     # Spectral Efficiency (keep-alive signal)
         self.W_ENERGY    = 0.5      # Energy Efficiency
         self.W_LOAD      = 1.0      # Load Balancing
         self.W_QUEUE     = 0.3      # Queue Congestion (NEW)
         self.W_SMOOTH    = 0.05     # Action Smoothing
+        self.BIAS        = 1.0      # Survival Bias (NEW)
 
         # ── Thresholds / Normalizers ─────────────────────────────
         self.T_MAX     = 100.0      # Max Throughput (Mbps)
@@ -106,6 +107,30 @@ class RewardEngine:
 
         # ── Clip bounds (Stage 2 — total) ────────────────────────
         self.CLIP_TOTAL = (-100.0, 10.0)
+
+        # ── Curriculum State ─────────────────────────────────────
+        self.level = 0              # 0=Bootstrap, 1=Quality, 2=Reliability
+        self.success_history = []   # Rolling window of success rate
+        self.HISTORY_LEN = 50       # Window size for level promotion
+        self.MIN_TPUT_SUCCESS = 2.0 # Mbps required to count as "satisfied"
+
+    def _update_curriculum(self, current_success_rate: float):
+        """Update curriculum level based on sustained success rate."""
+        self.success_history.append(current_success_rate)
+        if len(self.success_history) > self.HISTORY_LEN:
+            self.success_history.pop(0)
+        
+        avg_success = sum(self.success_history) / len(self.success_history)
+
+        # Promotion Logic
+        if self.level == 0 and avg_success > 0.5: # >50% UEs satisfied
+            self.level = 1
+            print(f"\n🎉 PROMOTED TO LEVEL 1 (Quality): Enabling Delay Penalty")
+            self.success_history = [] # Reset history for next level
+        elif self.level == 1 and avg_success > 0.8: # >80% UEs satisfied
+            self.level = 2
+            print(f"\n🚀 PROMOTED TO LEVEL 2 (Reliability): Enabling Loss/Jitter Penalty")
+            self.success_history = []
 
     def compute(self,
                 e2_msg: E2Message,
@@ -139,11 +164,29 @@ class RewardEngine:
         r_tput = float(np.mean(np.log(1.0 + tputs / self.T_MAX + self.EPSILON))) * self.W_TPUT
         r_tput = float(np.clip(r_tput, *self.CLIP_TPUT))
 
+        # ── Calculate Success Rate (for Curriculum) ──────────────
+        # Start with simple check: Fraction of UEs with Tput > Min
+        satisfied_ues = np.sum(tputs > self.MIN_TPUT_SUCCESS)
+        success_rate = satisfied_ues / max(len(tputs), 1)
+        self._update_curriculum(success_rate)
+
+        # ── Apply Curriculum Masking ─────────────────────────────
+        # Level 0: Only Tput + Bias. No Penalties.
+        # Level 1: Tput + Bias + Delay.
+        # Level 2: Full Rewards.
+        
+        w_delay_eff = self.W_DELAY_LIN if self.level >= 1 else 0.0
+        w_queue_eff = self.W_QUEUE     if self.level >= 1 else 0.0  # Early warning (Level 1)
+
+        w_loss_eff   = self.W_LOSS      if self.level >= 2 else 0.0
+        w_energy_eff = self.W_ENERGY    if self.level >= 2 else 0.0
+        w_load_eff   = self.W_LOAD      if self.level >= 2 else 0.0  # Optimization (Level 2)
+        
         # ── 1b. Delay  (Two-tier: linear everywhere + quadratic past SLA) ──
         d_norm    = np.minimum(delays / self.D_MAX, 1.0)                    # Tier 1: 0→1 linear
         d_barrier = np.maximum(delays - self.D_SLA, 0.0) ** 2              # Tier 2: explodes past SLA
         r_delay = float(-np.mean(
-            self.W_DELAY_LIN * d_norm
+            w_delay_eff * d_norm
             + (self.W_DELAY_BAR / self.D_MAX ** 2) * d_barrier
         ))
         r_delay = float(np.clip(r_delay, *self.CLIP_DELAY))
@@ -152,7 +195,7 @@ class RewardEngine:
         #   exp(5 × 0.01)-1 = 0.05  (1% loss → mild)
         #   exp(5 × 0.10)-1 = 0.65  (10% loss → painful)
         #   exp(5 × 0.50)-1 = 11.2  (50% loss → catastrophic)
-        r_loss = float(-np.mean(np.exp(self.BETA_LOSS * losses) - 1.0)) * self.W_LOSS
+        r_loss = float(-np.mean(np.exp(self.BETA_LOSS * losses) - 1.0)) * w_loss_eff
         r_loss = float(np.clip(r_loss, *self.CLIP_LOSS))
 
         # ── 1d. Spectral Efficiency  (Shannon keep-alive) ──────
@@ -183,14 +226,14 @@ class RewardEngine:
             #   Penalizes high resource block usage across cells.
             #   50 RBs × 100 TTIs = 5000 max RBs per interval.
             total_rbs_max = 5000.0
-            r_energy = float(-np.mean(rbs / total_rbs_max)) * self.W_ENERGY
+            r_energy = float(-np.mean(rbs / total_rbs_max)) * w_energy_eff
             r_energy = float(np.clip(r_energy, *self.CLIP_ENERGY))
 
             # ── 2b. Load Balancing ──────────────────────────────
             #   Penalizes uneven load across cells.
             #   std(loads) is high when one cell is overloaded
             #   and another is idle → AI learns to distribute.
-            r_load = float(-np.std(loads)) * self.W_LOAD
+            r_load = float(-np.std(loads)) * w_load_eff
             r_load = float(np.clip(r_load, *self.CLIP_LOAD))
 
             # ── 2c. Queue Congestion  (NEW) ─────────────────────
@@ -198,7 +241,7 @@ class RewardEngine:
             #   This gives early warning BEFORE delay spikes —
             #   a full queue today = high delay tomorrow.
             q_norm = np.minimum(queues / self.Q_MAX, 1.0)
-            r_queue = float(-np.mean(q_norm)) * self.W_QUEUE
+            r_queue = float(-np.mean(q_norm)) * w_queue_eff
             r_queue = float(np.clip(r_queue, *self.CLIP_QUEUE))
 
         network_score = r_energy + r_load + r_queue
@@ -221,7 +264,7 @@ class RewardEngine:
         # ════════════════════════════════════════════════════════
         # 3.  AGGREGATE & BOUND
         # ════════════════════════════════════════════════════════
-        total_raw = ue_score + network_score
+        total_raw = ue_score + network_score + self.BIAS
         total     = float(np.clip(total_raw, *self.CLIP_TOTAL))
 
         # ════════════════════════════════════════════════════════
@@ -251,6 +294,8 @@ class RewardEngine:
             'avg_throughput': avg_tput,
             'avg_delay':    avg_dly,
             'avg_loss':     avg_loss,
+            'z_level':      self.level,         # Log Level (z_ prefix sorts to end)
+            'z_success':    success_rate,       # Log Success Rate
         }
 
         return total, breakdown

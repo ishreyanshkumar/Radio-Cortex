@@ -635,6 +635,8 @@ class PPOTrainer:
                     live_env_metrics[env_i] = {
                         'tput': tput, 'delay': delay, 'loss': loss, 
                         'sinr': sinr, 'rsrp': rsrp, 'queue': queue, 'rb': rb, 'power': power,
+                        'level': e2.get('z_level', 0),          # New: Curriculum Level
+                        'success': e2.get('z_success', 0.0),    # New: Success Rate
                         'ue_metrics': detailed_ue
                     }
             
@@ -682,6 +684,8 @@ class PPOTrainer:
         def create_env_metrics_table():
             table = Table(show_header=True, header_style="bold green", expand=True)
             table.add_column("Env ID", justify="center")
+            table.add_column("Lvl", justify="center")      # New: Level Column
+            table.add_column("Succ", justify="right")      # New: Success Rate
             table.add_column("Activity", justify="center") # Heartbeat indicator
             table.add_column("Tput (Mbps)", justify="right")
             table.add_column("Delay (ms)", justify="right")
@@ -698,6 +702,8 @@ class PPOTrainer:
                 m = live_env_metrics[env_id]
                 table.add_row(
                     str(env_id),
+                    f"[bold yellow]{m.get('level', 0)}[/]" if m.get('level', 0) < 2 else f"[bold green]{m.get('level', 0)}[/]", # Color code level
+                    f"{m.get('success', 0)*100:.0f}%",
                     f"[bold green]{heartbeat}[/]" if m.get('tput', 0) > 0 else "[dim]idling[/]",
                     f"{m.get('tput', 0):.2f}",
                     f"{m.get('delay', 0):.1f}",
@@ -708,7 +714,7 @@ class PPOTrainer:
                     f"{m.get('power', 0):.2f}"
                 )
             if not live_env_metrics:
-                 table.add_row("-", "-", "-", "-", "-", "-", "-", "-", "-")
+                 table.add_row("-", "-", "-", "-", "-", "-", "-", "-", "-", "-", "-")
                  
             return Panel(table, title="[bold green]Live Environment Metrics[/]", border_style="green", expand=True)
 
