@@ -64,7 +64,7 @@ class BDHPolicy(nn.Module):
         
         self.num_cells = 3
         self.cell_features = 5
-        self.cell_actions = 7
+        self.cell_actions = 3  # TxPower, SchedulerWeight, Hysteresis
         
         if env_config:
             self.num_ues = getattr(env_config, 'numUes', self.num_ues) or self.num_ues

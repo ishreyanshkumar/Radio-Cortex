@@ -41,7 +41,7 @@ class GPT2Policy(nn.Module):
 
         # 3. Heads
         self.actor_mean = nn.Linear(hidden_dim, action_dim)
-        self.actor_logstd = nn.Parameter(torch.zeros(1, action_dim)) # State-independent log-std
+        self.actor_logstd = nn.Linear(hidden_dim, action_dim)  # State-dependent exploration
         self.critic = nn.Linear(hidden_dim, 1)
 
         self.apply(self._init_weights)
@@ -92,9 +92,11 @@ class GPT2Policy(nn.Module):
         # We only care about the prediction from the LAST token (current state)
         # But during training we might want all. For now, let's return all.
         logits = self.actor_mean(x)
+        logstd = self.actor_logstd(x)
+        logstd = torch.clamp(logstd, -2, 1)
         values = self.critic(x)
 
-        return logits, self.actor_logstd, values
+        return logits, logstd, values
 
     def get_action(self, state: torch.Tensor, deterministic: bool = False):
         """
@@ -126,6 +128,7 @@ class GPT2Policy(nn.Module):
         
         # Take last step
         action_mean = action_mean[:, -1, :] # (1, action_dim)
+        logstd = logstd[:, -1, :]           # (1, action_dim)
         
         if deterministic:
             return action_mean, None, None
@@ -154,6 +157,7 @@ class GPT2Policy(nn.Module):
         # Assuming PPO passed aligned inputs.
         
         action_mean = action_mean[:, -1, :] # Take last if sequence
+        logstd = logstd[:, -1, :]           # Match
         value = value[:, -1, :]
         
         action_std = torch.exp(logstd)

@@ -37,7 +37,7 @@ class LinearPolicy(nn.Module):
 
         # 3. Heads
         self.actor_mean = nn.Linear(hidden_dim, action_dim)
-        self.actor_logstd = nn.Parameter(torch.zeros(1, action_dim))
+        self.actor_logstd = nn.Linear(hidden_dim, action_dim)  # State-dependent exploration
         self.critic = nn.Linear(hidden_dim, 1)
 
         self.apply(self._init_weights)
@@ -81,9 +81,11 @@ class LinearPolicy(nn.Module):
         x = self.ln_f(x)
         
         logits = self.actor_mean(x)
+        logstd = self.actor_logstd(x)
+        logstd = torch.clamp(logstd, -2, 1)
         values = self.critic(x)
 
-        return logits, self.actor_logstd, values
+        return logits, logstd, values
 
     def get_action(self, state: torch.Tensor, deterministic: bool = False):
         if state.dim() == 1: state = state.unsqueeze(0)
@@ -108,11 +110,12 @@ class LinearPolicy(nn.Module):
         
         # Take last step
         action_mean = logits[:, -1, :] 
+        logstd_last = logstd[:, -1, :]
         
         if deterministic:
             return action_mean, None, None
             
-        action_std = torch.exp(logstd)
+        action_std = torch.exp(logstd_last)
         dist = torch.distributions.Normal(action_mean, action_std)
         action = dist.sample()
         log_prob = dist.log_prob(action).sum(dim=-1)
@@ -127,9 +130,11 @@ class LinearPolicy(nn.Module):
         # Select last step if sequence, or squeeze if not
         if action_mean.size(1) > 1:
             action_mean = action_mean[:, -1, :]
+            logstd = logstd[:, -1, :]
             value = value[:, -1, :]
         else:
             action_mean = action_mean.squeeze(1)
+            logstd = logstd.squeeze(1)
             value = value.squeeze(1)
         
         action_std = torch.exp(logstd)
