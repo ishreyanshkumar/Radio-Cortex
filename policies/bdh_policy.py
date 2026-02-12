@@ -7,6 +7,41 @@ import torch.nn as nn
 import torch.nn.functional as F
 import importlib
 from typing import Optional
+import math
+
+# --- MONKEY PATCH START ---
+# We must patch the Attention.forward method to remove the causal mask (.tril)
+# so that Cells and UEs can see each other (Bidirectional Attention).
+
+def bidirectional_attention_forward(self, Q, K, V):
+    # Standard checks from original code
+    assert self.freqs.dtype == torch.float32
+    assert K is Q
+    _, _, T, _ = Q.size()
+
+    # Re-implement RoPE logic from bdh.py
+    r_phases = (
+        torch.arange(0, T, device=self.freqs.device, dtype=self.freqs.dtype)
+        .view(1, 1, -1, 1)
+    ) * self.freqs
+    
+    # We call the static method from the class (self.__class__) 
+    # or rely on the instance method if bound correctly.
+    # Safe way: use the original class's static method
+    QR = self.rope(r_phases, Q) 
+    KR = QR
+
+    # --- THE FIX: No .tril(diagonal=-1) ---
+    # Original: scores = (QR @ KR.mT).tril(diagonal=-1)
+    # New (Bidirectional):
+    scores = (QR @ KR.mT)
+    
+    return scores @ V
+
+# Apply the patch immediately after importing bdh
+from . import bdh as bdh_mod
+bdh_mod.Attention.forward = bidirectional_attention_forward
+# --- MONKEY PATCH END ---
 
 class BDHPolicy(nn.Module):
     """
@@ -46,7 +81,7 @@ class BDHPolicy(nn.Module):
                 n_layer=6, 
                 n_embd=256, 
                 n_head=4, 
-                mlp_internal_dim_multiplier=64, # Increased from 32, Checkpointing will handle it
+                mlp_internal_dim_multiplier=128, # Restored to 128 (Paper Default)
                 vocab_size=256 
             )
         else:
