@@ -281,15 +281,16 @@ python3 radio_cortex_complete.py --mode eval --model base --scenario flash_crowd
 # Evaluate the default BDH model on mobility storm
 python3 radio_cortex_complete.py --mode eval --model bdh --scenario mobility_storm
 
-# Evaluate in parallel across 4 environments (Faster)
-python3 radio_cortex_complete.py --mode eval --model bdh --scenario all --n-envs 4
+# After curriculum training — point to the curriculum checkpoint
+python3 radio_cortex_complete.py --mode eval --model bdh --scenario all --n-envs 4 \
+    --model-path models/curriculum/stage_13.pt
 ```
 
 #### 3. Comparing Specific Architectures
 ```bash
-# Compare Transformer 1 vs Transformer 2
-python3 radio_cortex_complete.py --mode eval --model t1 --scenario flash_crowd
-python3 radio_cortex_complete.py --mode eval --model t2 --scenario flash_crowd
+# Compare BDH vs MLP
+python3 radio_cortex_complete.py --mode eval --model bdh --scenario flash_crowd
+python3 radio_cortex_complete.py --mode eval --model nn --scenario flash_crowd
 ```
 
 #### 4. Interaction & Results Visualization

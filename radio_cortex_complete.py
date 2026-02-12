@@ -562,7 +562,7 @@ def evaluate_single_scenario(
             
             # Verify if it matches current config
             expected_state_dim = config.num_ues * 12 + config.num_cells * 5
-            expected_action_dim = config.num_cells * 7 + config.num_ues
+            expected_action_dim = config.num_cells * 3 + config.num_ues  # 3 per cell: TxPower, SchedWeight, Hysteresis
             
             # Detect model type from config or checkpoint
             model_type = getattr(config, 'model_type', 'bdh')
@@ -590,7 +590,7 @@ def evaluate_single_scenario(
                 state_dim = expected_state_dim
                 action_dim = expected_action_dim
                 if stored_action_dim != expected_action_dim or stored_state_dim != expected_state_dim:
-                    detected_ues = stored_action_dim - (config.num_cells * 7)
+                    detected_ues = stored_action_dim - (config.num_cells * 3)
                     config.num_ues = detected_ues
                     state_dim = stored_state_dim
                     action_dim = stored_action_dim
