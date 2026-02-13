@@ -521,6 +521,18 @@ class NS3Interface:
 
         if self.config.verbose:
             print(f"Starting ns-3 simulation with command: {' '.join(ns3_cmd)}")
+        # Stagger startup for parallel environments to avoid thundering herd
+        # Based on topic suffix to ensure different envs start at different times
+        try:
+            suffix_id = "".join(filter(str.isdigit, self.config.topic_suffix))
+            if suffix_id:
+                delay = (int(suffix_id) % 16) * 0.25 # Stagger up to 4s
+                if self.config.verbose:
+                    print(f"Staggering startup for Env {self.config.topic_suffix} by {delay:.2f}s...")
+                time.sleep(delay)
+        except:
+            pass
+
         self.ns3_process = subprocess.Popen(
             ns3_cmd,
             cwd=ns3_dir,
@@ -531,7 +543,7 @@ class NS3Interface:
         )
         if self.config.verbose:
             print(f"ns-3 process started (PID: {self.ns3_process.pid}, Logs: ns3_out{self.config.topic_suffix}.log)")
-        time.sleep(2) # Reduced from 4s for faster rollout transitions
+        time.sleep(1) # Reduced from 2s
         
         # Reset timestamp tracking for new episode
         self.last_kpm_ts = None
@@ -555,11 +567,20 @@ class NS3Interface:
                 group_id=f'oran_rl_agent{self.config.topic_suffix}_{int(time.time())}' # Unique group ID
             )
 
-            # Ensure we only consume NEW messages from this point onward
-            self.kafka_consumer.poll(timeout_ms=30000)
-            partitions = self.kafka_consumer.assignment()
-            if partitions:
-                self.kafka_consumer.seek_to_end(*partitions)
+            # Optimization: Wait for partition assignment with a tight loop rather than a hard 30s poll
+            start_poll = time.time()
+            found_partitions = False
+            while time.time() - start_poll < 10.0: # Max 10s wait for initial partition assignment
+                self.kafka_consumer.poll(timeout_ms=500)
+                partitions = self.kafka_consumer.assignment()
+                if partitions:
+                    self.kafka_consumer.seek_to_end(*partitions)
+                    found_partitions = True
+                    break
+            
+            if not found_partitions and self.config.verbose:
+                print(f"Warning: Kafka partitions not assigned within 10s for Env {self.config.topic_suffix}")
+
             self.last_kpm_ts = None
             
             self.kafka_producer = KafkaProducer(
@@ -890,8 +911,8 @@ class ORANns3Env(gym.Env):
         if self.config.verbose:
             print("Waiting for initial KPM report...")
         try:
-            # Longer timeout for initialization (30s)
-            e2_msg = self.ns3.receive_kpm_report(max_wait_s=30.0, wait_for_new=True)
+            # Optimized timeout for initialization (reduced from 30s to 12s)
+            e2_msg = self.ns3.receive_kpm_report(max_wait_s=12.0, wait_for_new=True)
         except Exception as e:
             print(f"Failed to initialize environment: {e}")
             self.close()
@@ -920,7 +941,6 @@ class ORANns3Env(gym.Env):
             rc_actions = self._parse_action(action)
             self.ns3.send_rc_control(rc_actions)
             
-            time.sleep(self.config.kpm_interval_ms / 1000.0)
             e2_msg = self.ns3.receive_kpm_report(
                 wait_for_new=True,
                 max_wait_s=(self.config.kpm_interval_ms / 1000.0) * 5.0

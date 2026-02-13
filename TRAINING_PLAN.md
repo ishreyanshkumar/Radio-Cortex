@@ -15,310 +15,62 @@
 
 ---
 
-## 🎯 Complete Training Curriculum
+## 🎯 Complete Training Curriculum (Lean Power Suite)
 
-### **Stage 1: Foundation - Flash Crowd Mastery**
-**Duration**: 10,000 timesteps  
+### **Stage 1: Flash Crowd (Bootstrap)**
+**Duration**: 60,000 timesteps  
 **Scenario Mix**: 
 - Flash Crowd: **100%**
+**Goal**: Learn basic load balancing and handover triggering.
 
-**Goal**: Learn basic load balancing and handover triggering
-
-**Success Criteria**:
-- Average reward > -2.0 over last 500 steps
-- Jain's Fairness Index > 0.80
-- Throughput degradation < 30%
-
-**Validation Checkpoint**: Run 100 episodes, ensure 85% meet success criteria
-
----
-
-### **Stage 2: Energy Patterns Introduction**
-**Duration**: 16,000 timesteps  
+### **Stage 2: Sleepy Campus (Green RAN)**
+**Duration**: 100,000 timesteps  
 **Scenario Mix**:
-- Flash Crowd: **20%** (maintenance)
-- Sleepy Campus: **80%** (learning focus)
+- Flash Crowd: **20%**
+- Sleepy Campus: **80%**
+**Goal**: Master energy-efficient power adaptation.
 
-**Rationale**: 
-- Flash Crowd teaches spatial load balancing
-- Sleepy Campus teaches temporal patterns
-- 20% Flash Crowd prevents forgetting handover skills
-
-**Goal**: Master energy-efficient power adaptation
-
-**Success Criteria**:
-- Energy efficiency > 0.70
-- Power switching smoothness (no oscillations)
-- Flash Crowd performance still > -2.5 reward
-
-**Validation**: Separate 50-episode tests on each scenario
-
----
-
-### **Stage 3: PHY Layer Robustness**
-**Duration**: 20,000 timesteps  
+### **Stage 3: Urban Canyon (PHY Robustness)**
+**Duration**: 120,000 timesteps  
 **Scenario Mix**:
-- Flash Crowd: **15%** (maintenance)
-- Sleepy Campus: **15%** (maintenance)
-- Urban Canyon: **70%** (learning focus)
+- Flash Crowd: **15%**
+- Sleepy Campus: **15%**
+- Urban Canyon: **70%**
+**Goal**: Learn reactive signal recovery and SINR optimization.
 
-**Rationale**:
-- Urban Canyon adds signal degradation challenge
-- Maintains load balancing (Flash) and energy (Sleepy) skills
-- 15% each ensures no regression
-
-**Goal**: Learn reactive signal recovery and SINR optimization
-
-**Success Criteria**:
-- Recovery time < 1.0 second after SINR drop
-- RLF rate < 5%
-- Previous scenarios: Flash > -2.5, Sleepy EE > 0.65
-
-**Validation**: 30 episodes per scenario, compare to baseline
-
----
-
-### **Stage 4: Handover Dynamics - Mobility Storm**
-**Duration**: 30,000 timesteps  
+### **Stage 4: Mobility Storm (Handover Mastery)**
+**Duration**: 180,000 timesteps  
 **Scenario Mix**:
-- Flash Crowd: **10%**
-- Sleepy Campus: **10%**
-- Urban Canyon: **10%**
+- Previous scenarios: **10%** each
 - Mobility Storm: **70%**
+**Goal**: Optimize handover success rate under high-speed mobility.
 
-**Rationale**:
-- Mobility Storm introduces velocity-based handover challenges
-- Reduce previous scenarios to 10% each (enough to maintain)
-- Focus on handover parameter tuning (Hysteresis, TTT)
-
-**Goal**: Optimize handover success rate under mobility
-
-**Success Criteria**:
-- Handover success rate > 92%
-- RLF count < 3 per 100 UEs
-- Previous scenarios: minimal performance drop (< 10%)
-
-**Validation**: 40 episodes Mobility Storm, 20 each for others
-
----
-
-### **Stage 5: Extreme Overload - Traffic Burst**
-**Duration**: 40,000 timesteps  
+### **Stage 5: Traffic Burst (Massive Congestion)**
+**Duration**: 240,000 timesteps  
 **Scenario Mix**:
-- Previous 4 scenarios: **8%** each = **32%** total
+- Previous scenarios: **8%** each
 - Traffic Burst: **68%**
+**Goal**: Master scheduler optimization under 5x-10x overload.
 
-**Rationale**:
-- Traffic Burst is harder (7/10 difficulty)
-- Need more focus (68%) but keep all previous skills active
-- Equal 8% distribution ensures balanced retention
-
-**Goal**: Master scheduler optimization under 5x overload
-
-**Success Criteria**:
-- Packet loss ratio < 8%
-- 5th percentile throughput > 2 Mbps (no starvation)
-- Queue congestion handled gracefully
-
-**Validation**: 50 episodes Traffic Burst + mini-suite on previous
-
----
-
-### **Stage 6: Multi-Objective - Mixed Reality Slicing**
-**Duration**: 40,000 timesteps  
+### **Stage 6: Ambulance (Emergency Slicing)**
+**Duration**: 240,000 timesteps  
 **Scenario Mix**:
-- Previous 5 scenarios: **7%** each = **35%** total
-- Mixed Reality: **65%**
-
-**Rationale**:
-- Mixed Reality requires balancing VR latency vs Download throughput
-- Maintain all 5 previous skills at 7% each
-- 65% focus on new multi-objective challenge
-
-**Goal**: Learn network slicing and QoS differentiation
-
-**Success Criteria**:
-- VR slice: 99% packets < 20ms latency
-- Download slice: Mean throughput > 8 Mbps
-- Slice isolation: Correlation < 0.2
-
-**Validation**: Per-slice metrics separately evaluated
-
----
-
-### **Stage 7: Non-Stationarity - Adversarial Environment**
-**Duration**: 36,000 timesteps  
-**Scenario Mix**:
-- Previous 6 scenarios: **6%** each = **36%** total
-- Adversarial: **64%**
-
-**Rationale**:
-- Adversarial tests robustness to channel fluctuations
-- 6% each maintains diverse skill set
-- 64% builds resilience to noise
-
-**Goal**: Develop robust policies under interference
-
-**Success Criteria**:
-- Throughput resilience ratio > 0.70 (degraded/normal)
-- Power adaptation within 500ms of SINR change
-- No catastrophic failures (reward > -8.0)
-
-**Validation**: Test under both normal and degraded conditions
-
----
-
-### **Stage 8: Advanced Handover - Ping-Pong Prevention**
-**Duration**: 50,000 timesteps  
-**Scenario Mix**:
-- Previous 7 scenarios: **5%** each = **35%** total
-- Handover Ping-Pong: **65%**
-
-**Rationale**:
-- Ping-Pong builds on Mobility Storm (requires memory)
-- 5% each for 7 scenarios maintains broad competence
-- 65% needed for LSTM/GRU policy training
-
-**Goal**: Eliminate unnecessary handover oscillations
-
-**Success Criteria**:
-- Ping-pong rate < 10% of total handovers
-- Handover efficiency > 88%
-- SINR stability variance < 4 dB
-
-**Validation**: Track handover patterns over 100 episodes
-
----
-
-### **Stage 9: Mass Coordination - Commuter Rush**
-**Duration**: 60,000 timesteps  
-**Scenario Mix**:
-- Previous 8 scenarios: **4.5%** each = **36%** total
-- Commuter Rush: **64%**
-
-**Rationale**:
-- Commuter Rush tests mass handover coordination
-- 4.5% each keeps 8 scenarios active
-- 64% for complex multi-cell cooperation
-
-**Goal**: Handle synchronized handover avalanche
-
-**Success Criteria**:
-- RLF rate during mass HO < 8%
-- Load balanced across cells (max/min ratio < 2.0)
-- X2 signaling overhead < 15% of total traffic
-
-**Validation**: Measure worst-case metrics during peak HO period
-
----
-
-### **Stage 10: Control Plane - IoT Tsunami**
-**Duration**: 70,000 timesteps  
-**Scenario Mix**:
-- Previous 9 scenarios: **4%** each = **36%** total
-- IoT Tsunami: **64%**
-
-**Rationale**:
-- IoT Tsunami shifts focus to control plane
-- Maintaining 9 scenarios at 4% each
-- 64% to master RACH optimization and SPS
-
-**Goal**: Optimize control plane under massive device load
-
-**Success Criteria**:
-- RACH collision rate < 25%
-- Signaling overhead < 20% of total bytes
-- Packet delivery ratio > 95% for IoT packets
-
-**Validation**: Control plane metrics separately tracked
-
----
-
-### **Stage 11: URLLC Excellence - Ambulance Priority**
-**Duration**: 80,000 timesteps  
-**Scenario Mix**:
-- Previous 10 scenarios: **3.5%** each = **35%** total
+- Previous scenarios: **7%** each
 - Ambulance: **65%**
+**Goal**: Learn network slicing and QoS priority differentiation.
 
-**Rationale**:
-- Ambulance requires strict latency constraints
-- 3.5% each for 10 scenarios (comprehensive maintenance)
-- 65% for Lagrangian-augmented reward learning
-
-**Goal**: Guarantee 5-9s reliability for priority UE
-
-**Success Criteria**:
-- 99.999%ile latency < 10ms for ambulance
-- PDR > 99.999% (only 1 in 100k drops)
-- Acceptable background sacrifice (> 1 Mbps avg)
-
-**Validation**: Statistical reliability testing over 10,000 packets
-
----
-
-### **Stage 12: Spectrum Mastery - Carrier Aggregation**
-**Duration**: 100,000 timesteps  
+### **Stage 7: Spectrum Crunch (Spectral Efficiency)**
+**Duration**: 300,000 timesteps  
 **Scenario Mix**:
-- Previous 11 scenarios: **3.2%** each = **35.2%** total
-- Spectrum Crunch: **64.8%**
+- Previous scenarios: **6%** each
+- Spectrum Crunch: **64%**
+**Goal**: Optimal resource management and spectral efficiency.
 
-**Rationale**:
-- Spectrum Crunch is hardest (9/10 difficulty)
-- 3.2% each maintains all 11 previous skills
-- 64.8% for CA coordination learning
-
-**Goal**: Optimal carrier aggregation and load balancing
-
-**Success Criteria**:
-- SCell activation at optimal threshold (ρ ≈ 0.75)
-- Aggregated throughput > 35 Mbps
-- CA overhead < 8%
-
-**Validation**: Multi-carrier metrics validated separately
-
----
-
-### **Stage 13: Multi-Scenario Mixing (Consolidation)**
-**Duration**: 100,000 timesteps  
+### **Stage 8: Consolidation (Power Suite Mix)**
+**Duration**: 500,000 timesteps  
 **Scenario Mix**:
-- **Uniform Random**: Each of 12 scenarios: **8.33%**
-
-**Rationale**:
-- Equal exposure prevents any scenario dominance
-- Tests generalization across all challenges
-- Prepares for real-world deployment
-
-**Goal**: Achieve robust performance across all scenarios
-
-**Success Criteria**:
-- All scenarios meet 80% of individual success criteria
-- No scenario causes catastrophic failure
-- Smooth performance across random switches
-
-**Validation**: Comprehensive benchmark suite
-
----
-
-### **Stage 14: Adaptive Curriculum (Advanced)**
-**Duration**: Ongoing  
-**Scenario Mix**:
-- **Performance-Based Sampling**:
-  - Top 4 performing scenarios: **5%** each = **20%**
-  - Middle 4 scenarios: **10%** each = **40%**
-  - Bottom 4 scenarios: **10%** each = **40%**
-
-**Rationale**:
-- Focus training on weakest areas
-- Maintain competence in mastered scenarios
-- Auto-balancing based on reward metrics
-
-**Goal**: Continual improvement on weakest scenarios
-
-**Success Criteria**:
-- Convergence of performance gaps (std dev < 1.5 across scenarios)
-- All scenarios > 80% optimal performance
-
-**Validation**: Weekly performance reports, dynamic rebalancing
+- **Uniform Random**: Mixed across all key scenarios above.
+**Goal**: Achieve robust generalization across the complete Power Suite.
 
 ---
 
@@ -326,22 +78,16 @@
 
 | Stage | Timesteps | Cumulative | Primary Scenario | Mix Complexity |
 |-------|-----------|------------|------------------|----------------|
-| 1 | 10,000 | 10,000 | Flash Crowd | Single |
-| 2 | 16,000 | 26,000 | Sleepy Campus | 2-scenario |
-| 3 | 20,000 | 46,000 | Urban Canyon | 3-scenario |
-| 4 | 30,000 | 76,000 | Mobility Storm | 4-scenario |
-| 5 | 40,000 | 116,000 | Traffic Burst | 5-scenario |
-| 6 | 40,000 | 156,000 | Mixed Reality | 6-scenario |
-| 7 | 36,000 | 192,000 | Adversarial | 7-scenario |
-| 8 | 50,000 | 242,000 | Ping-Pong | 8-scenario |
-| 9 | 60,000 | 302,000 | Commuter Rush | 9-scenario |
-| 10 | 70,000 | 372,000 | IoT Tsunami | 10-scenario |
-| 11 | 80,000 | 452,000 | Ambulance | 11-scenario |
-| 12 | 100,000 | 552,000 | Spectrum Crunch | 12-scenario |
-| 13 | 100,000 | 652,000 | Multi-Mix | All equal |
-| 14 | ∞ | ∞ | Adaptive | Performance-based |
+| 1 | 60,000 | 60,000 | Flash Crowd | Single |
+| 2 | 100,000 | 160,000 | Sleepy Campus | 2-scenario |
+| 3 | 120,000 | 280,000 | Urban Canyon | 3-scenario |
+| 4 | 180,000 | 460,000 | Mobility Storm | 4-scenario |
+| 5 | 240,000 | 700,000 | Traffic Burst | 5-scenario |
+| 6 | 240,000 | 940,000 | Ambulance | 6-scenario |
+| 7 | 300,000 | 1,240,000 | Spectrum Crunch | 7-scenario |
+| 8 | 500,000 | 1,740,000 | Power Suite Mix | All equal |
 
-**Total Training Time to Deployment**: ~652,000 timesteps (~180 hours @ 1 episode/sec)
+**Total Training Time**: ~1.74M timesteps focused on mission-critical scenarios.
 
 ---
 

@@ -114,7 +114,7 @@ The following metrics were considered but **not implemented** due to simulator c
 
 ## 5. How to Run Evaluation
 
-For the full **🚀 CLI Reference Guide** (including all training and scenario flags), see the main [README.md](file:///home/hp/Radio-Cortex/README.md).
+For the full **🚀 CLI Reference Guide** (including all training and scenario flags), see the main [README.md](README.md).
 
 ### Quick Eval Commands
 
@@ -128,7 +128,7 @@ python3 radio_cortex_complete.py --mode eval --model base --scenario flash_crowd
 python3 radio_cortex_complete.py --mode eval --model bdh --scenario flash_crowd
 
 # ── All scenarios in parallel ──
-python3 radio_cortex_complete.py --mode eval --model bdh --scenario all --n-envs 4
+python3 radio_cortex_complete.py --mode eval --model bdh --scenario all --n-envs 12
 ```
 
 

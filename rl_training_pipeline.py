@@ -666,8 +666,15 @@ class PPOTrainer:
                     }
             
             # Force refresh of the live display to ensure progress bars and tables update every timestep.
+            # Optimization: Throttle UI refresh to 10Hz to save CPU
             if live_display:
-                live_display.update(make_layout())
+                if not hasattr(self, '_last_ui_update'):
+                    self._last_ui_update = 0
+                
+                now = time.time()
+                if now - self._last_ui_update > 0.1: # 10Hz limit
+                    live_display.update(make_layout())
+                    self._last_ui_update = now
             pass
 
         # Stats display table (Updated for Convergence Metrics)

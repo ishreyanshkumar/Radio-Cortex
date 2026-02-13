@@ -26,10 +26,10 @@ For each UE, keys are formatted as `ue_{id}_{metric}`.
 | `_rbs` | `float` | count | 0 - 5000 | Number of Downlink Resource Blocks allocated over the interval. |
 | `_ul_rbs` | `float` | count | 0 - 5000 | Average Uplink Resource Blocks used. |
 | `_cell` | `int` | ID | 0 - N (N=Cells-1) | The ID of the serving cell the UE is currently connected to. |
-| `_ho_att` | `int` | count | 0 - 5 | Number of handover attempts initiated. |
-| `_ho_succ` | `int` | count | 0 - 5 | Number of successful handovers. |
-| `_rsrp_var` | `float` | - | 0.0 - 100.0 | Variance of RSRP samples (stability metric). |
-| `_rsrq_var` | `float` | - | 0.0 - 5.0 | Variance of RSRQ samples (stability metric). |
+| `_ho_att` | `int` | count | 0 - 5 | Number of handover attempts initiated in the interval. |
+| `_ho_succ` | `int` | count | 0 - 5 | Number of successful handovers in the interval. |
+| `_rsrp_var` | `float` | - | 0.0 - 100.0 | Variance of RSRP samples (High values indicate rapid shadowing). |
+| `_rsrq_var` | `float` | - | 0.0 - 5.0 | Variance of RSRQ samples (High values indicate rapid fading). |
 | `_buffer` | `float` | bytes | 0.0 | Buffer occupancy (Currently a placeholder returning `0.0`). |
 
 ## Cell Metrics (Base Stations)
@@ -42,8 +42,8 @@ For each Cell/eNodeB, keys are formatted as `cell_{id}_{metric}`.
 | `_load` | `float` | count | 0 - 50 | Number of active UEs served by this cell in the last interval. |
 | `_avg_rb_req` | `float` | count | 0 - 5000 | Average total Resource Blocks requested per UE over the interval. |
 | `_rb_util` | `float` | ratio | 0.0 - 1.0 (Fixed 0.5) | Resource block utilization (Currently fixed at `0.5`). |
-| `_queue` | `int` | count | 0 | Queue length (Currently fixed at `0`). |
-| `_ues` | `int` | count | 0 | Number of connected UEs (Currently fixed at `0`). |
+| `_queue` | `int` | count | 0 | Queue length (Aggregated across bearers). |
+| `_ues` | `int` | count | 0 - 50 | Number of connected UEs in this cell. |
 
 ## Example JSON Payload
 

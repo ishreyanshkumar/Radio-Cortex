@@ -13,9 +13,9 @@ Radio-Cortex pushes the boundary of O-RAN intelligence by solving three fundamen
     -   *Problem*: Network optimization is a zero-sum game (e.g., High Throughput vs. Low Energy). Naive RL agents often "reward hack" or receive persistently negative rewards, causing learning collapse.
     -   *Solution*: We implemented a **3-Level Curriculum Reward Engine** with *Survival Bias*. **Level 0 (Bootstrap)**: Only Throughput reward + a constant `+1.0` bias (guarantees positive rewards). **Level 1 (Quality)**: Adds Delay and Queue penalties at >50% UE satisfaction. **Level 2 (Reliability)**: Adds Loss, Energy, and Load penalties at >80% satisfaction. This ensures stable, progressive learning.
 
-3.  **Compressed Action Space (29-Dim Differential Control)**:
+3.  **Compressed Action Space (26-Dim Differential Control)**:
     -   *Problem*: RL agents often output erratic "bang-bang" control actions and large action spaces (41+ dims) cause slow convergence.
-    -   *Solution*: We compressed the action space to **26 dimensions** (2 per cell: TxPower, SchedulerWeight + 20 UE priority weights) and use **Differential Control** (deltas instead of absolute values). Fixed parameters (HARQ, NoiseFigure, MacDelay, Hysteresis) are set to sensible defaults. This gives a 35% reduction while retaining all high-impact control levers.
+    -   *Solution*: We compressed the action space to **26 dimensions** (2 per cell: TxPower, SchedulerWeight + 20 UE priority weights) and use **Differential Control** (deltas instead of absolute values). This gives a 35% reduction in search space while retaining all high-impact control levers.
 
 ## 🚀 End-to-End Installation Guide
 
@@ -107,9 +107,10 @@ source .venv/bin/activate
 ```
 
 ### Quick Start
-1. **Curriculum Training** (recommended): `bash scripts/train_curriculum.sh`
-2. **Single Scenario**: `python3 radio_cortex_complete.py --mode train --scenario flash_crowd --total-timesteps 200000`
-3. **Clean Workspace**: `bash scripts/cleanup.sh`
+1. **Curriculum Training**: `bash scripts/train_curriculum.sh` (8-stage Power Suite)
+2. **Benchmarking**: `python3 scripts/benchmark_power_suite.py` (BDH vs Baseline vs MLP)
+3. **Single Scenario**: `python3 radio_cortex_complete.py --mode train --scenario flash_crowd --total-timesteps 200000`
+4. **Clean Workspace**: `bash scripts/cleanup.sh`
 
 ## 🛠️ Utilities
 
@@ -132,8 +133,8 @@ You can customize the training hyperparameters and environment settings via comm
 | `--mode` | `train` | Operation mode: `train` or `eval`. |
 | `--scenario` | `flash_crowd` | ns-3 Scenario (12 available). Use `all` for random rotation. |
 | `--total-timesteps` | 100000 | Total training or evaluation steps. |
-| `--n-envs` | 4 | Number of parallel environments (vectorized). 16 recommended for BDH. |
-| `--model` | `bdh` | Policy architecture: `bdh` (Transformer), `nn` (MLP), `t1`/`t2` (Experimental Transformers), `base` (baseline only, no AI). |
+| `--n-envs` | 12 | Number of parallel environments (vectorized). 12-16 recommended for BDH. |
+| `--model` | `bdh` | Policy architecture: `bdh` (Recommended), `nn` (MLP), `gpt2`, `trxl`, `base`. |
 | `--model-path` | `models/radiocortex_{model}.pt` | Path to save/load model checkpoint. |
 | `--device` | `None` | Compute device (`cpu` or `cuda`). |
 | `--config` | `None` | Path to JSON config file to override any argument. |
@@ -143,7 +144,7 @@ You can customize the training hyperparameters and environment settings via comm
 |:---|:---|:---|
 | `--num-ues` | 20 | Number of User Equipments (UEs). |
 | `--num-cells` | 3 | Number of cells (eNodeBs). |
-| `--sim-time` | 300.0 | Simulation duration per episode (seconds). **(See Speed Tips below)** |
+| `--sim-time` | 20.0 | Simulation duration per episode (seconds). **(See Speed Tips below)** |
 | `--kpm-interval` | 100 | KPM Reporting Interval in ms. |
 | `--system-bandwidth-mhz` | 10.0 | System Bandwidth (5.0, 10.0, 20.0). |
 
@@ -160,11 +161,10 @@ You can customize the training hyperparameters and environment settings via comm
 #### How to Train Faster (Without Loss of Accuracy)
 To reach convergence in minutes rather than hours, use these settings:
 
-1. **Max out Parallelism**: Set `--n-envs` to the number of physical CPU cores you have. 
-   - *Example*: `--n-envs 8` on an 8-core machine.
-2. **Optimize `sim-time`**: Set `--sim-time 30.0`. This ensures frequent resets and exposure to different scenarios (if using `--scenario all`) without wasting time on "stable" network states.
+1. **Max out Parallelism**: Set `--n-envs` to utilize your CPU cores. (Default: 12).
+2. **Optimize `sim-time`**: Set `--sim-time 20.0`. This is the sweet spot for frequency vs accuracy.
 3. **Use Optimized Build**: (Critical) Ensure you built ns-3 with `-d optimized`. 
-4. **Tune Rollout Length**: Match your `--rollout-steps` to your budget. For fast iterations, `1024` or `512` is usually sufficient for convergence if `--n-envs` is high.
+4. **Remove Latency Bottlenecks**: The environmental `time.sleep` has been removed, and UI rendering is throttled to 10Hz to maximize simulation throughput.
 
 **Recommended "Fast & Robust" Command:**
 ```bash
@@ -173,15 +173,15 @@ python3 radio_cortex_complete.py --mode train --scenario flash_crowd --n-envs 16
 
 #### Optimal Hyperparameters (16 envs + BDH)
 
-| Parameter | Default | Optimal (BDH 16-env) | Rationale |
+| Parameter | Default | Optimal (BDH 12-env) | Rationale |
 |:---|:---:|:---:|:---|
-| `--learning-rate` | 3e-4 | **1e-4** | Lower LR stabilizes BDH transformer gradients |
-| `--batch-size` | 256 | **512** | 16 envs × 256 rollout = 4096 samples; larger batch gives stable updates |
-| `--rollout-steps` | 128 | **256** | More transitions per rollout for richer gradient estimates |
-| `--gamma` | 0.99 | **0.995** | Longer horizon helps with delayed rewards (mobility, queue) |
-| `--clip-epsilon` | 0.2 | **0.15** | Tighter clipping prevents large policy jumps |
-| `--ent-coef` | 0.01 | **0.005** | BDH's state-dependent logstd already adapts exploration |
-| `--sim-time` | 60.0 | **30.0** | Sweet spot for episode length vs training speed |
+| `--learning-rate` | 3e-4 | **3e-4** | Standard LR for rapid bootstrap |
+| `--batch-size` | 256 | **256** | Balanced for 16GB VRAM GPUs |
+| `--rollout-steps` | 128 | **128** | Fast rollout cycles for frequent updates |
+| `--gamma` | 0.99 | **0.99** | Standard horizon for congestion control |
+| `--clip-epsilon` | 0.2 | **0.2** | Standard PPO clipping |
+| `--ent-coef` | 0.01 | **0.01** | Encourages initial exploration |
+| `--sim-time` | 20.0 | **20.0** | Optimized duration for 12-core hardware |
 
 > [!TIP]
 > All optimal hyperparameters are baked into `scripts/train_curriculum.sh`. Just run it.
@@ -226,10 +226,7 @@ Radio-Cortex supports 12 diverse scenarios that stress-test different aspects of
 
 Train the O-RAN Intelligent Controller using PPO (Proximal Policy Optimization).
 
-#### 1. Curriculum Training (Recommended)
-The 14-stage curriculum progressively introduces harder scenarios while maintaining proficiency on earlier ones.
-```bash
-# Full curriculum (Stages 1-14, ~652k timesteps)
+# 8-stage "Lean Power Suite" curriculum (Optimized for Speed)
 bash scripts/train_curriculum.sh
 
 # Resume from Stage 5 (e.g., after a crash)
@@ -573,35 +570,26 @@ print(f'Mean Reward: {np.mean([d[\"reward\"] for d in data]):.4f}')"
 
 ## 🔬 Advanced Workflows
 
-### Scenario Curriculum (14-Stage)
+### Scenario Curriculum (8-Stage "Lean Power Suite")
 The curriculum script trains on progressively harder scenarios. Each stage loads the previous checkpoint.
 
 ```bash
-# Run the full 14-stage curriculum
+# Run the full 8-stage curriculum
 bash scripts/train_curriculum.sh
-
-# Resume from a specific stage
-bash scripts/train_curriculum.sh --start 7
 ```
 
 | Stage | Steps | Primary Scenario | Skill Learned |
 |:---:|:---:|:---|:---|
-| 1 | 10k | Flash Crowd | Basic throughput control |
-| 2 | 16k | Sleepy Campus | Energy awareness |
-| 3 | 20k | Urban Canyon | SINR recovery |
-| 4 | 30k | Mobility Storm | Handover control |
-| 5 | 40k | Traffic Burst | Queue management |
-| 6 | 40k | Mixed Reality | Slice isolation |
-| 7 | 36k | Adversarial | Stability under chaos |
-| 8 | 50k | Handover Ping-Pong | Hysteresis tuning |
-| 9 | 60k | Commuter Rush | Mass mobility |
-| 10 | 70k | IoT Tsunami | Device scale |
-| 11 | 80k | Ambulance | QoS priority |
-| 12 | 100k | Spectrum Crunch | Spectral efficiency |
-| 13 | 100k | All (Multi-Mix) | Generalization |
-| 14 | ∞ | Adaptive | Continuous improvement |
+| 1 | 60k | Flash Crowd | Basic load balancing |
+| 2 | 100k | Sleepy Campus | Energy efficiency |
+| 3 | 120k | Urban Canyon | Signal recovery |
+| 4 | 180k | Mobility Storm | Handover control |
+| 5 | 240k | Traffic Burst | Overload management |
+| 6 | 240k | Ambulance | QoS priority |
+| 7 | 300k | Spectrum Crunch | Spectral efficiency |
+| 8 | 500k | Power Suite Mix | Generalization |
 
-**Total: ~652,000 timesteps** to full mastery.
+**Total: ~1.7M timesteps** to full mastery across all key challenges.
 
 ### Network Size Curriculum (Manual)
 ```bash
