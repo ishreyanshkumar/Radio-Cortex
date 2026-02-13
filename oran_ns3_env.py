@@ -526,10 +526,13 @@ class NS3Interface:
         try:
             suffix_id = "".join(filter(str.isdigit, self.config.topic_suffix))
             if suffix_id:
-                delay = (int(suffix_id) % 16) * 0.25 # Stagger up to 4s
-                if self.config.verbose:
+                # Optimized staggering: first 4 envs start immediately, others staggered by 0.15s
+                idx = int(suffix_id)
+                delay = max(0, (idx - 3)) * 0.15 if idx > 3 else 0
+                if delay > 0 and self.config.verbose:
                     print(f"Staggering startup for Env {self.config.topic_suffix} by {delay:.2f}s...")
-                time.sleep(delay)
+                if delay > 0:
+                    time.sleep(delay)
         except:
             pass
 
@@ -543,7 +546,7 @@ class NS3Interface:
         )
         if self.config.verbose:
             print(f"ns-3 process started (PID: {self.ns3_process.pid}, Logs: ns3_out{self.config.topic_suffix}.log)")
-        time.sleep(1) # Reduced from 2s
+        # Optimization: Removed hard time.sleep(1). receive_kpm_report handles the wait dynamically.
         
         # Reset timestamp tracking for new episode
         self.last_kpm_ts = None
@@ -610,7 +613,8 @@ class NS3Interface:
             last_record = None
 
             while True:
-                records = self.kafka_consumer.poll(timeout_ms=100)
+                # Optimized: Reduced poll timeout from 100ms to 10ms for lower latency detection
+                records = self.kafka_consumer.poll(timeout_ms=10)
                 if records:
                     for partition, messages in records.items():
                         if messages:

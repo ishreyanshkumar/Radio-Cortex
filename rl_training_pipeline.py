@@ -394,10 +394,11 @@ class PPOTrainer:
             if on_step:
                 on_step(infos, rewards_arr, entropy=entropy.mean().item() if entropy is not None else None)
             
-            # Log progress occasionally
-            if step_i % 5 == 0: # More frequent logging
+            # Log progress very occasionally to avoid terminal flood
+            if step_i % 25 == 0: 
                 avg_reward = np.mean(rewards_arr)
-                print(f"[Step {self.total_steps}] VecEnv Avg Reward={avg_reward:.3f} (across {n_envs} envs)", flush=True)
+                # Use a carriage return rather than a newline to keep terminal clean
+                print(f"\r  [Collecting] Step {self.total_steps:<8} | Rollout Avg Reward: {avg_reward:+.3f}  ", end="", flush=True)
             
             # Store batch data
             all_states.append(states)
@@ -603,6 +604,17 @@ class PPOTrainer:
                 else:
                     current_rollout_rewards.extend(rewards)
             
+            # Optimization: Only perform complex UI metrics calculations at 10Hz
+            # This saves massive CPU time during rollouts.
+            if not hasattr(self, '_last_ui_update'):
+                self._last_ui_update = 0
+            
+            now = time.time()
+            if now - self._last_ui_update < 0.1: # 10Hz limit for metric processing
+                return # Skip heavy processing
+            
+            self._last_ui_update = now # Mark update as happening
+            
             nonlocal current_stats
             
             # Create partial stats if they don't exist (first step of first rollout)
@@ -646,35 +658,17 @@ class PPOTrainer:
                     rb = np.mean([c['rb_utilization'] for c in cell_kpms]) if cell_kpms else 0.0
                     power = sum([(10**(c['tx_power']/10.0))*0.001 for c in cell_kpms]) if cell_kpms else 0.0
                     
-                    # Store detailed UE metrics for grid
-                    detailed_ue = {
-                        ue_id: {
-                            'tput': m['throughput'],
-                            'delay': m['delay'],
-                            'loss': m['packet_loss'],
-                            'sinr': m['sinr'],
-                            'cell': m.get('serving_cell', -1)
-                        } for ue_id, m in e2.ue_metrics.items()
-                    }
-                    
                     live_env_metrics[env_i] = {
                         'tput': tput, 'delay': delay, 'loss': loss, 
                         'sinr': sinr, 'rsrp': rsrp, 'queue': queue, 'rb': rb, 'power': power,
                         'level': info.get('z_level', 0),          # New: Curriculum Level
-                        'success': info.get('z_success', 0.0),    # New: Success Rate
-                        'ue_metrics': detailed_ue
+                        'success': info.get('z_success', 0.0)     # New: Success Rate
+                        # Optimization: Skip building detailed_ue every step to save CPU
                     }
             
             # Force refresh of the live display to ensure progress bars and tables update every timestep.
-            # Optimization: Throttle UI refresh to 10Hz to save CPU
             if live_display:
-                if not hasattr(self, '_last_ui_update'):
-                    self._last_ui_update = 0
-                
-                now = time.time()
-                if now - self._last_ui_update > 0.1: # 10Hz limit
-                    live_display.update(make_layout())
-                    self._last_ui_update = now
+                live_display.update(make_layout())
             pass
 
         # Stats display table (Updated for Convergence Metrics)
@@ -784,6 +778,11 @@ class PPOTrainer:
                     
                 tables.append(Panel(table, border_style="white", expand=True))
             
+            # Optimization: If many envs, only show UE grid if reasonably small
+            # Rendering 12+ tables per frame is a massive CPU sink.
+            if len(live_env_metrics) > 4:
+                return Panel("(UE Detail Grid Hidden for Performance — showing 12+ Envs)", style="dim italic")
+
             if not tables:
                 return Panel("Waiting for UE data...", style="dim")
                 
