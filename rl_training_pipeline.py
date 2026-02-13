@@ -604,17 +604,6 @@ class PPOTrainer:
                 else:
                     current_rollout_rewards.extend(rewards)
             
-            # Optimization: Only perform complex UI metrics calculations at 10Hz
-            # This saves massive CPU time during rollouts.
-            if not hasattr(self, '_last_ui_update'):
-                self._last_ui_update = 0
-            
-            now = time.time()
-            if now - self._last_ui_update < 0.1: # 10Hz limit for metric processing
-                return # Skip heavy processing
-            
-            self._last_ui_update = now # Mark update as happening
-            
             nonlocal current_stats
             
             # Create partial stats if they don't exist (first step of first rollout)
@@ -639,6 +628,18 @@ class PPOTrainer:
             
             if entropy is not None:
                 current_stats['entropy'] = entropy
+
+            # ---------------------------
+            # Optimization: Only perform complex UI metrics calculations at 10Hz
+            # This saves massive CPU time during rollouts.
+            if not hasattr(self, '_last_ui_update'):
+                self._last_ui_update = 0
+            
+            now = time.time()
+            if now - self._last_ui_update < 0.1: # 10Hz limit for metric processing
+                return # Skip heavy processing
+            
+            self._last_ui_update = now # Mark update as happening
             # ---------------------------
 
             for env_i, info in enumerate(infos):

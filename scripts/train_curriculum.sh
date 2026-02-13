@@ -23,7 +23,7 @@ export PYTORCH_ALLOC_CONF="expandable_segments:True"
 # ── Configuration (Optimized for 24-Core / 16GB VRAM Hardware) ──
 MODEL="bdh"
 N_ENVS=12                     # Increased from 12 to maximize CPU utilization
-SIM_TIME=20.0                 # Reduced from 30.0 (33% time saving, same accuracy)
+SIM_TIME=3600.0                 # Increased to reduce reset frequency (Avoids 30s waf locks)
 DEVICE=""                     # auto-detect
 MODEL_DIR="models/curriculum"
 LOG_INTERVAL=7                # Reduced frequency for less overhead

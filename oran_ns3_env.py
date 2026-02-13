@@ -418,26 +418,30 @@ class NS3Interface:
             ns3_dir = os.getcwd()
 
         # Try to find the compiled binary directly to avoid Waf lock contention.
-        # PRIORITY: Check for 'optimized' build first (much faster simulation).
-        # Fallback to 'default' or 'debug' if optimized is not found.
-        binary_name_default = "ns3.46.1-oran-congestion-scenario-default"
-        binary_name_opt = "ns3.46.1-oran-congestion-scenario-optimized"
+        # Uses glob to handle different ns-3 versions (e.g. 3.40, 3.46.1) automatically.
+        import glob
         
-        candidate_paths = [
-            # 1. Optimized build in standard layout (Most common with './ns3 build')
-            os.path.join(ns3_dir, "build/scratch", binary_name_opt),
-            # 2. Optimized build in split layout (Legacy/CMake specific)
-            os.path.join(ns3_dir, "build/optimized/scratch", binary_name_opt),
-            # 3. Default build (Commonly present, often debug-enabled/slow)
-            os.path.join(ns3_dir, "build/scratch", binary_name_default),
-            # 4. Debug build (Explicit debug)
-            os.path.join(ns3_dir, "build/debug/scratch", binary_name_default.replace("default", "debug")),
+        # 46.1 is common, but we'll search for any version.
+        binary_name_opt_pattern = "ns3.*-oran-congestion-scenario-optimized"
+        binary_name_default_pattern = "ns3.*-oran-congestion-scenario-default"
+        
+        candidate_patterns = [
+            # 1. Optimized build in standard layout
+            os.path.join(ns3_dir, "build/scratch", binary_name_opt_pattern),
+            # 2. Optimized build in split layout
+            os.path.join(ns3_dir, "build/optimized/scratch", binary_name_opt_pattern),
+            # 3. Default build
+            os.path.join(ns3_dir, "build/scratch", binary_name_default_pattern),
+            # 4. Debug build
+            os.path.join(ns3_dir, "build/debug/scratch", binary_name_default_pattern.replace("default", "debug")),
         ]
         
         binary_path = None
-        for path in candidate_paths:
-            if os.path.exists(path):
-                binary_path = path
+        for pattern in candidate_patterns:
+            matches = glob.glob(pattern)
+            if matches:
+                # Use the first match (most specific)
+                binary_path = matches[0]
                 break
         
         if binary_path:
@@ -573,8 +577,9 @@ class NS3Interface:
             # Optimization: Wait for partition assignment with a tight loop rather than a hard 30s poll
             start_poll = time.time()
             found_partitions = False
-            while time.time() - start_poll < 10.0: # Max 10s wait for initial partition assignment
-                self.kafka_consumer.poll(timeout_ms=500)
+            # Reduced from 10s to 1s as per user suggestion for "fail fast" behavior
+            while time.time() - start_poll < 1.0: 
+                self.kafka_consumer.poll(timeout_ms=100) # Faster poll
                 partitions = self.kafka_consumer.assignment()
                 if partitions:
                     self.kafka_consumer.seek_to_end(*partitions)
