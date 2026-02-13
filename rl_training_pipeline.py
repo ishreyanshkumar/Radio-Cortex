@@ -5,8 +5,6 @@ Supports PPO, SAC, TD3 for RAN congestion control
 """
 
 import torch
-# Add this line to prevent PyTorch from fighting ns-3 for CPU cores
-torch.set_num_threads(1)
 import torch.nn as nn
 import numpy as np
 import os
@@ -670,8 +668,9 @@ class PPOTrainer:
                     }
             
             # Force refresh of the live display to ensure progress bars and tables update every timestep.
-            if live_display:
-                live_display.update(make_layout())
+            # Optimization: Disable synchronous refresh. Rich context manager updates at 10Hz asynchronously.
+            # if live_display:
+            #     live_display.update(make_layout())
             pass
 
         # Stats display table (Updated for Convergence Metrics)

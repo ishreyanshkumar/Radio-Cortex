@@ -738,7 +738,7 @@ class NS3Interface:
         try:
             rc_topic = getattr(self, '_rc_topic', 'e2_rc_control')
             self.kafka_producer.send(rc_topic, rc_message)
-            self.kafka_producer.flush()
+            # self.kafka_producer.flush() # Optimization: Async send for higher throughput
             
             self.rc_msg_count += 1
             if hasattr(self, 'last_kpm_rx_time') and self.last_kpm_rx_time > 0:
@@ -952,7 +952,7 @@ class ORANns3Env(gym.Env):
             
             e2_msg = self.ns3.receive_kpm_report(
                 wait_for_new=True,
-                max_wait_s=10.0  # Allow up to 10s for CPU spikes to clear (prevents false-alarm resets)
+                max_wait_s=(self.config.kpm_interval_ms / 1000.0) * 5.0
             )
             next_state = self._extract_state(e2_msg)
             
