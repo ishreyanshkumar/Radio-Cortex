@@ -9,39 +9,7 @@ import importlib
 from typing import Optional
 import math
 
-# --- MONKEY PATCH START ---
-# We must patch the Attention.forward method to remove the causal mask (.tril)
-# so that Cells and UEs can see each other (Bidirectional Attention).
-
-def bidirectional_attention_forward(self, Q, K, V):
-    # Standard checks from original code
-    assert self.freqs.dtype == torch.float32
-    assert K is Q
-    _, _, T, _ = Q.size()
-
-    # Re-implement RoPE logic from bdh.py
-    r_phases = (
-        torch.arange(0, T, device=self.freqs.device, dtype=self.freqs.dtype)
-        .view(1, 1, -1, 1)
-    ) * self.freqs
-    
-    # We call the static method from the class (self.__class__) 
-    # or rely on the instance method if bound correctly.
-    # Safe way: use the original class's static method
-    QR = self.rope(r_phases, Q) 
-    KR = QR
-
-    # --- THE FIX: No .tril(diagonal=-1) ---
-    # Original: scores = (QR @ KR.mT).tril(diagonal=-1)
-    # New (Bidirectional):
-    scores = (QR @ KR.mT)
-    
-    return scores @ V
-
-# Apply the patch immediately after importing bdh
 from . import bdh as bdh_mod
-bdh_mod.Attention.forward = bidirectional_attention_forward
-# --- MONKEY PATCH END ---
 
 class BDHPolicy(nn.Module):
     """
@@ -64,7 +32,7 @@ class BDHPolicy(nn.Module):
         
         self.num_cells = 3
         self.cell_features = 5
-        self.cell_actions = 3  # TxPower, SchedulerWeight, Hysteresis
+        self.cell_actions = 2  # TxPower, SchedulerWeight (Hysteresis fixed to 3dB in env)
         
         if env_config:
             self.num_ues = getattr(env_config, 'numUes', self.num_ues) or self.num_ues
@@ -81,7 +49,7 @@ class BDHPolicy(nn.Module):
                 n_layer=6, 
                 n_embd=256, 
                 n_head=4, 
-                mlp_internal_dim_multiplier=128, # Restored to 128 (Paper Default)
+                mlp_internal_dim_multiplier=128, # Restored to original 128
                 vocab_size=256 
             )
         else:
@@ -134,43 +102,42 @@ class BDHPolicy(nn.Module):
         """
         Convert flat state -> (UE_Tokens, Cell_Tokens)
         State Layout: [UE1..N, Cell1..M]
+        Inferred from total dimension D = N*12 + M*5
+        We assume M (num_cells) is known/stable, or we try to fit it.
         """
-        B = state.size(0)
+        B, D = state.size()
         
-        # Slicing indices
-        end_ue = self.num_ues * self.ue_features
-        end_cell = end_ue + self.num_cells * self.cell_features
+        # Heuristic: num_cells is usually 3-7. 
+        # For now, we use the self.num_cells provided at init as the target M.
+        # But we can calculate actual N based on leftover space.
         
-        limit = state.shape[1]
+        M = self.num_cells
+        total_cell_dim = M * self.cell_features
         
-        # Extract UE Part
-        if limit < end_ue:
-            actual_ues = limit // self.ue_features
-            ue_part = state[:, :actual_ues * self.ue_features]
-            ue_tokens = ue_part.view(B, actual_ues, self.ue_features)
-            cell_tokens = torch.zeros(B, self.num_cells, self.cell_features, device=state.device)
+        if D < total_cell_dim:
+            # Fallback for tiny inputs
+            M = D // self.cell_features
+            N = 0
+            ue_tokens = torch.zeros(B, 0, self.ue_features, device=state.device)
+            cell_tokens = state.view(B, M, self.cell_features)
         else:
-            ue_part = state[:, :end_ue]
-            ue_tokens = ue_part.view(B, self.num_ues, self.ue_features)
+            # Extract UE part (the majority of the vector)
+            # D = N * 12 + M * 5  => N = (D - 5M) / 12
+            N = (D - total_cell_dim) // self.ue_features
             
-            # Extract Cell Part
-            if limit < end_cell:
-                 cell_part = state[:, end_ue:limit]
-                 actual_cells = (limit - end_ue) // self.cell_features
-                 if actual_cells > 0:
-                      cell_tokens = cell_part[:, :actual_cells * self.cell_features].view(B, actual_cells, self.cell_features)
-                      if actual_cells < self.num_cells:
-                           pad = torch.zeros(B, self.num_cells - actual_cells, self.cell_features, device=state.device)
-                           cell_tokens = torch.cat([cell_tokens, pad], dim=1)
-                 else:
-                      cell_tokens = torch.zeros(B, self.num_cells, self.cell_features, device=state.device)
-            else:
-                 cell_part = state[:, end_ue:end_cell]
-                 cell_tokens = cell_part.view(B, self.num_cells, self.cell_features)
+            ue_part = state[:, :N * self.ue_features]
+            ue_tokens = ue_part.view(B, N, self.ue_features)
+            
+            cell_part = state[:, N * self.ue_features : N * self.ue_features + total_cell_dim]
+            cell_tokens = cell_part.view(B, M, self.cell_features)
+        
+        # Update instance variables so heads know how many they got
+        self._last_n_ue = N
+        self._last_n_cell = M
         
         # Encode
-        ue_emb = self.ue_encoder(ue_tokens)       # (B, N_UE, D)
-        cell_emb = self.cell_encoder(cell_tokens) # (B, N_Cell, D)
+        ue_emb = self.ue_encoder(ue_tokens)       # (B, N, D_emb)
+        cell_emb = self.cell_encoder(cell_tokens) # (B, M, D_emb)
         
         return ue_emb, cell_emb
 
@@ -184,7 +151,8 @@ class BDHPolicy(nn.Module):
         x_latent = x @ self.bdh.encoder
         x_sparse = F.relu(x_latent) 
         
-        yKV = self.bdh.attn(Q=x_sparse, K=x_sparse, V=x)
+        # Scale-Free Bidirectional Attention
+        yKV = self.bdh.attn(Q=x_sparse, K=x_sparse, V=x, causal=False)
         yKV = self.bdh.ln(yKV)
         
         y_latent = yKV @ self.bdh.encoder_v
@@ -193,7 +161,8 @@ class BDHPolicy(nn.Module):
         xy_sparse = x_sparse * y_sparse
         xy_sparse = self.bdh.drop(xy_sparse)
         
-        yMLP = xy_sparse.transpose(1, 2).reshape(B, 1, T, N * nh) @ self.bdh.decoder
+        # Memory-efficient projection using einsum to avoid large non-contiguous reshapes
+        yMLP = torch.einsum('bhtn,hnd->btd', xy_sparse, self.bdh.decoder.view(nh, N, D)).unsqueeze(1)
         
         y = self.bdh.ln(yMLP)
         out = self.bdh.ln(x + y)
@@ -212,8 +181,6 @@ class BDHPolicy(nn.Module):
         x = self.bdh.ln(x)
         
         for level in range(C.n_layer):
-            # Gradient Checkpointing: Trades compute for memory
-            # Calculates forward pass 2x, but stores only input for backward
             if self.training and x.requires_grad:
                 x = checkpoint.checkpoint(self._bdh_block, x, use_reentrant=False)
             else:
@@ -223,28 +190,29 @@ class BDHPolicy(nn.Module):
 
     def _forward_common(self, state):
         B = state.size(0)
-        # 1. Tokenize
+        # 1. Tokenize (Dynamic N, M)
         ue_emb, cell_emb = self._process_state_to_tokens(state)
+        N, M = self._last_n_ue, self._last_n_cell
         
         # 2. Concat: [Cells, UEs] Order
-        all_tokens = torch.cat([cell_emb, ue_emb], dim=1) # (B, N_Cell + N_UE, D)
+        all_tokens = torch.cat([cell_emb, ue_emb], dim=1) # (B, M + N, D)
         
-        # 3. Process
+        # 3. Process (Transformer core is naturally scale-free)
         output_emb = self._bdh_layer_stack(all_tokens)
         
         # 4. Split
-        # Cells were first
-        out_cell = output_emb[:, :self.num_cells, :]
-        out_ue = output_emb[:, self.num_cells:, :]
+        out_cell = output_emb[:, :M, :]
+        out_ue = output_emb[:, M:, :]
         
         # 5. Decode Actions
-        act_cell = self.cell_action_head(out_cell)  # (B, 3, 3)
+        # Encoders and Heads are shared across entities (Scale-free)
+        act_cell = self.cell_action_head(out_cell)  # (B, M, cell_actions)
         logstd_cell = self.cell_logstd_head(out_cell)
         
-        act_ue = self.ue_action_head(out_ue)        # (B, 20, 1)
+        act_ue = self.ue_action_head(out_ue)        # (B, N, ue_actions)
         logstd_ue = self.ue_logstd_head(out_ue)
         
-        # 6. Concat for Flat Action Vector: [CellActions, UEActions]
+        # 6. Concat for Flat Action Vector: [CellActions..., UEActions...]
         flat_cell = act_cell.reshape(B, -1)
         flat_logstd_cell = logstd_cell.reshape(B, -1)
         
@@ -255,7 +223,8 @@ class BDHPolicy(nn.Module):
         logstd = torch.cat([flat_logstd_cell, flat_logstd_ue], dim=1)
         logstd = torch.clamp(logstd, -2, 1)
         
-        # 7. Value (Mean over all entities)
+        # 7. Value (Aggregated over all entities)
+        # Masked mean would be better if we had padding, but here we only have real entities
         global_pool = output_emb.mean(dim=1)
         value = self.value_head(global_pool)
         

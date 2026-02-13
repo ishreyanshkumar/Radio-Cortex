@@ -41,11 +41,15 @@ def make_env(config: NS3Config, env_id: int, seed: Optional[int] = None) -> Call
         Callable that creates the configured environment
     """
     def _init() -> ORANns3Env:
+        # Prevent ns-3 worker processes from initializing CUDA contexts
+        # which would waste ~1GB of GPU memory per worker.
+        os.environ["CUDA_VISIBLE_DEVICES"] = ""
+        
         # Stagger environment launches to prevent simultaneous ns-3 spawns
         # from overwhelming the LTE RRC stack and causing SIGSEGV crashes.
         if env_id > 0:
-            stagger_delay = env_id * 3
-            print(f"[VecEnv] Env {env_id}: staggering init by {stagger_delay}s...")
+            stagger_delay = env_id * 0.7  # Reduced from 3.0s for faster rollout transitions
+            print(f"[VecEnv] Env {env_id}: staggering init by {stagger_delay:.1f}s...")
             time.sleep(stagger_delay)
 
         max_retries = 3

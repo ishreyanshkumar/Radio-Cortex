@@ -15,7 +15,7 @@ Radio-Cortex pushes the boundary of O-RAN intelligence by solving three fundamen
 
 3.  **Compressed Action Space (29-Dim Differential Control)**:
     -   *Problem*: RL agents often output erratic "bang-bang" control actions and large action spaces (41+ dims) cause slow convergence.
-    -   *Solution*: We compressed the action space to **29 dimensions** (3 per cell: TxPower, SchedulerWeight, Hysteresis + 20 UE priority weights) and use **Differential Control** (deltas instead of absolute values). Fixed parameters (HARQ, NoiseFigure, MacDelay) are set to sensible defaults. This gives a 29% reduction while retaining all high-impact control levers.
+    -   *Solution*: We compressed the action space to **26 dimensions** (2 per cell: TxPower, SchedulerWeight + 20 UE priority weights) and use **Differential Control** (deltas instead of absolute values). Fixed parameters (HARQ, NoiseFigure, MacDelay, Hysteresis) are set to sensible defaults. This gives a 35% reduction while retaining all high-impact control levers.
 
 ## 🚀 End-to-End Installation Guide
 
@@ -397,7 +397,7 @@ converts ns-3 simulation into a standard OpenAI Gym interface (observation, acti
     *   `reset()`: Restarts the ns-3 simulation subprocess.
     *   `_compute_reward(e2_msg)`: Delegates to `RewardEngine`.
     *   **`RewardEngine`**: 3-Level Curriculum reward engine with Survival Bias. Combines 8 components (Throughput, Delay, Loss, SE, Energy, Load, Queue, Smoothing) gated by curriculum levels.
-    *   **Action Space**: 29 dimensions — 3 per cell (TxPower, SchedulerWeight, Hysteresis) + 20 UE priority weights. Uses differential control (deltas).
+    *   **Action Space**: 26 dimensions — 2 per cell (TxPower, SchedulerWeight) + 20 UE priority weights. Uses differential control (deltas).
 *   **`NS3Interface`**: Handles low-level communication.
     *   `start_simulation()`: Spawns the `./ns3 run ...` subprocess.
     *   `send_rc_control(actions)`: Serializes actions to JSON and sends via Kafka `e2_rc_control` topic.

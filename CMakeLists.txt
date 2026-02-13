@@ -58,7 +58,7 @@ function(create_scratch source_files)
           EXECNAME ${scratch_name}
           EXECNAME_PREFIX ${target_prefix}
           SOURCE_FILES "${source_files}"
-          LIBRARIES_TO_LINK "${ns3-libs}" "${ns3-contrib-libs}"
+          LIBRARIES_TO_LINK "${ns3-libs}" "${ns3-contrib-libs}" "rdkafka" "rdkafka++"
           EXECUTABLE_DIRECTORY_PATH ${scratch_directory}/
   )
 endfunction()

@@ -54,10 +54,10 @@ class Attention(torch.nn.Module):
         phases_cos, phases_sin = Attention.phases_cos_sin(phases)
         return (v * phases_cos).to(v.dtype) + (v_rot * phases_sin).to(v.dtype)
 
-    def forward(self, Q, K, V):
+    def forward(self, Q, K, V, causal=True):
         assert self.freqs.dtype == torch.float32
         assert K is Q
-        _, _, T, _ = Q.size()
+        B, nh, T, _ = Q.size()
 
         r_phases = (
             torch.arange(
@@ -70,9 +70,16 @@ class Attention(torch.nn.Module):
         QR = self.rope(r_phases, Q)
         KR = QR
 
-        # Current attention
-        scores = (QR @ KR.mT).tril(diagonal=-1)
-        return scores @ V
+        # Use efficient scaled_dot_product_attention (FlashAttention)
+        # It handles scaling and masking internally. 
+        # is_causal=causal will apply the .tril mask if True.
+        # This is BOTH faster and takes O(T) memory instead of O(T^2).
+        
+        return F.scaled_dot_product_attention(
+            QR, KR, V, 
+            is_causal=causal,
+            dropout_p=self.config.dropout if self.training else 0.0
+        )
 
 class BDH(nn.Module):
     def __init__(self, config: BDHConfig):

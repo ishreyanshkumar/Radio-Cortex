@@ -43,6 +43,44 @@ class NS3Config:
     topic_suffix: str = ""
     # Verbosity control for CLI output
     verbose: bool = True
+    # Testing: Randomly shuffle UE indices in the state (Order Scramble)
+    shuffle_ues: bool = False
+
+    def __post_init__(self):
+        """Automatically adjust configuration defaults based on selected scenarios."""
+        # 1. Sync scenario with scenarios list if necessary
+        if self.scenarios and self.scenario not in (self.scenarios if isinstance(self.scenarios, list) else self.scenarios.keys()):
+            # If current scenario isn't in the list, default to the first one available
+            self.scenario = list(self.scenarios)[0] if isinstance(self.scenarios, (list, dict)) else self.scenario
+
+        # 2. Major Bug Fix: Align num_ues/num_cells with C++ overrides for scenario requirements
+        # Some ns-3 scenarios forcibly require specific counts to function (e.g., hexagonal layouts).
+        target_ue_count = self.num_ues
+        target_cell_count = self.num_cells
+        
+        # Check all possible scenarios in multi-scenario training
+        check_scenarios = [self.scenario]
+        if self.scenarios:
+            check_scenarios.extend(list(self.scenarios) if isinstance(self.scenarios, list) else list(self.scenarios.keys()))
+            
+        # IoT Tsunami overrides (100 UEs)
+        if 'iot_tsunami' in check_scenarios:
+            target_ue_count = max(target_ue_count, 100)
+        
+        # Mobility/Topo scenarios (require 7 cells for the hexagonal cluster)
+        topo_scenarios = ['mobility_storm', 'urban_canyon', 'ping_pong', 'commuter_rush']
+        if any(s in check_scenarios for s in topo_scenarios):
+            target_cell_count = max(target_cell_count, 7)
+            
+        if target_ue_count != self.num_ues:
+            if self.verbose:
+                print(f"⚠️  [NS3Config] Scenario Scale detected. Forcing num_ues={target_ue_count} to align with C++.")
+            self.num_ues = target_ue_count
+            
+        if target_cell_count != self.num_cells:
+            if self.verbose:
+                print(f"⚠️  [NS3Config] Topology Scenario detected. Forcing num_cells={target_cell_count} to prevent crash (hexagonal layout requirement).")
+            self.num_cells = target_cell_count
 
 
 @dataclass
@@ -76,22 +114,22 @@ class RewardEngine:
         # ── Weights ──────────────────────────────────────────────
         self.W_TPUT      = 1.0      # Throughput (Log Utility)
         self.W_DELAY_LIN = 0.5      # Linear Delay Penalty
-        self.W_DELAY_BAR = 1.0      # Quadratic SLA Barrier
-        self.W_LOSS      = 1.0      # Packet Loss (IQX)
-        self.W_SE        = 0.05     # Spectral Efficiency (keep-alive signal)
+        self.W_DELAY_BAR = 2.0      # Increased from 1.0: punish SLA breaches more
+        self.W_LOSS      = 2.5      # Increased from 1.0: core stability penalty
+        self.W_SE        = 0.15     # Tripled from 0.05: reward robust channel conditions
         self.W_ENERGY    = 0.5      # Energy Efficiency
         self.W_LOAD      = 1.0      # Load Balancing
-        self.W_QUEUE     = 0.3      # Queue Congestion (NEW)
+        self.W_QUEUE     = 0.8      # Increased from 0.3: "Backpressure" signal
         self.W_SMOOTH    = 0.05     # Action Smoothing
         self.BIAS        = 1.0      # Survival Bias (Ensures Level 0 is positive)
 
         # ── Thresholds / Normalizers ─────────────────────────────
         self.T_MAX     = 100.0      # Max Throughput (Mbps)
         self.D_MAX     = 100.0      # Normalizing Delay (ms)
-        self.D_SLA     = 60.0       # SLA Threshold (ms) — barrier kicks in after this (Relaxed from 50.0)
-        self.BETA_LOSS = 3.0        # IQX Sensitivity parameter (Relaxed from 5.0)
+        self.D_SLA     = 45.0       # Tightened from 60.0: earlier barrier entry
+        self.BETA_LOSS = 5.0        # Steeper from 3.0: exponential loss penalty
         self.EPSILON   = 1e-6       # Safe log
-        self.Q_MAX     = 1000.0     # Queue length normalizer (NEW)
+        self.Q_MAX     = 500.0      # Tightened from 1000.0: more sensitive queue penalization
 
         # ── Clip bounds (Stage 1 — per component) ───────────────
         self.CLIP_TPUT   = (-0.5, 5.0)    # log(1+x) for x≥0 is ≥0, but allow small neg for numerical safety
@@ -109,25 +147,38 @@ class RewardEngine:
         # ── Curriculum State ─────────────────────────────────────
         self.level = 0              # 0=Bootstrap, 1=Quality, 2=Reliability
         self.success_history = []   # Rolling window of success rate
-        self.HISTORY_LEN = 50       # Window size for level promotion
+        self.HISTORY_LEN = 50       # Window size for level promotion/demotion
         self.MIN_TPUT_SUCCESS = 2.0 # Mbps required to count as "satisfied"
+        self.DEMOTION_THRESHOLD = 0.2 # If <20% users satisfied, consider demotion
+        self.PROMOTION_THRESHOLD_L1 = 0.5 # 50% for Level 1
+        self.PROMOTION_THRESHOLD_L2 = 0.8 # 80% for Level 2
+        self.current_scenario = None
 
     def _update_curriculum(self, current_success_rate: float):
-        """Update curriculum level based on sustained success rate."""
+        """Update curriculum level based on sustained success rate with promotion/demotion logic."""
         self.success_history.append(current_success_rate)
         if len(self.success_history) > self.HISTORY_LEN:
             self.success_history.pop(0)
         
         avg_success = sum(self.success_history) / len(self.success_history)
 
-        # Promotion Logic
-        if self.level == 0 and avg_success > 0.5: # >50% UEs satisfied
+        # Level promotion and demotion logic
+        if self.level == 0 and avg_success > self.PROMOTION_THRESHOLD_L1:
             self.level = 1
-            print(f"\n🎉 PROMOTED TO LEVEL 1 (Quality): Enabling Delay Penalty")
-            self.success_history = [] # Reset history for next level
-        elif self.level == 1 and avg_success > 0.8: # >80% UEs satisfied
-            self.level = 2
-            print(f"\n🚀 PROMOTED TO LEVEL 2 (Reliability): Enabling Loss/Jitter Penalty")
+            print(f"\n🎉 PROMOTED TO LEVEL 1 (Quality): Soft-enabling Delay Penalty (Scenario: {self.current_scenario})")
+            self.success_history = []
+        elif self.level == 1:
+            if avg_success > self.PROMOTION_THRESHOLD_L2:
+                self.level = 2
+                print(f"\n🚀 PROMOTED TO LEVEL 2 (Reliability): Soft-enabling Loss/Jitter Penalty")
+                self.success_history = []
+            elif avg_success < self.DEMOTION_THRESHOLD:
+                self.level = 0
+                print(f"\n📉 DEMOTED TO LEVEL 0 (Bootstrap): Re-focusing on Throughput baseline")
+                self.success_history = []
+        elif self.level == 2 and avg_success < self.DEMOTION_THRESHOLD:
+            self.level = 1
+            print(f"\n📉 DEMOTED TO LEVEL 1 (Quality): Performance drop detected")
             self.success_history = []
 
     def compute(self,
@@ -163,22 +214,30 @@ class RewardEngine:
         r_tput = float(np.clip(r_tput, *self.CLIP_TPUT))
 
         # ── Calculate Success Rate (for Curriculum) ──────────────
-        # Start with simple check: Fraction of UEs with Tput > Min
-        satisfied_ues = np.sum(tputs > self.MIN_TPUT_SUCCESS)
+        # Scenario-specific success threshold adjustments
+        target_tput = self.MIN_TPUT_SUCCESS
+        if self.current_scenario == 'iot_tsunami':
+            target_tput = 0.5
+        elif self.current_scenario in ['spectrum_crunch', 'urban_canyon']:
+            target_tput = 1.0
+
+        satisfied_ues = np.sum(tputs > target_tput)
         success_rate = satisfied_ues / max(len(tputs), 1)
         self._update_curriculum(success_rate)
 
-        # ── Apply Curriculum Masking ─────────────────────────────
-        # Level 0: Only Tput + Bias. No Penalties.
-        # Level 1: Tput + Bias + Delay.
-        # Level 2: Full Rewards.
+        # ── Apply Curriculum Masking & Soft-Start ─────────────────
+        # Use success rate to softly introduce penalties within a level
+        avg_success = sum(self.success_history) / max(len(self.success_history), 1)
         
-        w_delay_eff = self.W_DELAY_LIN if self.level >= 1 else 0.0
-        w_queue_eff = self.W_QUEUE     if self.level >= 1 else 0.0  # Early warning (Level 1)
+        # Soft factor (0.0 to 1.0) based on progress within the level
+        soft_factor = min(avg_success / 0.9, 1.0) 
 
-        w_loss_eff   = self.W_LOSS      if self.level >= 2 else 0.0
-        w_energy_eff = self.W_ENERGY    if self.level >= 2 else 0.0
-        w_load_eff   = self.W_LOAD      if self.level >= 2 else 0.0  # Optimization (Level 2)
+        w_delay_eff = (self.W_DELAY_LIN * soft_factor) if self.level >= 1 else 0.0
+        w_queue_eff = (self.W_QUEUE * soft_factor)     if self.level >= 1 else 0.0
+
+        w_loss_eff   = (self.W_LOSS * soft_factor)      if self.level >= 2 else 0.0
+        w_energy_eff = (self.W_ENERGY * soft_factor)    if self.level >= 2 else 0.0
+        w_load_eff   = (self.W_LOAD * soft_factor)      if self.level >= 2 else 0.0
         
         # ── 1b. Delay  (Two-tier: linear everywhere + quadratic past SLA) ──
         d_norm    = np.minimum(delays / self.D_MAX, 1.0)                    # Tier 1: 0→1 linear
@@ -450,6 +509,16 @@ class NS3Interface:
             env['LD_LIBRARY_PATH'] = new_ld_path
             # print(f"DEBUG: LD_LIBRARY_PATH set to {new_ld_path}")
 
+        # Connect to Kafka (if not already connected) BEFORE starting ns-3
+        # to avoid missing the very first KPM report.
+        if not self.kafka_consumer:
+            self._connect_kafka()
+        else:
+            # If reusing, ensure we are at the end to skip old messages
+            partitions = self.kafka_consumer.assignment()
+            if partitions:
+                self.kafka_consumer.seek_to_end(*partitions)
+
         if self.config.verbose:
             print(f"Starting ns-3 simulation with command: {' '.join(ns3_cmd)}")
         self.ns3_process = subprocess.Popen(
@@ -462,12 +531,8 @@ class NS3Interface:
         )
         if self.config.verbose:
             print(f"ns-3 process started (PID: {self.ns3_process.pid}, Logs: ns3_out{self.config.topic_suffix}.log)")
-        time.sleep(4) # Give ns-3 time to initialize (increased for parallel stability)
+        time.sleep(2) # Reduced from 4s for faster rollout transitions
         
-        # Connect to Kafka (if not already connected)
-        if not self.kafka_consumer:
-            self._connect_kafka()
-            
         # Reset timestamp tracking for new episode
         self.last_kpm_ts = None
         
@@ -716,19 +781,16 @@ class ORANns3Env(gym.Env):
             dtype=np.float32
         )
         
-        # Action space: per-cell + per-UE controls (SIMPLIFIED)
-        # Per-cell: [TxPower, SchedulerWeight, Hysteresis]  (3 per cell — high-impact levers)
+        # Per-cell: [TxPower, SchedulerWeight]  (2 per cell — removing Hysteresis)
         # Per-UE: [priority_weight] for each UE
-        # Fixed defaults (not RL-controlled): SchedulerType=0(PF), MaxHarq=4, MacDelay=0, NoiseFig=5dB
+        # Fixed defaults (not RL-controlled): SchedulerType=0(PF), MaxHarq=4, MacDelay=0, NoiseFig=5dB, Hysteresis=3dB
         per_cell_low = [
             10.0,  # TxPower min (dBm)
             0.0,   # SchedulerWeight min
-            0.0,   # Hysteresis min (dB)
         ]
         per_cell_high = [
             46.0,  # TxPower max
             5.0,   # SchedulerWeight max
-            6.0,   # Hysteresis max (dB)
         ]
 
         # Per-UE priority weight bounds
@@ -805,6 +867,9 @@ class ORANns3Env(gym.Env):
                 
             if self.config.verbose:
                 print(f"\n🎲 [Multi-Scenario] Starting episode with scenario: {self.config.scenario}")
+            
+        # Update RewardEngine with current scenario
+        self.reward_engine.current_scenario = self.config.scenario
         
         # Stop previous simulation if running
         if hasattr(self, 'ns3') and self.ns3:
@@ -906,14 +971,25 @@ class ORANns3Env(gym.Env):
         # UE metrics with Canonical Sorting
         # Collect all UE metrics first
         ue_data = []
+        actual_ue_count = len(e2_msg.ue_metrics)
+        if actual_ue_count > self.config.num_ues:
+            # Only log once per session to avoid noise
+            if not hasattr(self, '_reported_ue_mismatch'):
+                print(f"\n🚨 [CRITICAL WARNING] Received KPMs for {actual_ue_count} UEs, but configured for {self.config.num_ues}!")
+                print("   The agent is BLIND to some UEs. Check NS3Config scenario/num_ues alignment.")
+                self._reported_ue_mismatch = True
+
         for ue_id in range(self.config.num_ues):
             ue = e2_msg.ue_metrics.get(ue_id, {})
             # Sorting Key: Buffer Occupancy (Descending), then UE ID (Ascending) for ties
             sort_key = (-ue.get('buffer_occupancy', 0.0), ue_id)
             ue_data.append((ue_id, ue, sort_key))
             
-        # Sort UEs
-        ue_data.sort(key=lambda x: x[2])
+        # Sort UEs canonically (Default) or Shuffle them (Testing)
+        if self.config.shuffle_ues:
+            random.shuffle(ue_data)
+        else:
+            ue_data.sort(key=lambda x: x[2])
         
         # Update sorted indices for action mapping
         self.sorted_ue_indices = [x[0] for x in ue_data]
@@ -961,7 +1037,7 @@ class ORANns3Env(gym.Env):
         # Ensure action is a flat 1-D array (VecEnv may pass scalars or 0-d arrays)
         action = np.asarray(action, dtype=np.float64).flatten()
         
-        expected_size = self.config.num_cells * 3 + self.config.num_ues
+        expected_size = self.config.num_cells * 2 + self.config.num_ues
         if action.size != expected_size:
             import sys
             if action.size < expected_size:
@@ -972,10 +1048,10 @@ class ORANns3Env(gym.Env):
         rc_actions = {'cell': [], 'ue': []}
         offset = 0
         
-        # 1. Cell Actions (3 dims per cell: TxPower, SchedulerWeight, Hysteresis)
+        # 1. Cell Actions (2 dims per cell: TxPower, SchedulerWeight)
         for c in range(self.config.num_cells):
-            cell_act = action[offset : offset + 3]
-            offset += 3
+            cell_act = action[offset : offset + 2]
+            offset += 2
             
             # Tx Power: +/- 1.0 dBm step (differential)
             delta_p = cell_act[0] * 1.0 
@@ -989,11 +1065,8 @@ class ORANns3Env(gym.Env):
                 self.current_params['cell'][c]['scheduler_weight'] + delta_w, 0.0, 5.0
             )
 
-            # Hysteresis: +/- 0.5 dB step (differential) — important for mobility scenarios
-            delta_hys = cell_act[2] * 0.5
-            self.current_params['cell'][c]['hysteresis'] = np.clip(
-                self.current_params['cell'][c]['hysteresis'] + delta_hys, 0.0, 6.0
-            )
+            # Hysteresis: Fixed at 3.0 dB (Handover sensitivity)
+            self.current_params['cell'][c]['hysteresis'] = 3.0
 
             # Send ALL params to ns-3 (fixed ones use defaults from current_params)
             rc_actions['cell'].append({

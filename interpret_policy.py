@@ -22,6 +22,7 @@ import numpy as np
 import torch
 
 from policies.neural_networks import ActorCritic
+from policies.bdh_policy import BDHPolicy
 
 
 def _load_last_log_entry(log_path: Path) -> Dict:
@@ -100,9 +101,14 @@ def _infer_dims_from_metrics(metrics: Dict) -> Tuple[int, int]:
     return num_ues, num_cells
 
 
-def _load_policy(checkpoint_path: Path, state_dim: int, action_dim: int) -> ActorCritic:
-    policy = ActorCritic(state_dim, action_dim).to("cpu")
+def _load_policy(checkpoint_path: Path, state_dim: int, action_dim: int, model_type: str = 'nn') -> torch.nn.Module:
     checkpoint = torch.load(checkpoint_path, map_location="cpu")
+    
+    if model_type == 'bdh':
+        policy = BDHPolicy(state_dim, action_dim, device="cpu")
+    else:
+        policy = ActorCritic(state_dim, action_dim).to("cpu")
+        
     policy.load_state_dict(checkpoint["policy_state_dict"])
     policy.eval()
     return policy
@@ -121,6 +127,7 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--checkpoint", default="models/radio_cortex.pt")
     parser.add_argument("--log", default="action_logs.jsonl")
+    parser.add_argument("--model", type=str, default=None, help="Model type (bdh, nn). Auto-detected if possible.")
     parser.add_argument("--action-index", type=int, default=0)
     parser.add_argument("--top-k", type=int, default=10)
     args = parser.parse_args()
@@ -143,7 +150,7 @@ def main() -> None:
     state, names = _build_state_and_names(metrics, num_ues, num_cells)
 
     state_dim = len(state)
-    action_dim = num_cells * 3 + num_ues  # Matches current ORANns3Env
+    action_dim = num_cells * 2 + num_ues  # Matches current ORANns3Env
 
     if args.action_index < 0 or args.action_index >= action_dim:
         print(f"Error: action-index must be in [0, {action_dim - 1}]")
@@ -153,8 +160,19 @@ def main() -> None:
         print(f"Error: Checkpoint {ckpt_path} not found.")
         return
 
+    # Detect model type
+    model_type = args.model
+    if model_type is None:
+        checkpoint = torch.load(ckpt_path, map_location="cpu")
+        # Heuristic detection from state_dict
+        if any("bdh." in k for k in checkpoint["policy_state_dict"].keys()):
+            model_type = "bdh"
+        else:
+            model_type = "nn"
+        print(f"[INFO] Auto-detected model type: {model_type}")
+
     try:
-        policy = _load_policy(ckpt_path, state_dim, action_dim)
+        policy = _load_policy(ckpt_path, state_dim, action_dim, model_type=model_type)
     except Exception as e:
         print(f"Error loading policy: {e}")
         print("Dimension mismatch likely. Ensure num-ues/num-cells match the trained model.")

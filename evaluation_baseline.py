@@ -29,6 +29,8 @@ from pathlib import Path
 import seaborn as sns
 import os
 import time
+import torch
+
 
 
 @dataclass
@@ -183,47 +185,46 @@ class EvaluationRunner:
             pbar = tqdm(total=total_steps, desc=f"Eval {controller_name}", unit="step")
         
         step_i = 0
-        while not (terminated or truncated):
-            step_i += 1
-            # Controller makes decision
-            t0 = time.time()
-            if hasattr(controller, 'get_rl_action'):
-                action_arr = controller.get_rl_action(state)
-            else:
-                state_dict = self._parse_state(state, env_config)
-                action = controller.get_action(state_dict)
-                action_arr = self._dict_to_action(action, env.action_space)
-            t1 = time.time()
-            inference_times.append((t1 - t0) * 1000.0) # ms
-            
-            # Execute step
-            if is_vec_env:
-                # VecEnv expects stacked actions
-                # If action_arr is (action_dim,), wrap it to (1, action_dim)
-                # But if controller returns (action_dim), we just pass [action_arr]
-                next_state, reward, done, infos = env.step([action_arr])
-                next_state = next_state[0]
-                reward = reward[0]
-                terminated = done[0]
-                truncated = False # VecEnv handles auto-reset, so 'done' implies term/trunc.
-                info = infos[0]
-            else:
-                next_state, reward, terminated, truncated, info = env.step(action_arr)
-            
-            actions_history.append(action_arr)
-            
-            # Periodic logging of RIC decisions (actions) during evaluation
-            
-            # Periodic logging of RIC decisions (actions) during evaluation
-            step_count = step_i # step_i is current loop index
-            if not progress_queue and controller_name == "Radio-Cortex" and step_count % 10 == 0:
-                # Format detailed action summary for display
-                num_cells = (len(action_arr) - env.config.num_ues) // 3
-                if num_cells > 0:
-                    c0_actions = action_arr[:3]
-                    ue_priorities = action_arr[num_cells*3:]
-                    avg_ue_prio = np.mean(ue_priorities) if len(ue_priorities) > 0 else 0
-                    print(f"\n  Step {step_count:>3} │ 🤖 RIC Decision (Cell 0): Power={c0_actions[0]:.1f}dBm │ Scheduler={int(c0_actions[1])} │ Avg UE Prio={avg_ue_prio:.2f}")
+        with torch.inference_mode():
+            while not (terminated or truncated):
+                step_i += 1
+                # Controller makes decision
+                t0 = time.time()
+                if hasattr(controller, 'get_rl_action'):
+                    action_arr = controller.get_rl_action(state)
+                else:
+                    state_dict = self._parse_state(state, env_config)
+                    action = controller.get_action(state_dict)
+                    action_arr = self._dict_to_action(action, env.action_space)
+                t1 = time.time()
+                inference_times.append((t1 - t0) * 1000.0) # ms
+                
+                # Execute step
+                if is_vec_env:
+                    # VecEnv expects stacked actions
+                    # If action_arr is (action_dim,), wrap it to (1, action_dim)
+                    # But if controller returns (action_dim), we just pass [action_arr]
+                    next_state, reward, done, infos = env.step([action_arr])
+                    next_state = next_state[0]
+                    reward = reward[0]
+                    terminated = done[0]
+                    truncated = False # VecEnv handles auto-reset, so 'done' implies term/trunc.
+                    info = infos[0]
+                else:
+                    next_state, reward, terminated, truncated, info = env.step(action_arr)
+                
+                actions_history.append(action_arr)
+                
+                # Periodic logging of RIC decisions (actions) during evaluation
+                step_count = step_i # step_i is current loop index
+                if not progress_queue and controller_name == "Radio-Cortex" and step_count % 10 == 0:
+                    # Format detailed action summary for display
+                    num_cells = (len(action_arr) - env_config.num_ues) // 2
+                    if num_cells > 0:
+                        c0_actions = action_arr[:2]
+                        ue_priorities = action_arr[num_cells*2:]
+                        avg_ue_prio = np.mean(ue_priorities) if len(ue_priorities) > 0 else 0
+                        print(f"\n  Step {step_count:>3} │ 🤖 RIC Decision (Cell 0): Power={c0_actions[0]:.1f}dBm │ Scheduler={c0_actions[1]:.2f} │ Avg UE Prio={avg_ue_prio:.2f}")
             
             
             # Track Handovers
@@ -423,9 +424,6 @@ class EvaluationRunner:
              
              # 2. Scheduler Weight (default 1.0)
              flat_action.append(1.0)
-             
-             # 3. Hysteresis (default 3.0)
-             flat_action.append(3.0)
              
         # Pad for UE priority weights (oran_ns3_env expects these)
         current_len = len(flat_action)

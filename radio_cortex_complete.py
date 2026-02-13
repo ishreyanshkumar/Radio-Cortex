@@ -13,17 +13,30 @@ Usage:
     python radio_cortex_complete.py --mode eval
 """
 
+import os
+# --- GPU MEMORY OPTIMIZATION ---
+# Forces PyTorch to use a more memory-efficient allocation strategy
+# to prevent OOM in the wide BDH model. MUST BE SET BEFORE IMPORTING TORCH.
+os.environ["PYTORCH_ALLOC_CONF"] = "expandable_segments:True"
+
 import argparse
 import numpy as np
 import torch
 from pathlib import Path
 import json
 import time
-import os
 from typing import Dict, List, Optional, Tuple
+
 from concurrent.futures import ProcessPoolExecutor, as_completed
 import copy
 import multiprocessing
+
+# Set spawn start method for cleaner CUDA memory handling across processes
+try:
+    if multiprocessing.get_start_method(allow_none=True) is None:
+        multiprocessing.set_start_method('spawn', force=True)
+except RuntimeWarning:
+    pass
 from rich.progress import Progress, BarColumn, TextColumn, TimeRemainingColumn, SpinnerColumn
 from rich.live import Live
 from rich.console import Console
@@ -123,11 +136,11 @@ def train_radio_cortex(
     vf_coef: float = 0.5,
     ent_coef: float = 0.01,
     max_grad_norm: float = 0.5,
-    rollout_steps: int = 2048,
+    rollout_steps: int = 256,
     log_interval: int = 5,
     device: Optional[str] = None,
     checkpoint_interval: int = 5,
-    n_envs: int = 1,
+    n_envs: int = 12,
     model_type: str = 'bdh'
 ):
     """
@@ -185,6 +198,15 @@ def train_radio_cortex(
         checkpoint_interval=checkpoint_interval,
         model_type=model_type
     )
+
+    # --- ADDED: Resumption Logic ---
+    if os.path.exists(save_path):
+        print(f"  📦 Found existing model at {save_path}. Resuming training...")
+        trainer.load(save_path)
+        # Also load normalization stats if they exist
+        if is_vec_env and VEC_ENV_AVAILABLE and os.path.exists(vec_normalize_path):
+            load_vec_normalize(env, vec_normalize_path)
+    # ------------------------------
     
     # Train
     print(f"\nTraining for {total_timesteps} timesteps...")
@@ -378,7 +400,15 @@ def evaluate_radio_cortex(
 
         with Live(Group(panel_progress, create_metrics_table(), create_ue_metrics_grid()), refresh_per_second=4) as live:
             
-            with ProcessPoolExecutor(max_workers=n_envs) as executor:
+            # For heavy models like BDH, parallel evaluation can easily OOM a 16GB GPU.
+            # Default to sequential or low-parallelism if requested environment count is high.
+            is_heavy = config.model_type == 'bdh' or 'bdh' in str(model_path).lower()
+            effective_envs = n_envs
+            if is_heavy and n_envs > 2:
+                print(f"\n      [RECAP] BDH model detected. Capping evaluation parallelism to 2 to prevent OOM.")
+                effective_envs = 2
+
+            with ProcessPoolExecutor(max_workers=effective_envs) as executor:
                 futures = {}
                 # Create bars for all scenarios (2 per scenario: Baseline and Radio-Cortex)
                 task_ids = {}
@@ -388,7 +418,8 @@ def evaluate_radio_cortex(
                     task_ids[s_idx] = {} # {s_idx: {controller: task_id}}
                 
                 for i, scenario_name in enumerate(scenarios):
-                    worker_id = i % n_envs
+                    # Rotate workers to reuse scenarios/topics
+                    worker_id = i % effective_envs
                     future = executor.submit(
                         evaluate_single_scenario,
                         scenario_name, config, model_path, worker_id, progress_queue, i
@@ -447,6 +478,8 @@ def evaluate_radio_cortex(
                                     scenarios_completed += 1
                                 except Exception as e:
                                     print(f"\n❌ Evaluation failed for {s_name}: {e}")
+                                    # Add placeholder to show in summary
+                                    all_results[s_name] = {"CRASHED": None}
                                     scenarios_completed += 1
                         
                         time.sleep(0.1)
@@ -466,9 +499,14 @@ def evaluate_radio_cortex(
     
     for scenario_name, results in all_results.items():
         print(f"\n{scenario_name}:")
+        if "CRASHED" in results:
+            print("  [ERROR] Simulation crashed or failed to initialize.")
+            continue
+             
         print(f"{'Controller':<15} | {'Tput':<6} | {'Loss%':<6} | {'Satisf%':<7} | {'SpecEff':<7} | {'Score':<5}")
         print("-" * 60)
         for controller, metrics in results.items():
+            if metrics is None: continue
             avg_score = (metrics.qos_score + metrics.reliability_score + metrics.resource_score + 
                          metrics.buffer_score + metrics.phy_score + metrics.ric_score) / 6.0
             print(f"{controller:<15} | {metrics.avg_throughput:>6.2f} | {metrics.avg_packet_loss*100:>6.2f} | {metrics.satisfied_user_ratio*100:>7.1f} | {metrics.spectral_efficiency:>7.2f} | {avg_score:>5.1f}")
@@ -549,6 +587,9 @@ def evaluate_single_scenario(
             checkpoint = torch.load(model_path, map_location='cpu')
             state_dict = checkpoint['policy_state_dict']
             
+            # Detect model type
+            model_type = getattr(config, 'model_type', 'bdh')
+            
             # Detect dimensions from state_dict (if standard MLP)
             stored_action_dim = 0
             stored_state_dim = 0
@@ -562,54 +603,53 @@ def evaluate_single_scenario(
             
             # Verify if it matches current config
             expected_state_dim = config.num_ues * 12 + config.num_cells * 5
-            expected_action_dim = config.num_cells * 3 + config.num_ues  # 3 per cell: TxPower, SchedWeight, Hysteresis
+            expected_action_dim = config.num_cells * 2 + config.num_ues  # 2 per cell: TxPower, SchedWeight
             
-            # Detect model type from config or checkpoint
-            model_type = getattr(config, 'model_type', 'bdh')
-            print(f"      [INFO] Initializing {model_type.upper()} Policy...")
+            # Determine device: Default to CPU for evaluation to stay within 16GB limit.
+            # BDH is particularly heavy and evaluation is bottlenecked by the simulation, not AI.
+            eval_device = 'cpu'
+            if getattr(config, 'force_cuda_eval', False):
+                eval_device = 'cuda'
+            
+            print(f"      [INFO] Initializing {model_type.upper()} Policy on {eval_device}...")
             
             if model_type == 'bdh':
                 from policies.bdh_policy import BDHPolicy
-                policy = BDHPolicy(expected_state_dim, expected_action_dim, device='cpu').to('cpu')
+                policy = BDHPolicy(expected_state_dim, expected_action_dim, device=eval_device).to(eval_device)
             elif model_type == 'gpt2':
                 from policies.policy_gpt2 import GPT2Policy
-                policy = GPT2Policy(expected_state_dim, expected_action_dim, device='cpu').to('cpu')
+                policy = GPT2Policy(expected_state_dim, expected_action_dim, device=eval_device).to(eval_device)
             elif model_type == 'trxl':
                 from policies.policy_trxl import TrXLPolicy
-                policy = TrXLPolicy(expected_state_dim, expected_action_dim, device='cpu').to('cpu')
+                policy = TrXLPolicy(expected_state_dim, expected_action_dim, device=eval_device).to(eval_device)
             elif model_type == 'linear':
                 from policies.policy_linear import LinearPolicy
-                policy = LinearPolicy(expected_state_dim, expected_action_dim, device='cpu').to('cpu')
+                policy = LinearPolicy(expected_state_dim, expected_action_dim, device=eval_device).to(eval_device)
             elif model_type == 'universal':
                 from policies.policy_universal import UniversalPolicy
-                policy = UniversalPolicy(expected_state_dim, expected_action_dim, device='cpu').to('cpu')
+                policy = UniversalPolicy(expected_state_dim, expected_action_dim, device=eval_device).to(eval_device)
             elif model_type == 'reformer':
                 from policies.policy_reformer import ReformerPolicy
-                policy = ReformerPolicy(expected_state_dim, expected_action_dim, device='cpu').to('cpu')
+                policy = ReformerPolicy(expected_state_dim, expected_action_dim, device=eval_device).to(eval_device)
             else:  # 'nn' or default
                 state_dim = expected_state_dim
                 action_dim = expected_action_dim
                 if stored_action_dim != expected_action_dim or stored_state_dim != expected_state_dim:
-                    detected_ues = stored_action_dim - (config.num_cells * 3)
+                    detected_ues = stored_action_dim - (config.num_cells * 2)
                     config.num_ues = detected_ues
                     state_dim = stored_state_dim
                     action_dim = stored_action_dim
                 from policies.neural_networks import ActorCritic
-                policy = ActorCritic(state_dim, action_dim).to('cpu')
+                policy = ActorCritic(state_dim, action_dim).to(eval_device)
             
             # Load weights
             try:
                 policy.load_state_dict(state_dict, strict=False)
-                print(f"      [INFO] Loaded {model_type.upper()} weights from {model_path}")
-                
-                # Load stored hyperparams if available
-                if 'hyperparams' in checkpoint:
-                     stored_params = checkpoint['hyperparams']
-                     print(f"      [INFO] Found stored hyperparameters: {list(stored_params.keys())}")
-                     # Merge into eval_config
-                     eval_config.update(stored_params)
+                # Verify final device
+                actual_device = next(policy.parameters()).device
+                print(f"      [INFO] Loaded {model_type.upper()} weights. Final Device: {actual_device}")
             except Exception as e:
-                print(f"      [WARN] Could not load weights (using random init): {e}")
+                print(f"      [WARN] Could not load weights: {e}")
             
         except Exception as e:
             print(f"      [ERROR] Could not load model {model_path}: {e}")
@@ -641,6 +681,9 @@ def evaluate_single_scenario(
             )
         finally:
             env.close()
+            # Clean up GPU memory for next scenario (crucial for large models)
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
 
     # Log results to central CSV (appending)
     # Log results to central CSV (appending)
@@ -680,10 +723,11 @@ def main():
     primary.add_argument('--model', type=str, default='bdh', 
                          choices=['bdh', 'nn', 'gpt2', 'trxl', 'linear', 'universal', 'reformer', 'base'],
                          help='Policy architecture: bdh (default), nn (MLP), gpt2, trxl, linear, universal, reformer, base')
-    primary.add_argument('--n-envs', type=int, default=4, help='Number of parallel environments')
+    primary.add_argument('--n-envs', type=int, default=12, help='Number of parallel environments')
     primary.add_argument('--model-path', type=str, default=None, help='Path to save/load model (default: models/radiocortex_{model}.pt)')
     primary.add_argument('--device', type=str, default=None, help='Compute device (cpu/cuda)')
     primary.add_argument('--config', type=str, default=None, help='JSON config file to override any argument')
+    primary.add_argument('--shuffle-ues', action='store_true', help='Scramble UE order during observation (Test Permutation Invariance)')
 
     # --- Infrastructure Group ---
     infra = parser.add_argument_group('Network & Environment')
@@ -697,8 +741,8 @@ def main():
     # --- Hyperparameters Group ---
     hyper = parser.add_argument_group('Advanced PPO / RL Tuning')
     hyper.add_argument('--learning-rate', type=float, default=3e-4, help='PPO Learning rate')
-    hyper.add_argument('--batch-size', type=int, default=256, help='Batch size for optimization updates')
-    hyper.add_argument('--rollout-steps', type=int, default=128, help='Steps per rollout trajectory')
+    hyper.add_argument('--batch-size', type=int, default=128, help='Batch size for optimization updates')
+    hyper.add_argument('--rollout-steps', type=int, default=256, help='Steps per rollout trajectory')
     hyper.add_argument('--gamma', type=float, default=0.99, help='Discount factor')
     hyper.add_argument('--hidden-dim', type=int, default=256, help='Network hidden dimension')
     hyper.add_argument('--gae-lambda', type=float, default=0.95, help='GAE normalization lambda')
@@ -733,7 +777,8 @@ def main():
         seed=42,
         scenario=args.scenario,
         system_bandwidth_mhz=args.system_bandwidth_mhz,
-        topic_suffix=args.topic_suffix
+        topic_suffix=args.topic_suffix,
+        shuffle_ues=args.shuffle_ues
     )
     
     # Attach model_type to config for downstream usage (eval workers, etc.)

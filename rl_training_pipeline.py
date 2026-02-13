@@ -149,6 +149,15 @@ class PPOTrainer:
             
         self.optimizer = torch.optim.Adam(self.policy.parameters(), lr=lr)
         
+        # Mixed Precision (AMP) support - targeting bfloat16 for stability on 16GB cards
+        self.enable_amp = device == 'cuda'
+        self.amp_dtype = torch.bfloat16 if self.enable_amp and torch.cuda.is_bf16_supported() else torch.float16
+        # bfloat16 typically doesn't need scaling, but GradScaler handles enabled=False gracefully
+        self.scaler = torch.cuda.amp.GradScaler(enabled=(self.enable_amp and self.amp_dtype == torch.float16))
+        
+        if self.enable_amp:
+             print(f"[PPOTrainer] Mixed Precision enabled. Using dtype: {self.amp_dtype}")
+        
         # Hyperparameters
         self.gamma = gamma
         self.gae_lambda = gae_lambda
@@ -172,9 +181,11 @@ class PPOTrainer:
         self.checkpoint_interval = checkpoint_interval
         Path(checkpoint_dir).mkdir(exist_ok=True)
         
+        # Environment Tracking
+        self._last_obs = None
+        self.max_checkpoints = 3 # Keep only last 3 checkpoints to save disk room
+        
         # Initialize log file
-        with open(self.log_file, 'w') as f:
-            pass # Clear file
             
     def compute_gae(self, rewards, values, dones, next_values):
         """Generalized Advantage Estimation (Vectorized for parallel environments)"""
@@ -352,7 +363,11 @@ class PPOTrainer:
         all_log_probs = []
         
         # VecEnv reset returns just observations (n_envs, obs_dim)
-        states = self.env.reset()
+        # Avoid redundant resets between rollouts for speed
+        if self._last_obs is None:
+            states = self.env.reset()
+        else:
+            states = self._last_obs
         
         for step_i in range(num_steps):
             if progress and task_id is not None:
@@ -380,9 +395,9 @@ class PPOTrainer:
                 on_step(infos, rewards_arr, entropy=entropy.mean().item() if entropy is not None else None)
             
             # Log progress occasionally
-            if step_i % 10 == 0:
+            if step_i % 5 == 0: # More frequent logging
                 avg_reward = np.mean(rewards_arr)
-                # print(f"[Step {self.total_steps}] VecEnv Avg Reward={avg_reward:.3f} (across {n_envs} envs)")
+                print(f"[Step {self.total_steps}] VecEnv Avg Reward={avg_reward:.3f} (across {n_envs} envs)", flush=True)
             
             # Store batch data
             all_states.append(states)
@@ -393,6 +408,7 @@ class PPOTrainer:
             all_log_probs.append(log_probs.cpu().numpy().flatten())
             
             states = next_states
+            self._last_obs = states # Store for next rollout cycle
             self.total_steps += n_envs
         
         # Convert collected lists to tensors of shape (num_steps, n_envs, ...)
@@ -453,37 +469,46 @@ class PPOTrainer:
                 batch_returns = returns[idx]
                 batch_advantages = advantages[idx]
                 
-                # Evaluate actions
-                values, log_probs, entropy = self.policy.evaluate_actions(
-                    batch_states, batch_actions
-                )
+                # Evaluate actions with mixed precision (if enabled)
+                with torch.cuda.amp.autocast(enabled=self.enable_amp, dtype=self.amp_dtype):
+                    values, log_probs, entropy = self.policy.evaluate_actions(
+                        batch_states, batch_actions
+                    )
+                    
+                    # PPO objective
+                    ratio = torch.exp(log_probs - batch_old_log_probs)
+                    surr1 = ratio * batch_advantages
+                    surr2 = torch.clamp(ratio, 1 - self.clip_epsilon, 1 + self.clip_epsilon) * batch_advantages
+                    
+                    policy_loss = -torch.min(surr1, surr2).mean()
+                    value_loss = nn.MSELoss()(values.squeeze(), batch_returns)
+                    entropy_loss = -entropy.mean()
+                    
+                    loss = (
+                        policy_loss +
+                        self.vf_coef * value_loss +
+                        self.ent_coef * entropy_loss
+                    )
                 
-                # PPO objective
-                ratio = torch.exp(log_probs - batch_old_log_probs)
-                surr1 = ratio * batch_advantages
-                surr2 = torch.clamp(ratio, 1 - self.clip_epsilon, 1 + self.clip_epsilon) * batch_advantages
-                
-                policy_loss = -torch.min(surr1, surr2).mean()
-                value_loss = nn.MSELoss()(values.squeeze(), batch_returns)
-                entropy_loss = -entropy.mean()
-                
-                loss = (
-                    policy_loss +
-                    self.vf_coef * value_loss +
-                    self.ent_coef * entropy_loss
-                )
-                
-                # Optimization step
+                # Optimization step with GradScaler
                 self.optimizer.zero_grad()
-                loss.backward()
+                self.scaler.scale(loss).backward()
+                self.scaler.unscale_(self.optimizer)
                 nn.utils.clip_grad_norm_(self.policy.parameters(), self.max_grad_norm)
-                self.optimizer.step()
+                self.scaler.step(self.optimizer)
+                self.scaler.update()
         
-        # Calculate Explained Variance
-        # How well the value function explains the observed returns.
-        # 1 - Var(returns - values) / Var(returns)
+        # Calculate Explained Variance in mini-batches to avoid OOM
         with torch.no_grad():
-            v_pred = self.policy(states)[2].squeeze()
+            v_pred_list = []
+            ev_batch_size = batch_size * 2 # Slightly larger batch for inference
+            for start in range(0, dataset_size, ev_batch_size):
+                end = min(start + ev_batch_size, dataset_size)
+                with torch.cuda.amp.autocast(enabled=self.enable_amp, dtype=self.amp_dtype):
+                    batch_v = self.policy(states[start:end])[2].squeeze()
+                v_pred_list.append(batch_v)
+            
+            v_pred = torch.cat(v_pred_list)
             y_true = returns
             var_y = torch.var(y_true)
             explained_var = 1.0 - torch.var(y_true - v_pred) / (var_y + 1e-8)
@@ -524,7 +549,7 @@ class PPOTrainer:
             return
         
         print(f"Starting PPO training for {total_timesteps} timesteps")
-        print(f"Device: {self.device}")
+        print(f"Device: {self.device} | Mixed Precision (AMP): {self.enable_amp} ({self.amp_dtype})")
         
         # Add training loop params
         self.hyperparams.update({
@@ -635,8 +660,8 @@ class PPOTrainer:
                     live_env_metrics[env_i] = {
                         'tput': tput, 'delay': delay, 'loss': loss, 
                         'sinr': sinr, 'rsrp': rsrp, 'queue': queue, 'rb': rb, 'power': power,
-                        'level': e2.get('z_level', 0),          # New: Curriculum Level
-                        'success': e2.get('z_success', 0.0),    # New: Success Rate
+                        'level': info.get('z_level', 0),          # New: Curriculum Level
+                        'success': info.get('z_success', 0.0),    # New: Success Rate
                         'ue_metrics': detailed_ue
                     }
             
@@ -825,8 +850,20 @@ class PPOTrainer:
                 
                 # Periodic checkpointing
                 if self.checkpoint_interval > 0 and (update + 1) % self.checkpoint_interval == 0:
-                    checkpoint_path = str(Path(self.checkpoint_dir) / 'radio_cortex_latest.pt')
+                    checkpoint_path = str(Path(self.checkpoint_dir) / f'radio_cortex_upd_{update+1}.pt')
                     self.save(checkpoint_path)
+                    
+                    # --- ADDED: Save scalars for periodic checkpoints ---
+                    if self.is_vec_env:
+                        try:
+                            from vec_env_wrapper import save_vec_normalize
+                            scalar_path = str(Path(self.checkpoint_dir) / f'vec_normalize_upd_{update+1}.pkl')
+                            save_vec_normalize(self.env, scalar_path)
+                        except ImportError:
+                            pass
+                    # ----------------------------------------------------
+                    
+                    self._rotate_checkpoints()
         
         print("\n✓ Training complete")
     
@@ -848,6 +885,21 @@ class PPOTrainer:
         self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
         self.total_steps = checkpoint['total_steps']
         print(f"Model loaded from {path}")
+
+    def _rotate_checkpoints(self):
+        """Keep only the most recent checkpoints to save disk space"""
+        try:
+            checkpoints = sorted(
+                Path(self.checkpoint_dir).glob("radio_cortex_upd_*.pt"),
+                key=os.path.getmtime
+            )
+            if len(checkpoints) > self.max_checkpoints:
+                # Delete oldest
+                for i in range(len(checkpoints) - self.max_checkpoints):
+                    os.remove(checkpoints[i])
+                    print(f"[Disk Cleanup] Removed old checkpoint: {checkpoints[i]}")
+        except Exception as e:
+            print(f"[Disk Cleanup] Warning: Rotation failed: {e}")
 
 
 # ============================================================================
