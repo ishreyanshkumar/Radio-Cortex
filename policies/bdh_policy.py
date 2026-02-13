@@ -49,7 +49,7 @@ class BDHPolicy(nn.Module):
                 n_layer=6, 
                 n_embd=256, 
                 n_head=4, 
-                mlp_internal_dim_multiplier=128, # Restored to original 128
+                mlp_internal_dim_multiplier=128, # Keep the massive 128 width!
                 vocab_size=256 
             )
         else:

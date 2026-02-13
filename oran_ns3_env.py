@@ -738,7 +738,7 @@ class NS3Interface:
         try:
             rc_topic = getattr(self, '_rc_topic', 'e2_rc_control')
             self.kafka_producer.send(rc_topic, rc_message)
-            # self.kafka_producer.flush() # Optimization: Async send for higher throughput
+            # self.kafka_producer.flush()
             
             self.rc_msg_count += 1
             if hasattr(self, 'last_kpm_rx_time') and self.last_kpm_rx_time > 0:

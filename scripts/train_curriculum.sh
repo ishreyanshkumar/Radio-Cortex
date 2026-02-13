@@ -22,7 +22,7 @@ export PYTORCH_ALLOC_CONF="expandable_segments:True"
 
 # ── Configuration (Optimized for 24-Core / 16GB VRAM Hardware) ──
 MODEL="bdh"
-N_ENVS=12                     # Increased from 12 to maximize CPU utilization
+N_ENVS=32                     # Increased from 12 to maximize CPU utilization
 SIM_TIME=3600.0                 # Increased to reduce reset frequency (Avoids 30s waf locks)
 DEVICE=""                     # auto-detect
 MODEL_DIR="models/curriculum"
@@ -32,9 +32,9 @@ START_STAGE=1
 DRY_RUN=false
 
 # ── Turbo-Charged Hyperparameters ──
-LR="3e-4"
-BATCH_SIZE=256                # Quadrupled from 128 to utilize GPU VRAM fully
-ROLLOUT_STEPS=128             # Increased for more stable gradients
+LR="5e-4"
+BATCH_SIZE=512                # Quadrupled from 256 to utilize GPU VRAM fully
+ROLLOUT_STEPS=512             # Increased for more stable gradients
 GAMMA=0.99
 GAE_LAMBDA=0.95
 CLIP_EPSILON=0.2
@@ -154,39 +154,35 @@ run_stage() {
 # CURRICULUM STAGES DEFINITION: The "Lean Power Suite" (8 Stages)
 # ==============================================================================
 
+# ==============================================================================
+# CURRICULUM STAGES DEFINITION: The "Lean Power Suite" (8 Stages)
+# ==============================================================================
+
 declare -A STAGES
 
 # Stage 1: Foundation - Flash Crowd Mastery
-# Goal: Learn basic load balancing and throughput stability.
-STAGES[1]="--scenario flash_crowd --total-timesteps 60000"
+STAGES[1]="--scenario flash_crowd --total-timesteps 360000"
 
 # Stage 2: Green RAN - Sleepy Campus
-# Novelty: Energy efficiency and power saving patterns.
-STAGES[2]="--scenario flash_crowd:0.2,sleepy_campus:0.8 --total-timesteps 100000"
+STAGES[2]="--scenario flash_crowd:0.2,sleepy_campus:0.8 --total-timesteps 600000"
 
 # Stage 3: PHY Robustness - Urban Canyon
-# Novelty: Maintaining connectivity in poor SINR / shadowing conditions.
-STAGES[3]="--scenario flash_crowd:0.15,sleepy_campus:0.15,urban_canyon:0.7 --total-timesteps 120000"
+STAGES[3]="--scenario flash_crowd:0.15,sleepy_campus:0.15,urban_canyon:0.7 --total-timesteps 720000"
 
 # Stage 4: Mobility - Mobility Storm
-# Novelty: High-speed handover control and RSRP-based steering.
-STAGES[4]="--scenario flash_crowd:0.1,sleepy_campus:0.1,urban_canyon:0.1,mobility_storm:0.7 --total-timesteps 180000"
+STAGES[4]="--scenario flash_crowd:0.1,sleepy_campus:0.1,urban_canyon:0.1,mobility_storm:0.7 --total-timesteps 1080000"
 
 # Stage 5: Congestion - Traffic Burst
-# Novelty: Absorbing massive traffic spikes without buffer overflow.
-STAGES[5]="--scenario flash_crowd:0.08,sleepy_campus:0.08,urban_canyon:0.08,mobility_storm:0.08,traffic_burst:0.68 --total-timesteps 240000"
+STAGES[5]="--scenario flash_crowd:0.08,sleepy_campus:0.08,urban_canyon:0.08,mobility_storm:0.08,traffic_burst:0.68 --total-timesteps 1440000"
 
 # Stage 6: URLLC - Ambulance Priority
-# Novelty: Real-time emergency QoS slicing and pre-emption.
-STAGES[6]="--scenario flash_crowd:0.07,sleepy_campus:0.07,urban_canyon:0.07,mobility_storm:0.07,traffic_burst:0.07,ambulance:0.65 --total-timesteps 240000"
+STAGES[6]="--scenario flash_crowd:0.07,sleepy_campus:0.07,urban_canyon:0.07,mobility_storm:0.07,traffic_burst:0.07,ambulance:0.65 --total-timesteps 1440000"
 
 # Stage 7: Capacity - Spectrum Crunch
-# Novelty: Maximizing Spectral Efficiency in limited bandwidth.
-STAGES[7]="--scenario flash_crowd:0.06,sleepy_campus:0.06,urban_canyon:0.06,mobility_storm:0.06,traffic_burst:0.06,ambulance:0.06,spectrum_crunch:0.64 --total-timesteps 300000"
+STAGES[7]="--scenario flash_crowd:0.06,sleepy_campus:0.06,urban_canyon:0.06,mobility_storm:0.06,traffic_burst:0.06,ambulance:0.06,spectrum_crunch:0.64 --total-timesteps 1800000"
 
 # Stage 8: Consolidation - Multi-Mix Generalization
-# Goal: Converged policy across the entire Power Suite.
-STAGES[8]="--scenario flash_crowd:0.12,sleepy_campus:0.12,urban_canyon:0.12,mobility_storm:0.12,traffic_burst:0.12,ambulance:0.12,spectrum_crunch:0.12 --total-timesteps 500000"
+STAGES[8]="--scenario flash_crowd:0.12,sleepy_campus:0.12,urban_canyon:0.12,mobility_storm:0.12,traffic_burst:0.12,ambulance:0.12,spectrum_crunch:0.12 --total-timesteps 3000000"
 
 echo ""
 echo "╔══════════════════════════════════════════════════════════════╗"
@@ -216,5 +212,5 @@ echo "  1. ping_pong (Zero-Shot Hysteresis Adaptation)"
 echo "  2. iot_tsunami (Zero-Shot Massive Device Scale)"
 echo ""
 echo "  To evaluate all (including Zero-Shot):"
-echo "  python3 radio_cortex_complete.py --mode eval --model bdh \\"
+echo "  python3 radio_cortex_complete.py --mode eval --model $MODEL \\"
 echo "      --model-path $MODEL_DIR/stage_8.pt --scenario all"
