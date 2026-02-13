@@ -5,6 +5,8 @@ Supports PPO, SAC, TD3 for RAN congestion control
 """
 
 import torch
+# Add this line to prevent PyTorch from fighting ns-3 for CPU cores
+torch.set_num_threads(1)
 import torch.nn as nn
 import numpy as np
 import os

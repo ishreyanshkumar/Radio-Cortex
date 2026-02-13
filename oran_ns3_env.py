@@ -952,7 +952,7 @@ class ORANns3Env(gym.Env):
             
             e2_msg = self.ns3.receive_kpm_report(
                 wait_for_new=True,
-                max_wait_s=(self.config.kpm_interval_ms / 1000.0) * 5.0
+                max_wait_s=10.0  # Allow up to 10s for CPU spikes to clear (prevents false-alarm resets)
             )
             next_state = self._extract_state(e2_msg)
             
