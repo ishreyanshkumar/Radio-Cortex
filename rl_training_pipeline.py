@@ -815,7 +815,13 @@ class PPOTrainer:
                 create_ue_grid()
             )
             
-        with Live(make_layout(), console=console, refresh_per_second=10) as live:
+        # Optimization: Class wrapper to allow Rich.Live to call make_layout() 
+        # asynchronously from its background thread.
+        class Dashboard:
+            def __rich__(self):
+                return make_layout()
+
+        with Live(Dashboard(), console=console, refresh_per_second=10) as live:
             live_display = live # Set reference for callback
             for update in range(num_updates):
                 # Reset storage for live reward tracking per update
@@ -853,8 +859,9 @@ class PPOTrainer:
                     'entropy': metrics['entropy']
                 }
                 
-                # Force refresh
-                live.update(make_layout())
+                # Dashboard updates asynchronously at 10Hz via Rich.Live thread.
+                # Explicit update is no longer needed.
+                # live.update(make_layout())
                 
                 # Periodic checkpointing
                 if self.checkpoint_interval > 0 and (update + 1) % self.checkpoint_interval == 0:
