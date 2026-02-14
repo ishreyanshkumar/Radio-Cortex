@@ -8,7 +8,10 @@ import gymnasium as gym
 from gymnasium import spaces
 import numpy as np
 import subprocess
-import json
+try:
+    import orjson as json
+except ImportError:
+    import json
 import socket
 import time
 import sys
@@ -593,6 +596,8 @@ class NS3Interface:
             
             self.kafka_producer = KafkaProducer(
                 bootstrap_servers=['localhost:9092'],
+                linger_ms=5,        # 🚀 OPTIMIZATION: Wait 5ms to batch syscalls
+                batch_size=32768,   # 🚀 OPTIMIZATION: Allow 32KB batches
                 value_serializer=lambda x: json.dumps(x).encode('utf-8')
             )
             self._rc_topic = rc_topic  # Store for send_rc_control
@@ -1023,39 +1028,38 @@ class ORANns3Env(gym.Env):
         # Update sorted indices for action mapping
         self.sorted_ue_indices = [x[0] for x in ue_data]
         
+        # 🚀 OPTIMIZATION 1: Pre-allocate NumPy array to bypass dynamic list resizing
+        state = np.zeros(self.observation_space.shape, dtype=np.float32)
+        idx = 0
+        
         # Flatten state based on sorted order
         for _, ue, _ in ue_data:
-            # Map expanded UE features (11 total):
-            # throughput, delay, packet_loss, sinr, rsrp, rsrq,
-            # ul_rbs, rb_allocated, cqi, rsrp_var, rsrq_var, buffer_occupancy
-            state.extend([
-                ue.get('throughput', 0.0) / 100.0,            # Mbps -> ~[0,1]
-                ue.get('delay', 0.0) / 1000.0,                # ms -> seconds
-                ue.get('packet_loss', 0.0),                   # ratio
-                (ue.get('sinr', 0.0) + 10.0) / 40.0,          # SINR normalize [-10,30]
-                (ue.get('rsrp', -140.0) + 140.0) / 100.0,     # RSRP [-140,-40]
-                (ue.get('rsrq', -20.0) + 20.0) / 20.0,        # RSRQ [-20,0]
-                ue.get('ul_rbs', 0.0) / 100.0,               # avg UL RBs
-                ue.get('rb_allocated', 0) / 100.0,           # allocated RBs
-                ue.get('cqi', 0.0) / 15.0,                   # CQI 0-15
-                ue.get('rsrp_var', 0.0) / 50.0,              # variance scaled
-                ue.get('rsrq_var', 0.0) / 50.0,              # variance scaled
-                ue.get('buffer_occupancy', 0.0) / 10000.0,   # bytes scaled
-            ])
+            # Map expanded UE features (12 total):
+            state[idx]   = ue.get('throughput', 0.0) / 100.0
+            state[idx+1] = ue.get('delay', 0.0) / 1000.0
+            state[idx+2] = ue.get('packet_loss', 0.0)
+            state[idx+3] = (ue.get('sinr', 0.0) + 10.0) / 40.0
+            state[idx+4] = (ue.get('rsrp', -140.0) + 140.0) / 100.0
+            state[idx+5] = (ue.get('rsrq', -20.0) + 20.0) / 20.0
+            state[idx+6] = ue.get('ul_rbs', 0.0) / 100.0
+            state[idx+7] = ue.get('rb_allocated', 0) / 100.0
+            state[idx+8] = ue.get('cqi', 0.0) / 15.0
+            state[idx+9] = ue.get('rsrp_var', 0.0) / 50.0
+            state[idx+10]= ue.get('rsrq_var', 0.0) / 50.0
+            state[idx+11]= ue.get('buffer_occupancy', 0.0) / 10000.0
+            idx += 12
         
         # Cell metrics
-        # Per-cell features (5 per cell): queue_length, rb_utilization, tx_power, cell_load, avg_rb_request
         for cell_id in range(self.config.num_cells):
             cell = e2_msg.cell_metrics.get(cell_id, {})
-            state.extend([
-                cell.get('queue_length', 0) / 1000.0,          # queue length
-                cell.get('rb_utilization', 0.0),               # ratio
-                (cell.get('tx_power', 23.0) - 10.0) / 36.0,    # normalize tx power
-                cell.get('cell_load', 0.0) / max(1.0, self.config.num_ues),
-                cell.get('avg_rb_request', 0.0) / 100.0,
-            ])
-        
-        return np.array(state, dtype=np.float32)
+            state[idx]   = cell.get('queue_length', 0) / 1000.0
+            state[idx+1] = cell.get('rb_utilization', 0.0)
+            state[idx+2] = (cell.get('tx_power', 23.0) - 10.0) / 36.0
+            state[idx+3] = cell.get('cell_load', 0.0) / max(1.0, self.config.num_ues)
+            state[idx+4] = cell.get('avg_rb_request', 0.0) / 100.0
+            idx += 5
+            
+        return state
     
     def _parse_action(self, action: np.ndarray) -> Dict:
         """

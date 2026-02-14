@@ -447,7 +447,7 @@ class PPOTrainer:
             'advantages': advantages.flatten(),
         }
     
-    def update_policy(self, rollout: Dict, num_epochs: int = 8, batch_size: int = 64):
+    def update_policy(self, rollout: Dict, num_epochs: int = 5, batch_size: int = 64):
         """Update policy using PPO objective"""
         states = rollout['states'].to(self.device)
         actions = rollout['actions'].to(self.device)
@@ -493,6 +493,11 @@ class PPOTrainer:
                         self.vf_coef * value_loss +
                         self.ent_coef * entropy_loss
                     )
+                    
+                    # Calculate approximate KL divergence for monitoring
+                    with torch.no_grad():
+                        log_ratio = log_probs - batch_old_log_probs
+                        approx_kl = torch.mean((torch.exp(log_ratio) - 1) - log_ratio).item()
                 
                 # Optimization step with GradScaler
                 self.optimizer.zero_grad()
@@ -522,7 +527,8 @@ class PPOTrainer:
             'policy_loss': policy_loss.item(),
             'value_loss': value_loss.item(),
             'entropy': -entropy_loss.item(),
-            'explained_variance': explained_var
+            'explained_variance': explained_var,
+            'approx_kl': approx_kl
         }
     
     def _denormalize_action(self, action: np.ndarray) -> np.ndarray:
@@ -686,6 +692,7 @@ class PPOTrainer:
             table.add_column("Expl Var", justify="center")   # New: Convergence indicator
             table.add_column("Policy Loss", justify="center")
             table.add_column("Value Loss", justify="center")
+            table.add_column("KL", justify="center")         # New: KL Divergence
             table.add_column("Entropy", justify="center")
             
             if current_metrics:
@@ -705,10 +712,11 @@ class PPOTrainer:
                     ev_display,
                     f"{current_metrics.get('policy_loss', 0.0):.4f}",
                     f"{current_metrics.get('value_loss', 0.0):.4f}",
+                    f"{current_metrics.get('approx_kl', 0.0):.4f}",
                     f"{current_metrics.get('entropy', 0.0):.4f}"
                 )
             else:
-                table.add_row("-", "0", "0.000", "→", "0.000", "0.0000", "0.0000", "0.0000")
+                table.add_row("-", "0", "0.000", "→", "0.000", "0.0000", "0.0000", "0.0000", "0.0000")
             return Panel(table, title="[bold blue]RL Training Progress[/]", border_style="blue", expand=True)
 
         # Per-Env Metrics Table
@@ -853,6 +861,7 @@ class PPOTrainer:
                     'explained_variance': metrics['explained_variance'],
                     'policy_loss': metrics['policy_loss'],
                     'value_loss': metrics['value_loss'],
+                    'approx_kl': metrics['approx_kl'],
                     'entropy': metrics['entropy']
                 }
                 

@@ -1273,14 +1273,10 @@ int main(int argc, char *argv[]) {
   // Scenario-Specific Channel Configuration
   if (congestionScenario == "urban_canyon") {
     NS_LOG_INFO(
-        "Configuring Urban Canyon: Using HybridBuildingsPropagationLossModel");
-    lteHelper->SetAttribute(
-        "PathlossModel",
-        StringValue("ns3::HybridBuildingsPropagationLossModel"));
-    lteHelper->SetPathlossModelAttribute("ShadowSigmaExtWalls",
-                                         DoubleValue(20.0)); // High blockage
-    lteHelper->SetPathlossModelAttribute("ShadowSigmaOutdoor",
-                                         DoubleValue(7.0));
+        "Configuring Urban Canyon: Using LogDistancePropagationLossModel (Exponent 3.8)");
+    lteHelper->SetAttribute("PathlossModel",
+                            StringValue("ns3::LogDistancePropagationLossModel"));
+    lteHelper->SetPathlossModelAttribute("Exponent", DoubleValue(3.8));
   } else {
     // Default simple pathloss
     lteHelper->SetAttribute("PathlossModel",

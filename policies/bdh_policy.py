@@ -46,10 +46,10 @@ class BDHPolicy(nn.Module):
         # Layer count=6 (Original)
         if bdh_config is None:
             cfg = bdh_mod.BDHConfig(
-                n_layer=6, 
+                n_layer=4, 
                 n_embd=256, 
                 n_head=4, 
-                mlp_internal_dim_multiplier=128, # Keep the massive 128 width!
+                mlp_internal_dim_multiplier=32, 
                 vocab_size=256 
             )
         else:
