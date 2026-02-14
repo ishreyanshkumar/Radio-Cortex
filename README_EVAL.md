@@ -146,6 +146,23 @@ results/experiment_results.csv
 
 Each row includes a timestamp, all metrics, and config parameters — allowing you to build a dataset incrementally across runs.
 
+## ⚠️ Data Quality & Limitations
+
+While Radio-Cortex provides a comprehensive metric suite, users should be aware of the current data source fidelity for certain fields:
+
+| Metric | Source Fidelity | Note |
+|--------|-----------------|------|
+| **Throughput/Delay/Loss** | **High** | Measured directly from UE-level NetDevice trace sources in ns-3. |
+| **SINR/RSRP/CQI** | **High** | Extracted from the LteAmc and LtePhy layers; highly accurate. |
+| **RB Utilization** | **Medium** | Currently uses a 0.5 placeholder in `CollectCellMetrics`. For active training, the agent relies on the `avg_rb_request` derived from UE allocations. |
+| **Queue Length** | **Medium** | Uses a 0 placeholder for aggregate cell queue. Per-bearer buffer occupancy is the recommended alternative for congestion sensing. |
+| **Handover Events** | **High** | Captured via RRC state machine transitions in real-time. |
+
+> [!TIP]
+> Future updates to the `oran-congestion-scenario.cc` will replace remaining placeholders with direct aggregate MAC-layer statistics. For now, the **Reward Engine** uses composite UE-level data to proxy these values effectively.
+
+---
+
 **Explore results interactively:**
 ```bash
 # Standalone HTML dashboard

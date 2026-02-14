@@ -107,17 +107,20 @@ source .venv/bin/activate
 ```
 
 ### Quick Start
-1. **Curriculum Training**: `bash scripts/train_curriculum.sh` (8-stage Power Suite)
+1. **Curriculum Training**: `bash scripts/train_curriculum.sh` (8-stage "Lean Power Suite")
 2. **Benchmarking**: `python3 scripts/benchmark_power_suite.py` (BDH vs Baseline vs MLP)
 3. **Single Scenario**: `python3 radio_cortex_complete.py --mode train --scenario flash_crowd --total-timesteps 200000`
-4. **Clean Workspace**: `bash scripts/cleanup.sh`
+4. **Debug Scale**: `python3 debug_scalability.py` (Verify 5 UE -> 100 UE generalization)
+5. **Clean Workspace**: `bash scripts/cleanup.sh`
 
 ## 🛠️ Utilities
 
 The `scripts/` directory contains multi-language utilities to assist with development:
 
 - **Cleanup**: `bash scripts/cleanup.sh` - Removes logs, residuals, and caches.
-- **Curriculum Training**: `bash scripts/train_curriculum.sh` - 14-stage progressive training.
+- **Curriculum Training**: `bash scripts/train_curriculum.sh` - 8-stage progressive "Lean Power Suite".
+- **Benchmark Suite**: `python3 scripts/benchmark_power_suite.py` - Compares architectures across scenarios.
+- **Scalability Test**: `python3 debug_scalability.py` - Tests zero-shot generalization to 100 UEs.
 - **Log Analyzer (Go)**: `go run scripts/log_analyzer.go`
 
 ---
@@ -589,7 +592,7 @@ bash scripts/train_curriculum.sh
 | 7 | 300k | Spectrum Crunch | Spectral efficiency |
 | 8 | 500k | Power Suite Mix | Generalization |
 
-**Total: ~1.7M timesteps** to full mastery across all key challenges.
+**Total: ~7.2M timesteps** to full mastery across all key challenges.
 
 ### Network Size Curriculum (Manual)
 ```bash
