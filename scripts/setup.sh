@@ -17,12 +17,12 @@ else
 fi
 
 # 2. Set up Python Virtual Environment
-if [ ! -d "../.venv" ]; then
+if [ ! -d ".venv" ]; then
     echo "[2/4] Creating virtual environment (.venv)..."
-    python3 -m venv ../.venv
+    python3 -m venv .venv
 fi
 echo "Activating .venv..."
-source ../.venv/bin/activate
+source .venv/bin/activate
 echo "Installing python dependencies..."
 pip install -r requirements.txt
 
