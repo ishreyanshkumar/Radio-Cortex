@@ -84,18 +84,25 @@ class BaselineController:
     
     def __init__(self, num_cells: int):
         self.num_cells = num_cells
-        # Fixed parameters (never change)
-        self.tx_power = [23.0] * num_cells  # dBm
-        self.scheduler = ['PF'] * num_cells  # Proportional Fair
-        self.harq_retx = [4] * num_cells
+        # Fixed parameters (never change) — returned as [0,1]-normalized
+        self.tx_power_norm = 0.5    # 0.5 maps to no-change (differential)
+        self.sched_weight_norm = 0.5  # 0.5 maps to no-change (differential)
+        self.hysteresis_norm = 0.3  # 3.0 / 10.0 dB (default)
+        self.mac_delay_norm = 0.0   # 0 TTIs
+        self.max_harq_norm = 3.0/7.0  # 4 retx: (4-1)/7
     
     def get_action(self, state):
-        """Returns fixed action (no adaptation)"""
-        return {
-            'tx_power': self.tx_power,
-            'scheduler': self.scheduler,
-            'harq_retx': self.harq_retx
-        }
+        """Returns fixed [0,1]-normalized action array (no adaptation)"""
+        action = []
+        for _ in range(self.num_cells):
+            action.extend([
+                self.tx_power_norm,
+                self.sched_weight_norm,
+                self.hysteresis_norm,
+                self.mac_delay_norm,
+                self.max_harq_norm,
+            ])
+        return np.array(action, dtype=np.float32)
         
 class EvaluationRunner:
     """
@@ -218,13 +225,11 @@ class EvaluationRunner:
                 # Periodic logging of RIC decisions (actions) during evaluation
                 step_count = step_i # step_i is current loop index
                 if not progress_queue and controller_name == "Radio-Cortex" and step_count % 10 == 0:
-                    # Format detailed action summary for display
-                    num_cells = (len(action_arr) - env_config.num_ues) // 2
-                    if num_cells > 0:
-                        c0_actions = action_arr[:2]
-                        ue_priorities = action_arr[num_cells*2:]
-                        avg_ue_prio = np.mean(ue_priorities) if len(ue_priorities) > 0 else 0
-                        print(f"\n  Step {step_count:>3} │ 🤖 RIC Decision (Cell 0): Power={c0_actions[0]:.1f}dBm │ Scheduler={c0_actions[1]:.2f} │ Avg UE Prio={avg_ue_prio:.2f}")
+                    # Format cell-level action summary
+                    actions_per_cell = 5
+                    if len(action_arr) >= actions_per_cell:
+                        c0 = action_arr[:actions_per_cell]
+                        print(f"\n  Step {step_count:>3} │ 🤖 RIC Decision (Cell 0): TxΔ={c0[0]:.2f} │ SchedΔ={c0[1]:.2f} │ Hyst={c0[2]*10:.1f}dB │ Delay={round(c0[3]*4)} │ HARQ={1+round(c0[4]*7)}")
             
             
             # Track Handovers
@@ -379,59 +384,36 @@ class EvaluationRunner:
         return metrics
 
     def _parse_state(self, state_arr, config) -> Dict:
-        """Convert flattened numpy state back to dict for heuristic controllers.
+        """Convert flattened cell-centric state back to dict.
         
-        State layout (from _extract_state in oran_ns3_env.py):
-          Per-UE (12 features): throughput, delay, loss, sinr, rsrp, rsrq,
-                                ul_rbs, rb_allocated, cqi, rsrp_var, rsrq_var, buffer
-          Per-Cell (5 features): queue_length, rb_utilization, tx_power, cell_load, avg_rb_request
+        State layout (Cell-Centric, 12 features per cell):
+          [0] queue_length  [1] rb_utilization  [2] tx_power
+          [3] cell_load     [4] avg_rb_request
+          [5] avg_tput      [6] avg_delay       [7] avg_loss
+          [8] max_delay     [9] max_loss        [10] jains
+          [11] n_ues
         """
         state_dict = {}
-        
-        ue_features = 12
-        cell_features = 5
-        ue_offset = config.num_ues * ue_features
-
-        # Extract per-UE packet loss (index 2 within each 12-feature block)
-        ue_losses = state_arr[2:ue_offset:ue_features]
-        global_avg_loss = np.mean(ue_losses) if len(ue_losses) > 0 else 0.0
+        features_per_cell = 12
         
         for cell_id in range(config.num_cells):
-            idx = ue_offset + cell_id * cell_features
-            state_dict[f'cell_{cell_id}_queue'] = state_arr[idx] * 1000       # queue_length (scaled)
-            state_dict[f'cell_{cell_id}_rb_util'] = state_arr[idx + 1]        # rb_utilization
-            state_dict[f'cell_{cell_id}_power'] = state_arr[idx + 2] * 36.0 + 10.0  # tx_power (denorm)
-            
-            # Approximate cell-level loss from associated UEs
-            ues_per_cell = config.num_ues // config.num_cells
-            start_ue = cell_id * ues_per_cell
-            end_ue = (cell_id + 1) * ues_per_cell
-            cell_ue_losses = ue_losses[start_ue:end_ue]
-            
-            state_dict[f'cell_{cell_id}_avg_loss'] = np.mean(cell_ue_losses) if len(cell_ue_losses) > 0 else global_avg_loss
+            idx = cell_id * features_per_cell
+            state_dict[f'cell_{cell_id}_queue'] = state_arr[idx] * 1000
+            state_dict[f'cell_{cell_id}_rb_util'] = state_arr[idx + 1]
+            state_dict[f'cell_{cell_id}_power'] = state_arr[idx + 2] * 36.0 + 10.0
+            state_dict[f'cell_{cell_id}_avg_loss'] = state_arr[idx + 7]
+            state_dict[f'cell_{cell_id}_max_delay'] = state_arr[idx + 8] * 100.0
+            state_dict[f'cell_{cell_id}_jains'] = state_arr[idx + 10]
             
         return state_dict
 
     def _dict_to_action(self, action_dict, action_space) -> np.ndarray:
-        """Convert controller action dict to numpy array"""
-        # Action: [TxPower, SchedulerWeight, Hysteresis] per cell + UE priorities
-        flat_action = []
-        num_cells = len(action_dict['tx_power'])
-        
-        for i in range(num_cells):
-             # 1. Tx Power
-             flat_action.append(action_dict['tx_power'][i])
-             
-             # 2. Scheduler Weight (default 1.0)
-             flat_action.append(1.0)
-             
-        # Pad for UE priority weights (oran_ns3_env expects these)
-        current_len = len(flat_action)
-        target_len = action_space.shape[0]
-        if current_len < target_len:
-            flat_action.extend([1.0] * (target_len - current_len))
-
-        return np.array(flat_action, dtype=np.float32)
+        """Convert controller action dict to numpy array.
+        For BaselineController, action_dict is already a flat numpy array."""
+        if isinstance(action_dict, np.ndarray):
+            return action_dict
+        # Fallback: fill action space with 0.5 (no-change for differential actions)
+        return np.full(action_space.shape, 0.5, dtype=np.float32)
 
     def _calculate_control_stability(self, actions_history: List[np.ndarray]) -> float:
         """

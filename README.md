@@ -13,9 +13,9 @@ Radio-Cortex pushes the boundary of O-RAN intelligence by solving three fundamen
     -   *Problem*: Network optimization is a zero-sum game (e.g., High Throughput vs. Low Energy). Naive RL agents often "reward hack" or receive persistently negative rewards, causing learning collapse.
     -   *Solution*: We implemented a **3-Level Curriculum Reward Engine** with *Survival Bias*. **Level 0 (Bootstrap)**: Only Throughput reward + a constant `+1.0` bias (guarantees positive rewards). **Level 1 (Quality)**: Adds Delay and Queue penalties at >50% UE satisfaction. **Level 2 (Reliability)**: Adds Loss, Energy, and Load penalties at >80% satisfaction. This ensures stable, progressive learning.
 
-3.  **Compressed Action Space (26-Dim Differential Control)**:
-    -   *Problem*: RL agents often output erratic "bang-bang" control actions and large action spaces (41+ dims) cause slow convergence.
-    -   *Solution*: We compressed the action space to **26 dimensions** (2 per cell: TxPower, SchedulerWeight + 20 UE priority weights) and use **Differential Control** (deltas instead of absolute values). This gives a 35% reduction in search space while retaining all high-impact control levers.
+3.  **Cell-Centric Action Space (15-Dim Differential + Absolute Control)**:
+    -   *Problem*: RL agents often output erratic "bang-bang" control actions and large per-UE action spaces cause slow convergence.
+    -   *Solution*: We compressed the action space to **15 dimensions** (5 per cell: TxPower, SchedulerWeight, Hysteresis, MAC Delay, Max HARQ) and use a mix of **Differential** (TxPower, SchedulerWeight) and **Absolute** (Hysteresis, Delay, HARQ) control. This is scale-invariant — the action space stays fixed regardless of UE count.
 
 ## 🚀 End-to-End Installation Guide
 
@@ -393,11 +393,12 @@ This script manages the lifecycle of the training process, initializes the agent
 converts ns-3 simulation into a standard OpenAI Gym interface (observation, action, reward).
 
 *   **`ORANns3Env`**: The Gym Environment class.
-    *   `step(action)`: Takes an RL action (29 dims), sends it to ns-3, waits for the next KPM report, and returns (state, reward, done).
+    *   `step(action)`: Takes an RL action (15 dims = 5 per cell), sends it to ns-3, waits for the next KPM report, and returns (state, reward, done).
     *   `reset()`: Restarts the ns-3 simulation subprocess.
     *   `_compute_reward(e2_msg)`: Delegates to `RewardEngine`.
     *   **`RewardEngine`**: 3-Level Curriculum reward engine with Survival Bias. Combines 8 components (Throughput, Delay, Loss, SE, Energy, Load, Queue, Smoothing) gated by curriculum levels.
-    *   **Action Space**: 26 dimensions — 2 per cell (TxPower, SchedulerWeight) + 20 UE priority weights. Uses differential control (deltas).
+    *   **State Space**: `num_cells × 12` Enriched Cell Tokens (5 native cell metrics + 7 aggregated UE stats including avg/max delay, loss, Jain's fairness). Scale-invariant — works for any number of UEs.
+    *   **Action Space**: `num_cells × 5` = 15 dimensions — TxPower (differential), SchedulerWeight (differential), Hysteresis (absolute), MAC Delay (absolute), Max HARQ (absolute). All [0,1]-normalized.
 *   **`NS3Interface`**: Handles low-level communication.
     *   `start_simulation()`: Spawns the `./ns3 run ...` subprocess.
     *   `send_rc_control(actions)`: Serializes actions to JSON and sends via Kafka `e2_rc_control` topic.
@@ -415,7 +416,7 @@ Implements the PPO algorithm from scratch using PyTorch.
 ### 4. Policy Architectures Supported:
 All policies use **state-dependent exploration** (learned log-std heads) for adaptive exploration.
 
-*   **BDH** (Default): Baby Dragon Hatchling (Scale-Free Transformer) — UE/Cell tokenization, bidirectional attention
+*   **BDH** (Default): Baby Dragon Hatchling (Scale-Free Transformer) — Cell tokenization (12 features per cell), bidirectional self-attention across cells
 *   **GPT-2** (`gpt2`): Standard Decoder-Only Transformer — Causal attention over time
 *   **Transformer-XL** (`trxl`): Segment-Level Recurrence
 *   **Linear Transformer** (`linear`): O(T) Kernel Attention (Katharopoulos)

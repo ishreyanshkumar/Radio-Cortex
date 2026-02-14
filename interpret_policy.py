@@ -34,45 +34,28 @@ def _load_last_log_entry(log_path: Path) -> Dict:
 
 
 def _build_state_and_names(metrics: Dict, num_ues: int, num_cells: int) -> Tuple[np.ndarray, List[str]]:
-    """Replicates ORANns3Env._extract_state normalization."""
+    """Replicates ORANns3Env._extract_state normalization (Cell-Centric)."""
     state: List[float] = []
     names: List[str] = []
 
-    ue_metrics = metrics.get("ue", {})
-    for ue_id in range(num_ues):
-        ue = ue_metrics.get(str(ue_id), ue_metrics.get(ue_id, {}))
-        state.extend([
-            ue.get("throughput", 0.0) / 100.0,
-            ue.get("delay", 0.0) / 1000.0,
-            ue.get("packet_loss", 0.0),
-            (ue.get("sinr", 0.0) + 10.0) / 40.0,
-            (ue.get("rsrp", -140.0) + 140.0) / 100.0,
-            (ue.get("rsrq", -20.0) + 20.0) / 20.0,
-            ue.get("ul_rbs", 0.0) / 100.0,
-            ue.get("rb_allocated", 0) / 100.0,
-            ue.get("cqi", 0.0) / 15.0,
-            ue.get("rsrp_var", 0.0) / 50.0,
-            ue.get("rsrq_var", 0.0) / 50.0,
-            ue.get("buffer_occupancy", 0.0) / 10000.0,
-        ])
-        names.extend([
-            f"ue_{ue_id}.tput",
-            f"ue_{ue_id}.delay",
-            f"ue_{ue_id}.loss",
-            f"ue_{ue_id}.sinr",
-            f"ue_{ue_id}.rsrp",
-            f"ue_{ue_id}.rsrq",
-            f"ue_{ue_id}.ul_rbs",
-            f"ue_{ue_id}.rb_alloc",
-            f"ue_{ue_id}.cqi",
-            f"ue_{ue_id}.rsrp_var",
-            f"ue_{ue_id}.rsrq_var",
-            f"ue_{ue_id}.buffer",
-        ])
-
     cell_metrics = metrics.get("cell", {})
+    ue_metrics = metrics.get("ue", {})
+    
+    # Aggregate UE metrics per cell (mirrors _extract_state)
+    cell_stats = {c: {'tputs': [], 'delays': [], 'losses': []} for c in range(num_cells)}
+    for ue_id, ue in ue_metrics.items():
+        c_id = ue.get('serving_cell', int(ue_id) % num_cells if str(ue_id).isdigit() else 0)
+        if 0 <= c_id < num_cells:
+            cell_stats[c_id]['tputs'].append(ue.get('throughput', 0.0))
+            cell_stats[c_id]['delays'].append(ue.get('delay', 0.0))
+            cell_stats[c_id]['losses'].append(ue.get('packet_loss', 0.0))
+
     for cell_id in range(num_cells):
         cell = cell_metrics.get(str(cell_id), cell_metrics.get(cell_id, {}))
+        stats = cell_stats[cell_id]
+        n = len(stats['tputs'])
+        
+        # Native cell metrics (5)
         state.extend([
             cell.get("queue_length", 0.0) / 1000.0,
             cell.get("rb_utilization", 0.0),
@@ -86,6 +69,40 @@ def _build_state_and_names(metrics: Dict, num_ues: int, num_cells: int) -> Tuple
             f"cell_{cell_id}.tx_power",
             f"cell_{cell_id}.load",
             f"cell_{cell_id}.avg_req",
+        ])
+        
+        # Aggregated UE metrics (7)
+        if n > 0:
+            avg_tput = np.mean(stats['tputs'])
+            avg_delay = np.mean(stats['delays'])
+            avg_loss = np.mean(stats['losses'])
+            max_delay = np.max(stats['delays'])
+            max_loss = np.max(stats['losses'])
+            sum_t = sum(stats['tputs'])
+            sum_sq = sum(x*x for x in stats['tputs'])
+            jains = 1.0 if sum_sq < 1e-9 else (sum_t**2) / (n * sum_sq)
+        else:
+            avg_tput, avg_delay, avg_loss = 0, 0, 0
+            max_delay, max_loss = 0, 0
+            jains = 1.0
+        
+        state.extend([
+            avg_tput / 100.0,
+            avg_delay / 100.0,
+            avg_loss,
+            max_delay / 100.0,
+            max_loss,
+            jains,
+            n / 50.0,
+        ])
+        names.extend([
+            f"cell_{cell_id}.avg_tput",
+            f"cell_{cell_id}.avg_delay",
+            f"cell_{cell_id}.avg_loss",
+            f"cell_{cell_id}.max_delay",
+            f"cell_{cell_id}.max_loss",
+            f"cell_{cell_id}.jains",
+            f"cell_{cell_id}.n_ues",
         ])
 
     return np.array(state, dtype=np.float32), names
@@ -150,7 +167,7 @@ def main() -> None:
     state, names = _build_state_and_names(metrics, num_ues, num_cells)
 
     state_dim = len(state)
-    action_dim = num_cells * 2 + num_ues  # Matches current ORANns3Env
+    action_dim = num_cells * 5  # Cell-centric: 5 actions per cell
 
     if args.action_index < 0 or args.action_index >= action_dim:
         print(f"Error: action-index must be in [0, {action_dim - 1}]")

@@ -602,8 +602,8 @@ def evaluate_single_scenario(
                 pass
             
             # Verify if it matches current config
-            expected_state_dim = config.num_ues * 12 + config.num_cells * 5
-            expected_action_dim = config.num_cells * 2 + config.num_ues  # 2 per cell: TxPower, SchedWeight
+            expected_state_dim = config.num_cells * 12   # Cell-centric: 12 features per cell
+            expected_action_dim = config.num_cells * 5    # 5 actions per cell
             
             # Determine device: Default to CPU for evaluation to stay within 16GB limit.
             # BDH is particularly heavy and evaluation is bottlenecked by the simulation, not AI.
@@ -727,7 +727,7 @@ def main():
     primary.add_argument('--model-path', type=str, default=None, help='Path to save/load model (default: models/radiocortex_{model}.pt)')
     primary.add_argument('--device', type=str, default=None, help='Compute device (cpu/cuda)')
     primary.add_argument('--config', type=str, default=None, help='JSON config file to override any argument')
-    primary.add_argument('--shuffle-ues', action='store_true', help='Scramble UE order during observation (Test Permutation Invariance)')
+    primary.add_argument('--shuffle-ues', action='store_true', help='(Obsolete — ignored in cell-centric mode)')
 
     # --- Infrastructure Group ---
     infra = parser.add_argument_group('Network & Environment')
@@ -778,7 +778,7 @@ def main():
         scenario=args.scenario,
         system_bandwidth_mhz=args.system_bandwidth_mhz,
         topic_suffix=args.topic_suffix,
-        shuffle_ues=args.shuffle_ues
+        # shuffle_ues is obsolete in cell-centric mode (no per-UE state)
     )
     
     # Attach model_type to config for downstream usage (eval workers, etc.)

@@ -157,27 +157,42 @@ class RewardEngine:
         self.PROMOTION_THRESHOLD_L2 = 0.8 # 80% for Level 2
         self.current_scenario = None
 
-    def _update_curriculum(self, current_success_rate: float):
-        """Update curriculum level based on sustained success rate with promotion/demotion logic."""
+    def _update_curriculum(self, current_success_rate: float, jains_index: float, rb_util: float):
+        """
+        Smart Curriculum: Promotes based on Fairness (allocating resources well) 
+        rather than just raw throughput (which might be physically impossible).
+        """
         self.success_history.append(current_success_rate)
         if len(self.success_history) > self.HISTORY_LEN:
             self.success_history.pop(0)
         
         avg_success = sum(self.success_history) / len(self.success_history)
 
-        # Level promotion and demotion logic
-        if self.level == 0 and avg_success > self.PROMOTION_THRESHOLD_L1:
+        # === NEW PROMOTION LOGIC ===
+        # Level 0 -> 1 (Bootstrap -> Quality)
+        # Promote if:
+        # 1. 50% users are happy (Original condition)
+        # OR
+        # 2. We are being fair (Jain's > 0.9) AND using the spectrum (RB Util > 0.8)
+        
+        can_promote_l1 = (avg_success > self.PROMOTION_THRESHOLD_L1) or \
+                         (jains_index > 0.9 and rb_util > 0.8)
+
+        if self.level == 0 and can_promote_l1:
             self.level = 1
-            print(f"\n🎉 PROMOTED TO LEVEL 1 (Quality): Soft-enabling Delay Penalty (Scenario: {self.current_scenario})")
-            self.success_history = []
+            print(f"\n🎉 PROMOTED TO LEVEL 1 (Quality): Fairness/Tput Gate Passed. Jains={jains_index:.2f}, Util={rb_util:.2f}")
+            self.success_history = [] # Reset buffer to prove yourself at next level
+            
         elif self.level == 1:
+            # Level 1 -> 2 (Quality -> Reliability)
             if avg_success > self.PROMOTION_THRESHOLD_L2:
                 self.level = 2
-                print(f"\n🚀 PROMOTED TO LEVEL 2 (Reliability): Soft-enabling Loss/Jitter Penalty")
+                print(f"\n🚀 PROMOTED TO LEVEL 2 (Reliability): Excellent QoS achieved.")
                 self.success_history = []
-            elif avg_success < self.DEMOTION_THRESHOLD:
+            elif avg_success < self.DEMOTION_THRESHOLD and jains_index < 0.7:
+                # Only demote if fairness ALSO is poor
                 self.level = 0
-                print(f"\n📉 DEMOTED TO LEVEL 0 (Bootstrap): Re-focusing on Throughput baseline")
+                print(f"\n📉 DEMOTED TO LEVEL 0: Network became unfair.")
                 self.success_history = []
         elif self.level == 2 and avg_success < self.DEMOTION_THRESHOLD:
             self.level = 1
@@ -217,16 +232,23 @@ class RewardEngine:
         r_tput = float(np.clip(r_tput, *self.CLIP_TPUT))
 
         # ── Calculate Success Rate (for Curriculum) ──────────────
+        jains = self._jains_index(tputs)
+        
+        if e2_msg.cell_metrics:
+            avg_rb_util = np.mean([m['rb_utilization'] for m in e2_msg.cell_metrics.values()])
+        else:
+            avg_rb_util = 0.0
+
         # Scenario-specific success threshold adjustments
         target_tput = self.MIN_TPUT_SUCCESS
-        if self.current_scenario == 'iot_tsunami':
-            target_tput = 0.5
+        if self.current_scenario in ['iot_tsunami', 'flash_crowd']: 
+            target_tput = 0.5 # Lower expectation for extreme congestion case
         elif self.current_scenario in ['spectrum_crunch', 'urban_canyon']:
             target_tput = 1.0
 
         satisfied_ues = np.sum(tputs > target_tput)
         success_rate = satisfied_ues / max(len(tputs), 1)
-        self._update_curriculum(success_rate)
+        self._update_curriculum(success_rate, jains, avg_rb_util)
 
         # ── Apply Curriculum Masking & Soft-Start ─────────────────
         # Use success rate to softly introduce penalties within a level
@@ -801,14 +823,13 @@ class ORANns3Env(gym.Env):
         self.reward_engine = RewardEngine(self.config)
         self.prev_action = None
         
-        # State space: flattened network metrics
-        # Per-UE features: throughput, delay, loss, sinr, rsrp, rsrq, ul_rbs,
-        #                rb_allocated, cqi, rsrp_var, rsrq_var, buffer_occupancy  (12 per UE)
-        # Per-cell features: queue_length, rb_utilization, tx_power, cell_load, avg_rb_request (5 per cell)
-        state_dim = (
-            self.config.num_ues * 12 +  # UE metrics (expanded)
-            self.config.num_cells * 5    # Cell metrics (expanded)
-        )
+        # ──────────────────────────────────────────────────────────
+        # Cell-Centric State Space  (Enriched Cell Tokens)
+        # Each cell gets 12 features: 5 native + 7 aggregated UE stats
+        # This is SCALE-INVARIANT — works for 20 or 2000 UEs.
+        # ──────────────────────────────────────────────────────────
+        self.features_per_cell = 12
+        state_dim = self.config.num_cells * self.features_per_cell
         self.observation_space = spaces.Box(
             low=-np.inf,
             high=np.inf,
@@ -816,33 +837,27 @@ class ORANns3Env(gym.Env):
             dtype=np.float32
         )
         
-        # Per-cell: [TxPower, SchedulerWeight]  (2 per cell — removing Hysteresis)
-        # Per-UE: [priority_weight] for each UE
-        # Fixed defaults (not RL-controlled): SchedulerType=0(PF), MaxHarq=4, MacDelay=0, NoiseFig=5dB, Hysteresis=3dB
-        per_cell_low = [
-            10.0,  # TxPower min (dBm)
-            0.0,   # SchedulerWeight min
-        ]
-        per_cell_high = [
-            46.0,  # TxPower max
-            5.0,   # SchedulerWeight max
-        ]
+        # Cell-Only Action Space: 5 Actions per cell
+        # 1. TxPower (differential)
+        # 2. SchedulerWeight (differential)
+        # 3. Hysteresis (absolute: handover stickiness)
+        # 4. MacDelay (absolute: processing latency)
+        # 5. MaxHarq (absolute: retransmission limit)
+        self.actions_per_cell = 5
+        action_dim = self.config.num_cells * self.actions_per_cell
 
-        # Per-UE priority weight bounds
-        per_ue_low = [0.0] * self.config.num_ues
-        per_ue_high = [10.0] * self.config.num_ues
-
-        low = np.array(per_cell_low * self.config.num_cells + per_ue_low, dtype=np.float32)
-        high = np.array(per_cell_high * self.config.num_cells + per_ue_high, dtype=np.float32)
-
-        self.action_space = spaces.Box(low=low, high=high, dtype=np.float32)
+        self.action_space = spaces.Box(
+            low=np.array([0.0] * action_dim, dtype=np.float32),
+            high=np.array([1.0] * action_dim, dtype=np.float32),
+            dtype=np.float32
+        )
         
         # Episode tracking
         self.current_step = 0
         self.max_steps = int(self.config.sim_time * 1000 / self.config.kpm_interval_ms)
         self.episode_metrics = []
         
-        # Differential Control State Tracking
+        # Differential Control State Tracking (Cell-only)
         self.current_params = {
             'cell': {c: {
                 'tx_power': 23.0,       # dBm
@@ -852,10 +867,7 @@ class ORANns3Env(gym.Env):
                 'mac_delay': 0.0,       # ms
                 'noise_figure': 5.0,    # dB
                 'scheduler_weight': 1.0 
-            } for c in range(self.config.num_cells)},
-            'ue': {u: {
-                'priority_weight': 1.0
-            } for u in range(self.config.num_ues)}
+            } for c in range(self.config.num_cells)}
         }
         
     def reset(self, seed=None, options=None) -> Tuple[np.ndarray, dict]:
@@ -866,23 +878,17 @@ class ORANns3Env(gym.Env):
         if seed is not None:
             self.config.seed = seed
             
-        # Initialize sorted indices (default identity)
-        self.sorted_ue_indices = list(range(self.config.num_ues))
-        
-        # Reset Differential Control State to Defaults
+        # Reset Differential Control State to Defaults (Cell-only)
         self.current_params = {
             'cell': {c: {
                 'tx_power': 23.0,       # dBm
-                'scheduler_type': 0,    # Discrete (Handled absolutely for now or via small steps)
+                'scheduler_type': 0,    # Discrete
                 'max_harq': 4.0, 
                 'hysteresis': 2.0,      # dB
                 'mac_delay': 0.0,       # ms
                 'noise_figure': 5.0,    # dB
                 'scheduler_weight': 1.0 
-            } for c in range(self.config.num_cells)},
-            'ue': {u: {
-                'priority_weight': 1.0
-            } for u in range(self.config.num_ues)}
+            } for c in range(self.config.num_cells)}
         }
         
         # Multi-scenario training: select scenario for this episode
@@ -998,146 +1004,121 @@ class ORANns3Env(gym.Env):
             return fallback_state, -10.0, True, False, {'step_error': str(e), 'e2_metrics': dummy_msg}
     
     def _extract_state(self, e2_msg: E2Message) -> np.ndarray:
-        """Convert E2 KPM message to RL state vector"""
-        state = []
+        """
+        Cell-Centric State Extraction.
+        Aggregates UE metrics into their serving cells to produce
+        Enriched Cell Tokens (12 features per cell).
+        """
+        # 1. Initialize per-cell UE aggregators
+        cell_stats = {c: {'tputs': [], 'delays': [], 'losses': []}
+                      for c in range(self.config.num_cells)}
         
-        # UE metrics
-        # UE metrics with Canonical Sorting
-        # Collect all UE metrics first
-        ue_data = []
-        actual_ue_count = len(e2_msg.ue_metrics)
-        if actual_ue_count > self.config.num_ues:
-            # Only log once per session to avoid noise
-            if not hasattr(self, '_reported_ue_mismatch'):
-                print(f"\n🚨 [CRITICAL WARNING] Received KPMs for {actual_ue_count} UEs, but configured for {self.config.num_ues}!")
-                print("   The agent is BLIND to some UEs. Check NS3Config scenario/num_ues alignment.")
-                self._reported_ue_mismatch = True
-
-        for ue_id in range(self.config.num_ues):
-            ue = e2_msg.ue_metrics.get(ue_id, {})
-            # Sorting Key: Buffer Occupancy (Descending), then UE ID (Ascending) for ties
-            sort_key = (-ue.get('buffer_occupancy', 0.0), ue_id)
-            ue_data.append((ue_id, ue, sort_key))
-            
-        # Sort UEs canonically (Default) or Shuffle them (Testing)
-        if self.config.shuffle_ues:
-            random.shuffle(ue_data)
-        else:
-            ue_data.sort(key=lambda x: x[2])
+        # 2. Map each UE to its serving cell
+        for ue_id, m in e2_msg.ue_metrics.items():
+            c_id = m.get('serving_cell', -1)
+            if 0 <= c_id < self.config.num_cells:
+                cell_stats[c_id]['tputs'].append(m.get('throughput', 0.0))
+                cell_stats[c_id]['delays'].append(m.get('delay', 0.0))
+                cell_stats[c_id]['losses'].append(m.get('packet_loss', 0.0))
         
-        # Update sorted indices for action mapping
-        self.sorted_ue_indices = [x[0] for x in ue_data]
-        
-        # 🚀 OPTIMIZATION 1: Pre-allocate NumPy array to bypass dynamic list resizing
+        # 3. Build flat state vector: 12 features per cell
         state = np.zeros(self.observation_space.shape, dtype=np.float32)
         idx = 0
         
-        # Flatten state based on sorted order
-        for _, ue, _ in ue_data:
-            # Map expanded UE features (12 total):
-            state[idx]   = ue.get('throughput', 0.0) / 100.0
-            state[idx+1] = ue.get('delay', 0.0) / 1000.0
-            state[idx+2] = ue.get('packet_loss', 0.0)
-            state[idx+3] = (ue.get('sinr', 0.0) + 10.0) / 40.0
-            state[idx+4] = (ue.get('rsrp', -140.0) + 140.0) / 100.0
-            state[idx+5] = (ue.get('rsrq', -20.0) + 20.0) / 20.0
-            state[idx+6] = ue.get('ul_rbs', 0.0) / 100.0
-            state[idx+7] = ue.get('rb_allocated', 0) / 100.0
-            state[idx+8] = ue.get('cqi', 0.0) / 15.0
-            state[idx+9] = ue.get('rsrp_var', 0.0) / 50.0
-            state[idx+10]= ue.get('rsrq_var', 0.0) / 50.0
-            state[idx+11]= ue.get('buffer_occupancy', 0.0) / 10000.0
-            idx += 12
-        
-        # Cell metrics
-        for cell_id in range(self.config.num_cells):
-            cell = e2_msg.cell_metrics.get(cell_id, {})
-            state[idx]   = cell.get('queue_length', 0) / 1000.0
-            state[idx+1] = cell.get('rb_utilization', 0.0)
-            state[idx+2] = (cell.get('tx_power', 23.0) - 10.0) / 36.0
-            state[idx+3] = cell.get('cell_load', 0.0) / max(1.0, self.config.num_ues)
-            state[idx+4] = cell.get('avg_rb_request', 0.0) / 100.0
-            idx += 5
+        for c in range(self.config.num_cells):
+            # --- A. Native Cell Metrics (5 features) ---
+            cm = e2_msg.cell_metrics.get(c, {})
+            state[idx]   = cm.get('queue_length', 0) / 1000.0
+            state[idx+1] = cm.get('rb_utilization', 0.0)
+            state[idx+2] = (cm.get('tx_power', 23.0) - 10.0) / 36.0
+            state[idx+3] = cm.get('cell_load', 0.0) / max(1.0, self.config.num_ues)
+            state[idx+4] = cm.get('avg_rb_request', 0.0) / 100.0
+            
+            # --- B. Aggregated UE Metrics (7 features) ---
+            stats = cell_stats[c]
+            n_ues = len(stats['tputs'])
+            
+            if n_ues > 0:
+                # Averages (General Capacity)
+                avg_tput  = np.mean(stats['tputs'])
+                avg_delay = np.mean(stats['delays'])
+                avg_loss  = np.mean(stats['losses'])
+                
+                # Worst-Case (Special UE / Ambulance Detection)
+                max_delay = np.max(stats['delays'])
+                max_loss  = np.max(stats['losses'])
+                
+                # Jain's Fairness Index
+                sum_t = sum(stats['tputs'])
+                sum_sq_t = sum(x * x for x in stats['tputs'])
+                jains = 1.0 if sum_sq_t < 1e-9 else (sum_t ** 2) / (n_ues * sum_sq_t)
+            else:
+                avg_tput, avg_delay, avg_loss = 0.0, 0.0, 0.0
+                max_delay, max_loss = 0.0, 0.0
+                jains = 1.0
+            
+            state[idx+5]  = avg_tput / 100.0         # Avg throughput
+            state[idx+6]  = avg_delay / 100.0         # Avg delay
+            state[idx+7]  = avg_loss                  # Avg packet loss
+            state[idx+8]  = max_delay / 100.0         # Worst-case delay ("Is someone lagging?")
+            state[idx+9]  = max_loss                  # Worst-case loss  ("Is someone dropping?")
+            state[idx+10] = jains                     # Fairness index
+            state[idx+11] = n_ues / 50.0              # UE load count
+            
+            idx += self.features_per_cell
             
         return state
     
     def _parse_action(self, action: np.ndarray) -> Dict:
         """
-        Convert RL action to E2SM-RC control messages.
-        Simplified: 3 dims per cell (TxPower, SchedulerWeight, Hysteresis) + 1 per UE.
-        Fixed params (HARQ, Hysteresis, etc.) use sensible defaults.
+        5-Dimensional Cell Control.
+        Actions are [0, 1] normalized, mapped to physical ranges here.
         """
-        # Ensure action is a flat 1-D array (VecEnv may pass scalars or 0-d arrays)
         action = np.asarray(action, dtype=np.float64).flatten()
         
-        expected_size = self.config.num_cells * 2 + self.config.num_ues
+        expected_size = self.config.num_cells * self.actions_per_cell
         if action.size != expected_size:
-            import sys
             if action.size < expected_size:
-                action = np.pad(action, (0, expected_size - action.size), constant_values=0.0)
+                action = np.pad(action, (0, expected_size - action.size), constant_values=0.5)
             else:
                 action = action[:expected_size]
 
         rc_actions = {'cell': [], 'ue': []}
         offset = 0
         
-        # 1. Cell Actions (2 dims per cell: TxPower, SchedulerWeight)
         for c in range(self.config.num_cells):
-            cell_act = action[offset : offset + 2]
-            offset += 2
+            cell_act = action[offset : offset + self.actions_per_cell]
+            offset += self.actions_per_cell
             
-            # Tx Power: +/- 1.0 dBm step (differential)
-            delta_p = cell_act[0] * 1.0 
+            # 1. TxPower: Differential +/- 1.0 dBm (mapped from [0,1])
+            delta_p = (cell_act[0] * 2.0 - 1.0) * 1.0
             self.current_params['cell'][c]['tx_power'] = np.clip(
                 self.current_params['cell'][c]['tx_power'] + delta_p, 10.0, 46.0
             )
-            
-            # Scheduler Weight: +/- 0.1 step (differential)
-            delta_w = cell_act[1] * 0.1
+
+            # 2. Scheduler Weight: Differential +/- 0.1 (mapped from [0,1])
+            delta_w = (cell_act[1] * 2.0 - 1.0) * 0.1
             self.current_params['cell'][c]['scheduler_weight'] = np.clip(
                 self.current_params['cell'][c]['scheduler_weight'] + delta_w, 0.0, 5.0
             )
 
-            # Hysteresis: Fixed at 3.0 dB (Handover sensitivity)
-            self.current_params['cell'][c]['hysteresis'] = 3.0
+            # 3. Hysteresis: Absolute 0.0–10.0 dB (mobility sensitivity)
+            self.current_params['cell'][c]['hysteresis'] = cell_act[2] * 10.0
 
-            # Send ALL params to ns-3 (fixed ones use defaults from current_params)
+            # 4. MAC Delay: Absolute 0–4 TTIs (latency vs scheduling quality)
+            self.current_params['cell'][c]['mac_delay'] = round(cell_act[3] * 4.0)
+
+            # 5. Max HARQ: Absolute 1–8 retransmissions (reliability vs latency)
+            self.current_params['cell'][c]['max_harq'] = 1 + round(cell_act[4] * 7.0)
+
             rc_actions['cell'].append({
                 'cell_id': c,
                 'tx_power_dbm': float(self.current_params['cell'][c]['tx_power']),
-                'scheduler_type': int(self.current_params['cell'][c]['scheduler_type']),
-                'max_harq_tx': int(round(self.current_params['cell'][c]['max_harq'])),
-                'hysteresis_db': float(self.current_params['cell'][c]['hysteresis']),
-                'mac_ch_delay': int(round(self.current_params['cell'][c]['mac_delay'])),
-                'noise_figure_db': float(self.current_params['cell'][c]['noise_figure']),
                 'scheduler_weight': float(self.current_params['cell'][c]['scheduler_weight']),
-            })
-
-        # 2. UE Actions
-        # Apply to PHYSICAL UEs using sorted_ue_indices map
-        # Action index i corresponds to "i-th most critical UE"
-        
-        # Ensure we don't go out of bounds if sorted_ue_indices isn't populated (e.g. init)
-        if not hasattr(self, 'sorted_ue_indices') or len(self.sorted_ue_indices) != self.config.num_ues:
-             self.sorted_ue_indices = list(range(self.config.num_ues))
-        
-        for i in range(self.config.num_ues):
-            if offset >= len(action): break
-            
-            ue_act = action[offset] # Scalar
-            offset += 1
-            
-            physical_ue_id = self.sorted_ue_indices[i]
-            
-            # Priority Weight: +/- 0.2
-            delta_prio = ue_act * 0.2
-            self.current_params['ue'][physical_ue_id]['priority_weight'] = np.clip(
-                self.current_params['ue'][physical_ue_id]['priority_weight'] + delta_prio, 0.0, 10.0
-            )
-            
-            rc_actions['ue'].append({
-                'ue_id': physical_ue_id,
-                'priority_weight': float(self.current_params['ue'][physical_ue_id]['priority_weight'])
+                'hysteresis_db': float(self.current_params['cell'][c]['hysteresis']),
+                'mac_ch_delay': int(self.current_params['cell'][c]['mac_delay']),
+                'max_harq_tx': int(self.current_params['cell'][c]['max_harq']),
+                'noise_figure_db': 5.0,  # Fixed (environment parameter)
             })
             
         return rc_actions

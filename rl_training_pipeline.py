@@ -274,15 +274,12 @@ class PPOTrainer:
                 else:
                     avg_tput, avg_delay, avg_loss = 0.0, 0.0, 0.0
                 
-                # Format detailed action summary for display
-                # Per cell: [TxPower, SchedulerWeight, Hysteresis]
-                num_cells = (len(action_denorm) - self.env.config.num_ues) // 3
-                if num_cells > 0:
-                    c0_actions = action_denorm[:3]
-                    ue_priorities = action_denorm[num_cells*3:]
-                    avg_ue_prio = np.mean(ue_priorities) if len(ue_priorities) > 0 else 0
-                    
-                    # print(f"\n[Step {self.total_steps}] 🤖 RIC Decision (Cell 0): Power={c0_actions[0]:.1f}dBm | Sched={int(c0_actions[1])} | Avg UE Prio={avg_ue_prio:.2f}")
+                # Format cell-centric action summary
+                actions_per_cell = 5
+                num_cells_log = len(action_denorm) // actions_per_cell
+                if num_cells_log > 0:
+                    c0 = action_denorm[:actions_per_cell]
+                    # print(f"\n[Step {self.total_steps}] 🤖 Cell 0: TxΔ={c0[0]:.2f} | SchedΔ={c0[1]:.2f} | Hyst={c0[2]*10:.1f}dB | Delay={round(c0[3]*4)} | HARQ={1+round(c0[4]*7)}")
                 
                 # print(f"[{self.total_steps}] Reward={reward:.3f} | Tput={avg_tput * self.env.config.num_ues:.2f} Mbps | Delay={avg_delay:.0f}ms | Loss={avg_loss*100:.1f}%", flush=True)
 
@@ -816,6 +813,7 @@ class PPOTrainer:
         update = 0
         current_stats = None
         reward_history = [0.0] # For trend calculation
+        self.consistent_level_2_counter = 0 # Track mastery for early stopping
         
         # Helper to generate the full layout
         def make_layout():
@@ -867,6 +865,19 @@ class PPOTrainer:
                 
                 # Force refresh
                 live.update(make_layout())
+
+                # --- NEW: Mastery-based Early Stopping ---
+                if live_env_metrics:
+                    current_level_avg = np.mean([m.get('level', 0) for m in live_env_metrics.values()])
+                    if current_level_avg >= 1.9: # Consistently at high quality/reliability
+                        self.consistent_level_2_counter += 1
+                    else:
+                        self.consistent_level_2_counter = 0
+                    
+                    if self.consistent_level_2_counter >= 50:
+                        print(f"\n[Mastery Detected] Level 2 maintained for 50 updates. Early stopping stage.")
+                        break
+                # -----------------------------------------
                 
                 # Periodic checkpointing
                 if self.checkpoint_interval > 0 and (update + 1) % self.checkpoint_interval == 0:

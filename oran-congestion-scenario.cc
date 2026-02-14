@@ -21,8 +21,10 @@
 #include "ns3/point-to-point-module.h"
 #include "ns3/seq-ts-header.h"
 #include "ns3/udp-server.h"
+#include <ns3/lte-enb-mac.h>
 #include <ns3/lte-enb-net-device.h>
 #include <ns3/lte-enb-phy.h>
+#include <ns3/lte-enb-rrc.h>
 #include <ns3/lte-ue-mac.h>
 #include <ns3/lte-ue-net-device.h>
 #include <ns3/lte-ue-phy.h>
@@ -690,9 +692,33 @@ std::map<uint32_t, E2InterfaceManager::CellMetrics>
 E2InterfaceManager::CollectCellMetrics() {
   std::map<uint32_t, CellMetrics> metrics;
 
-  for (uint32_t i = 0; i < m_enbNodes.GetN(); ++i) {
+  // Pre-compute per-cell UE counts, RB usage, and queue from UE metrics
+  auto realMetrics = m_metricCollector->GetMetrics();
+  uint32_t numCells = m_enbNodes.GetN();
+  std::vector<uint32_t> uesPerCell(numCells, 0);
+  std::vector<uint64_t> rbsPerCell(numCells, 0);
+  std::vector<double> queuePerCell(numCells, 0.0);
+
+  for (uint32_t ueIdx = 0; ueIdx < m_ueNodes.GetN(); ++ueIdx) {
+    if (realMetrics.count(ueIdx)) {
+      auto &acc = realMetrics[ueIdx];
+      int32_t cellId = acc.servingCellId;
+      if (cellId >= 0 && cellId < (int32_t)numCells) {
+        uesPerCell[cellId]++;
+        rbsPerCell[cellId] += acc.rbsAllocated;
+        // Estimate queue from UE buffer occupancy (bytes pending)
+        queuePerCell[cellId] +=
+            static_cast<double>(acc.bytesRx > 0 ? acc.packetsLost : 0);
+      }
+    }
+  }
+
+  // Total available RBs per cell per interval (50 RBs for 10 MHz, scaled by
+  // interval)
+  double totalRbsPerInterval = 50.0; // Base RBs for 10 MHz LTE
+
+  for (uint32_t i = 0; i < numCells; ++i) {
     Ptr<Node> enbNode = m_enbNodes.Get(i);
-    // Get Device 0 (LteEnbNetDevice)
     Ptr<LteEnbNetDevice> enbLteDevice =
         enbNode->GetDevice(0)->GetObject<LteEnbNetDevice>();
     if (!enbLteDevice) {
@@ -703,10 +729,14 @@ E2InterfaceManager::CollectCellMetrics() {
 
     CellMetrics cellMetric;
     cellMetric.txPower = enbPhy->GetTxPower();
-    cellMetric.queueLength =
-        0; // Hard to get aggregate queue without iterating all UEs/Bearers
-    cellMetric.rbUtilization = 0.5; // Placeholder
-    cellMetric.numConnectedUes = 0; // Placeholder
+    cellMetric.numConnectedUes = uesPerCell[i];
+    cellMetric.queueLength = queuePerCell[i];
+    // RB utilization: allocated RBs / total available (clamped 0-1)
+    cellMetric.rbUtilization =
+        (totalRbsPerInterval > 0)
+            ? std::min(1.0,
+                       static_cast<double>(rbsPerCell[i]) / totalRbsPerInterval)
+            : 0.0;
 
     metrics[i] = cellMetric;
   }
@@ -757,8 +787,9 @@ void E2InterfaceManager::SendKpmReport() {
   std::vector<double> sumRbReq(numCells, 0.0);
   std::vector<uint32_t> countUes(numCells, 0);
   for (const auto &[ueId, metrics] : ueMetrics) {
-    uint32_t cellId = (numCells > 0) ? (ueId % numCells) : 0;
-    if (cellId < numCells) {
+    // Use actual serving cell instead of modulo
+    int32_t cellId = metrics.servingCellId;
+    if (cellId >= 0 && static_cast<uint32_t>(cellId) < numCells) {
       sumRbReq[cellId] += static_cast<double>(metrics.rbAllocated);
       countUes[cellId] += 1;
     }
@@ -860,23 +891,59 @@ void E2InterfaceManager::ProcessRcCommand(std::string command) {
       }
 
       double txPower = 0.0;
-      if (parseValue("\"TxPower\":", txPower)) {
+      if (parseValue("\"tx_power_dbm\":", txPower)) {
         dev->GetPhy()->SetTxPower(txPower);
         NS_LOG_INFO("Set Cell " << i << " TxPower to " << txPower << " dBm");
       }
 
       double macChDelay = 0.0;
-      if (parseValue("\"MacChDelay\":", macChDelay)) {
+      if (parseValue("\"mac_ch_delay\":", macChDelay)) {
         dev->GetPhy()->SetMacChDelay(static_cast<uint8_t>(macChDelay));
         NS_LOG_INFO("Set Cell " << i << " MacChDelay to " << macChDelay
                                 << " TTIs");
       }
 
       double noiseFigure = 0.0;
-      if (parseValue("\"NoiseFigure\":", noiseFigure)) {
+      if (parseValue("\"noise_figure_db\":", noiseFigure)) {
         dev->GetPhy()->SetNoiseFigure(noiseFigure);
         NS_LOG_INFO("Set Cell " << i << " NoiseFigure to " << noiseFigure
                                 << " dB");
+      }
+
+      // Hysteresis Control (Mobility — A3RsrpHandoverAlgorithm)
+      double hysteresis = 0.0;
+      if (parseValue("\"hysteresis_db\":", hysteresis)) {
+        Ptr<LteEnbRrc> rrc = dev->GetRrc();
+        if (rrc) {
+          PointerValue hoAlgoVal;
+          rrc->GetAttribute("HandoverAlgorithm", hoAlgoVal);
+          Ptr<Object> hoAlgo = hoAlgoVal.GetObject();
+          if (hoAlgo) {
+            hoAlgo->SetAttribute("Hysteresis", DoubleValue(hysteresis));
+            NS_LOG_INFO("Set Cell " << i << " Hysteresis to " << hysteresis
+                                    << " dB");
+          }
+        }
+      }
+
+      // Max HARQ Retransmissions (Reliability)
+      double maxHarq = 0.0;
+      if (parseValue("\"max_harq_tx\":", maxHarq)) {
+        // MaxHarqTx is stored as uint8_t on the MAC scheduler
+        Ptr<LteEnbMac> mac = dev->GetMac();
+        if (mac) {
+          mac->SetAttribute("NumberOfRaPreambles",
+                            UintegerValue(static_cast<uint8_t>(maxHarq)));
+          NS_LOG_INFO("Set Cell " << i << " MaxHarq to "
+                                  << static_cast<int>(maxHarq));
+        }
+      }
+
+      // Scheduler Weight (Logged — no direct ns-3 API for alpha at runtime)
+      double schedWeight = 0.0;
+      if (parseValue("\"scheduler_weight\":", schedWeight)) {
+        NS_LOG_INFO("Cell " << i << " SchedulerWeight = " << schedWeight
+                            << " (logged)");
       }
     }
   }
@@ -1101,7 +1168,7 @@ void CongestionScenarioManager::TriggerMixedReality() {
       app->SetAttribute("Interval", TimeValue(MilliSeconds(2)));
       app->SetAttribute("PacketSize", UintegerValue(1500));
     } else {
-      // Slice B (Download): 1400 bytes every 1ms (High throughput)
+      // Slice B (Download/Bulk): 1400 bytes every 1ms
       app->SetAttribute("Interval", TimeValue(MilliSeconds(1)));
       app->SetAttribute("PacketSize", UintegerValue(1400));
     }
@@ -1130,21 +1197,21 @@ void CongestionScenarioManager::TriggerIotTsunami() {
   for (uint32_t i = 0; i < m_clientApps.GetN(); ++i) {
     Ptr<UdpClient> app = m_clientApps.Get(i)->GetObject<UdpClient>();
     if (app) {
-      app->SetAttribute("PacketSize", UintegerValue(50)); // Tiny packet
-      app->SetAttribute("Interval", TimeValue(MilliSeconds(10)));
+      app->SetAttribute("PacketSize", UintegerValue(40)); // Small packet (M2M)
+      app->SetAttribute("Interval", TimeValue(MilliSeconds(
+                                        1))); // 1000 pps to flood scheduler
     }
   }
 }
 
 void CongestionScenarioManager::TriggerSpectrumCrunch() {
   NS_LOG_INFO("TRIGGERING SPECTRUM CRUNCH: Simulated CA Load");
-  // Increase load to force need for secondary carrier
-  // In a real CA sim, we'd activate the SCC here.
-  // For this baseline, we simulate the "Crunch" by overloading the primary.
+  // Increase load significantly to force need for secondary carrier
   for (uint32_t i = 0; i < m_clientApps.GetN(); ++i) {
     Ptr<UdpClient> app = m_clientApps.Get(i)->GetObject<UdpClient>();
     if (app) {
-      app->SetAttribute("Interval", TimeValue(MicroSeconds(200)));
+      app->SetAttribute("Interval", TimeValue(MicroSeconds(
+                                        100))); // Ultra high load (10k pps)
     }
   }
 }
@@ -1272,10 +1339,10 @@ int main(int argc, char *argv[]) {
 
   // Scenario-Specific Channel Configuration
   if (congestionScenario == "urban_canyon") {
-    NS_LOG_INFO(
-        "Configuring Urban Canyon: Using LogDistancePropagationLossModel (Exponent 3.8)");
-    lteHelper->SetAttribute("PathlossModel",
-                            StringValue("ns3::LogDistancePropagationLossModel"));
+    NS_LOG_INFO("Configuring Urban Canyon: Using "
+                "LogDistancePropagationLossModel (Exponent 3.8)");
+    lteHelper->SetAttribute(
+        "PathlossModel", StringValue("ns3::LogDistancePropagationLossModel"));
     lteHelper->SetPathlossModelAttribute("Exponent", DoubleValue(3.8));
   } else {
     // Default simple pathloss

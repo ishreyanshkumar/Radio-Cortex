@@ -161,28 +161,28 @@ run_stage() {
 declare -A STAGES
 
 # Stage 1: Foundation - Flash Crowd Mastery
-STAGES[1]="--scenario flash_crowd --total-timesteps 168000"
+STAGES[1]="--scenario flash_crowd --total-timesteps 84000"
 
 # Stage 2: Green RAN - Sleepy Campus
-STAGES[2]="--scenario flash_crowd:0.2,sleepy_campus:0.8 --total-timesteps 420000"
+STAGES[2]="--scenario flash_crowd:0.2,sleepy_campus:0.8 --total-timesteps 210000"
 
 # Stage 3: PHY Robustness - Urban Canyon
-STAGES[3]="--scenario flash_crowd:0.15,sleepy_campus:0.15,urban_canyon:0.7 --total-timesteps 504000"
+STAGES[3]="--scenario flash_crowd:0.15,sleepy_campus:0.15,urban_canyon:0.7 --total-timesteps 252000"
 
 # Stage 4: Mobility - Mobility Storm
-STAGES[4]="--scenario flash_crowd:0.1,sleepy_campus:0.1,urban_canyon:0.1,mobility_storm:0.7 --total-timesteps 756000"
+STAGES[4]="--scenario flash_crowd:0.1,sleepy_campus:0.1,urban_canyon:0.1,mobility_storm:0.7 --total-timesteps 378000"
 
 # Stage 5: Congestion - Traffic Burst
-STAGES[5]="--scenario flash_crowd:0.08,sleepy_campus:0.08,urban_canyon:0.08,mobility_storm:0.08,traffic_burst:0.68 --total-timesteps 1008000"
+STAGES[5]="--scenario flash_crowd:0.08,sleepy_campus:0.08,urban_canyon:0.08,mobility_storm:0.08,traffic_burst:0.68 --total-timesteps 504000"
 
 # Stage 6: URLLC - Ambulance Priority
-STAGES[6]="--scenario flash_crowd:0.07,sleepy_campus:0.07,urban_canyon:0.07,mobility_storm:0.07,traffic_burst:0.07,ambulance:0.65 --total-timesteps 1008000"
+STAGES[6]="--scenario flash_crowd:0.07,sleepy_campus:0.07,urban_canyon:0.07,mobility_storm:0.07,traffic_burst:0.07,ambulance:0.65 --total-timesteps 504000"
 
 # Stage 7: Capacity - Spectrum Crunch
-STAGES[7]="--scenario flash_crowd:0.06,sleepy_campus:0.06,urban_canyon:0.06,mobility_storm:0.06,traffic_burst:0.06,ambulance:0.06,spectrum_crunch:0.64 --total-timesteps 1260000"
+STAGES[7]="--scenario flash_crowd:0.06,sleepy_campus:0.06,urban_canyon:0.06,mobility_storm:0.06,traffic_burst:0.06,ambulance:0.06,spectrum_crunch:0.64 --total-timesteps 630000"
 
 # Stage 8: Consolidation - Multi-Mix Generalization
-STAGES[8]="--scenario flash_crowd:0.12,sleepy_campus:0.12,urban_canyon:0.12,mobility_storm:0.12,traffic_burst:0.12,ambulance:0.12,spectrum_crunch:0.12 --total-timesteps 2100000"
+STAGES[8]="--scenario flash_crowd:0.12,sleepy_campus:0.12,urban_canyon:0.12,mobility_storm:0.12,traffic_burst:0.12,ambulance:0.12,spectrum_crunch:0.12 --total-timesteps 1050000"
 
 echo ""
 echo "╔══════════════════════════════════════════════════════════════╗"
