@@ -911,7 +911,95 @@ class PPOTrainer:
                     self._rotate_checkpoints()
         
         print("\n✓ Training complete")
+        self._plot_convergence()
     
+    def _plot_convergence(self):
+        """Auto-generate reward convergence graph from training_log.jsonl."""
+        try:
+            import matplotlib
+            matplotlib.use('Agg')
+            import matplotlib.pyplot as plt
+            import numpy as _np
+        except ImportError:
+            print("  ⚠️  matplotlib not installed, skipping convergence plot")
+            return
+
+        log_path = os.path.join(self.telemetry_dir, 'training_log.jsonl')
+        if not os.path.exists(log_path):
+            print("  ⚠️  No training_log.jsonl found, skipping convergence plot")
+            return
+
+        # Parse the log
+        updates, rewards, policy_losses, value_losses = [], [], [], []
+        with open(log_path) as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    entry = json.loads(line)
+                    updates.append(entry.get('update', 0))
+                    rewards.append(entry.get('reward', 0.0))
+                    policy_losses.append(entry.get('policy_loss', 0.0))
+                    value_losses.append(entry.get('value_loss', 0.0))
+                except (json.JSONDecodeError, KeyError):
+                    continue
+
+        if len(rewards) < 2:
+            print("  ⚠️  Not enough data points for convergence plot")
+            return
+
+        # Smoothing helper
+        def smooth(vals, window=5):
+            if len(vals) < window:
+                return vals
+            kernel = _np.ones(window) / window
+            return _np.convolve(vals, kernel, mode='valid').tolist()
+
+        model_name = self.hyperparams.get('model_type', 'unknown')
+        out_dir = 'train_results'
+        os.makedirs(out_dir, exist_ok=True)
+
+        fig, axes = plt.subplots(1, 3, figsize=(18, 5))
+        fig.suptitle(f'Training Convergence — {model_name.upper()}',
+                     fontsize=14, fontweight='bold')
+
+        # ── Reward ──
+        ax = axes[0]
+        ax.plot(updates, rewards, alpha=0.3, color='#4ECDC4', linewidth=0.8, label='Raw')
+        smoothed = smooth(rewards)
+        ax.plot(updates[:len(smoothed)], smoothed, color='#FF6B35', linewidth=2, label='Smoothed')
+        ax.axhline(y=0, color='gray', linestyle=':', alpha=0.5)
+        ax.set_xlabel('Update')
+        ax.set_ylabel('Avg Reward')
+        ax.set_title('Reward Convergence')
+        ax.legend(fontsize=8)
+        ax.grid(True, alpha=0.3)
+
+        # ── Policy Loss ──
+        ax = axes[1]
+        smoothed_pl = smooth(policy_losses)
+        ax.plot(updates[:len(smoothed_pl)], smoothed_pl, color='#45B7D1', linewidth=2)
+        ax.set_xlabel('Update')
+        ax.set_ylabel('Policy Loss')
+        ax.set_title('Policy Loss')
+        ax.grid(True, alpha=0.3)
+
+        # ── Value Loss ──
+        ax = axes[2]
+        smoothed_vl = smooth(value_losses)
+        ax.plot(updates[:len(smoothed_vl)], smoothed_vl, color='#DDA0DD', linewidth=2)
+        ax.set_xlabel('Update')
+        ax.set_ylabel('Value Loss')
+        ax.set_title('Value Loss')
+        ax.grid(True, alpha=0.3)
+
+        plt.tight_layout(rect=[0, 0, 1, 0.93])
+        save_path = os.path.join(out_dir, f'convergence_{model_name}.png')
+        plt.savefig(save_path, dpi=150, bbox_inches='tight')
+        plt.close()
+        print(f"📊 Convergence plot saved to {save_path}")
+
     def save(self, path: str):
         """Save trained model"""
         os.makedirs(os.path.dirname(path), exist_ok=True)
