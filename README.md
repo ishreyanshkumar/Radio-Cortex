@@ -1,6 +1,6 @@
 # Radio-Cortex: O-RAN RL Congestion Control
 
-Radio-Cortex is a closed-loop control system that uses Reinforcement Learning (RL) to optimize network parameters (Tx Power, Scheduler Weight, Hysteresis, MAC Delay, HARQ) in an O-RAN compliant ns-3 simulation. It features a real-time feedback loop where an RL agent (PPO) receives KPM (Key Performance Metrics) from ns-3 via Kafka and sends back RC (RAN Control) actions, with a live Rich TUI dashboard and per-step KPM verification logging.
+Radio-Cortex is a closed-loop control system that uses Reinforcement Learning (RL) to optimize network parameters (Tx Power, TimeToTrigger, Hysteresis, MAC Delay, CQI Timer) in an O-RAN compliant ns-3 simulation. It features a real-time feedback loop where an RL agent (PPO) receives KPM (Key Performance Metrics) from ns-3 via Kafka and sends back RC (RAN Control) actions, with a live Rich TUI dashboard and per-step KPM verification logging.
 
 ### 🏆 Key Innovations & Solved Challenges
 Radio-Cortex pushes the boundary of O-RAN intelligence by solving three fundamental problems in applying RL to wireless networks:
@@ -11,11 +11,11 @@ Radio-Cortex pushes the boundary of O-RAN intelligence by solving three fundamen
 
 2.  **Curriculum Reward Engine (Multi-Objective Safety)**:
     -   *Problem*: Network optimization is a zero-sum game (e.g., High Throughput vs. Low Energy). Naive RL agents often "reward hack" or receive persistently negative rewards, causing learning collapse.
-    -   *Solution*: We implemented a **3-Level Curriculum Reward Engine** with *Survival Bias*. **Level 0 (Bootstrap)**: Only Throughput reward + a constant `+1.0` bias (guarantees positive rewards). **Level 1 (Quality)**: Adds Delay and Queue penalties at >50% UE satisfaction. **Level 2 (Reliability)**: Adds Loss, Energy, and Load penalties at >80% satisfaction. This ensures stable, progressive learning.
+     -   *Solution*: We implemented a **3-Level Curriculum Reward Engine** with *Survival Bias* and **gated promotion** (minimum 100 steps per level + 200-step history window). **Level 0 (Bootstrap)**: Throughput + Queue + SE reward + a constant `+1.0` bias (guarantees positive rewards). **Level 1 (Quality)**: Adds Delay and Loss penalties at ≥60% UE satisfaction. **Level 2 (Reliability)**: Adds Energy and Load penalties at ≥85% satisfaction. This ensures stable, progressive learning.
 
 3.  **Cell-Centric Action Space (15-Dim Differential + Absolute Control)**:
     -   *Problem*: RL agents often output erratic "bang-bang" control actions and large per-UE action spaces cause slow convergence.
-    -   *Solution*: We compressed the action space to **15 dimensions** (5 per cell: TxPower, SchedulerWeight, Hysteresis, MAC Delay, Max HARQ) and use a mix of **Differential** (TxPower, SchedulerWeight) and **Absolute** (Hysteresis, Delay, HARQ) control. This is scale-invariant — the action space stays fixed regardless of UE count.
+    -   *Solution*: We compressed the action space to **15 dimensions** (5 per cell: TxPower, TimeToTrigger, Hysteresis, MAC Delay, CQI Timer) and use a mix of **Differential** (TxPower, TimeToTrigger) and **Absolute** (Hysteresis, Delay, CqiTimer) control. Each action maps to a real ns-3 attribute (e.g., `A3Rsrp::TimeToTrigger`, `FfMacScheduler::CqiTimerThreshold`). This is scale-invariant — the action space stays fixed regardless of UE count.
 
 ## 🚀 End-to-End Installation Guide
 
@@ -333,21 +333,21 @@ Radio-Cortex uses a **3-Level Curriculum Reward Engine** that progressively intr
 
 | Level | Trigger | Active Components | Reward Range |
 |:---|:---|:---|:---|
-| **0 (Bootstrap)** | Start | Throughput + SE + Bias | **+1.1 to +2.0** (always positive) |
-| **1 (Quality)** | >50% UE satisfied | + Delay + Queue penalties | ~+0.5 to +1.5 |
-| **2 (Reliability)** | >80% UE satisfied | + Loss + Energy + Load penalties | ~-0.5 to +1.0 |
+| **0 (Bootstrap)** | Start | Throughput + SE + Queue + Bias | **+0.5 to +2.0** (positive via bias) |
+| **1 (Quality)** | ≥60% UE satisfied + 100 steps | + Delay + **Loss** penalties | ~0.0 to +1.5 |
+| **2 (Reliability)** | ≥85% UE satisfied + 100 steps | + Energy + Load penalties | ~-0.5 to +1.0 |
 
 #### 📐 1. UE-Level Utility (User Satisfaction)
 Computed per-UE and averaged across the network to ensure fairness.
 
 *   **Throughput ($\alpha$-fairness):** $r_{tput} = W_{tput} \cdot \log(1 + T/T_{max})$
 *   **Delay (Two-Tier, Level ≥ 1):** Linear penalty + Quadratic SLA Barrier (both gated by curriculum)
-*   **Packet Loss (IQX, Level ≥ 2):** $r_{loss} = -W_{loss} \cdot (\exp(\beta \cdot L) - 1)$
+*   **Packet Loss (IQX, Level ≥ 1):** $r_{loss} = -W_{loss} \cdot (\exp(\beta \cdot L) - 1)$
 *   **Spectral Efficiency:** $r_{se} = W_{se} \cdot \log_2(1 + SINR)$
 
 #### 🏗️ 2. Cell-Level Utility (Network Efficiency)
 
-*   **Queue Congestion (Level ≥ 1):** Early warning signal for delay spikes.
+*   **Queue Congestion (Level ≥ 0):** Early warning signal from the start.
 *   **Energy Efficiency (Level ≥ 2):** Penalizes excessive RB usage.
 *   **Load Balancing (Level ≥ 2):** Penalizes high variance in cell loads.
 
@@ -393,7 +393,7 @@ converts ns-3 simulation into a standard OpenAI Gym interface (observation, acti
     *   `_compute_reward(e2_msg)`: Delegates to `RewardEngine`.
     *   **`RewardEngine`**: 3-Level Curriculum reward engine with Survival Bias. Combines 8 components (Throughput, Delay, Loss, SE, Energy, Load, Queue, Smoothing) gated by curriculum levels.
     *   **State Space**: `num_cells × 12` Enriched Cell Tokens (5 native cell metrics + 7 aggregated UE stats including avg/max delay, loss, Jain's fairness). Scale-invariant — works for any number of UEs.
-    *   **Action Space**: `num_cells × 5` = 15 dimensions — TxPower (differential), SchedulerWeight (differential), Hysteresis (absolute), MAC Delay (absolute), Max HARQ (absolute). All [0,1]-normalized.
+    *   **Action Space**: `num_cells × 5` = 15 dimensions — TxPower (differential), TimeToTrigger (differential, A3 handover TTT), Hysteresis (absolute), MAC Delay (absolute), CQI Timer (absolute, CqiTimerThreshold). All [0,1]-normalized.
 *   **`NS3Interface`**: Handles low-level communication.
     *   `start_simulation()`: Spawns the `./ns3 run ...` subprocess.
     *   `send_rc_control(actions)`: Serializes actions to JSON and sends via Kafka `e2_rc_control` topic.
