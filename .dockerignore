@@ -1,0 +1,49 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+env/
+
+# Logs and temporary files
+*.log
+*.jsonl
+ns3.log
+training.log
+kafka.log
+zookeeper.log
+action_logs.jsonl
+
+# ns-3 and Kafka dependencies (Large folders/archives)
+ns-3-allinone/
+ns-3-allinone-*/
+kafka_*/
+*.tgz
+*.tar.gz
+
+# Simulation artifacts and model checkpoints
+simulation/
+models/
+results/
+logs/
+telemetry/
+
+# IDE files
+.vscode/
+.idea/
+
+# OS specific files
+.DS_Store
+Thumbs.db
+
+# Build artifacts
+java-17/
+scratch/
+build/
+*.pdf
+
+# Git
+.git/
+.gitignore
+.gitattributes

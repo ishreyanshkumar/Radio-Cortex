@@ -607,7 +607,7 @@ class NS3Interface:
             rc_topic = f'e2_rc_control{self.config.topic_suffix}'
             self.kafka_consumer = KafkaConsumer(
                 kpm_topic,
-                bootstrap_servers=['localhost:9092'],
+                bootstrap_servers=[os.getenv('KAFKA_BOOTSTRAP', 'localhost:9092')],
                 auto_offset_reset='earliest',  # Read from beginning to catch startup msgs
                 enable_auto_commit=False,
                 value_deserializer=lambda x: json.loads(x.decode('utf-8')),
@@ -632,7 +632,7 @@ class NS3Interface:
             self.last_kpm_ts = None
             
             self.kafka_producer = KafkaProducer(
-                bootstrap_servers=['localhost:9092'],
+                bootstrap_servers=[os.getenv('KAFKA_BOOTSTRAP', 'localhost:9092')],
                 linger_ms=5,        # 🚀 OPTIMIZATION: Wait 5ms to batch syscalls
                 batch_size=32768,   # 🚀 OPTIMIZATION: Allow 32KB batches
                 value_serializer=lambda x: json.dumps(x).encode('utf-8')

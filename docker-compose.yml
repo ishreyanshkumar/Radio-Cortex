@@ -1,33 +1,44 @@
-version: '3.7'
 services:
-  redpanda:
-    image: docker.redpanda.com/redpandadata/redpanda:latest
-    container_name: redpanda
-    command:
-      - redpanda
-      - start
-      - --kafka-addr internal://0.0.0.0:9092,external://0.0.0.0:19092
-      # Address the broker advertises to clients that connect to the Kafka API.
-      # Use the internal addresses to connect to the Redpanda brokers'
-      # from inside the same Docker network.
-      # Use the external addresses to connect to the Redpanda brokers'
-      # from outside the Docker network.
-      - --advertise-kafka-addr internal://redpanda:9092,external://localhost:9092
-      - --pandaproxy-addr internal://0.0.0.0:8082,external://0.0.0.0:18082
-      # Pocket-sized Redpanda
-      - --smp 1 
-      - --memory 1G
-      - --reserve-memory 0M
-      - --overprovisioned
-      - --node-id 0
-      - --check=false
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.5.0
+    hostname: zookeeper
+    container_name: zookeeper
     ports:
-      - 9092:9092
-      - 19092:19092
-      - 18081:18081
-      - 18082:18082
-    volumes:
-      - redpanda-0:/var/lib/redpanda/data
+      - "2181:2181"
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
 
-volumes:
-  redpanda-0:
+  kafka:
+    image: confluentinc/cp-kafka:7.5.0
+    hostname: kafka
+    container_name: kafka
+    depends_on:
+      - zookeeper
+    ports:
+      - "9092:9092"
+      - "29092:29092"
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: 'zookeeper:2181'
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,PLAINTEXT_HOST://localhost:29092
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+
+  radio-cortex:
+    build: .
+    container_name: radio-cortex
+    depends_on:
+      kafka:
+        condition: service_started
+    volumes:
+      - ./models:/app/models
+      - ./logs:/app/logs
+      - ./results:/app/results
+    environment:
+      - KAFKA_BOOTSTRAP=kafka:9092
+      - PYTHONUNBUFFERED=1
+    # Interactive mode for potential debugging or TUI
+    stdin_open: true
+    tty: true
