@@ -21,7 +21,7 @@ class BDHPolicy(nn.Module):
     Cell-Centric BDH Policy.
 
     State:  (B, num_cells * 12)  — Enriched Cell Tokens
-    Action: (B, num_cells * 2)   — [TxPower, SchedulerWeight] per cell
+    Action: (B, num_cells * 5)   — [TxPower, SchedulerWeight, Hysteresis, MacDelay, MaxHarq] per cell
     """
 
     def __init__(self, state_dim: int, action_dim: int, bdh_config: Optional[object] = None, device: str = 'cpu', env_config: Optional[object] = None):

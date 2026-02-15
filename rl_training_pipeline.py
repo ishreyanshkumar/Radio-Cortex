@@ -175,8 +175,8 @@ class PPOTrainer:
         
         # Logging
         self.action_history = []
-        self.telemetry_dir = "logs"
-        Path(self.telemetry_dir).mkdir(exist_ok=True)
+        self.telemetry_dir = os.environ.get('RADIO_CORTEX_LOG_DIR', 'logs')
+        Path(self.telemetry_dir).mkdir(parents=True, exist_ok=True)
         self.log_file = os.path.join(self.telemetry_dir, "action_logs.jsonl")
         
         # Checkpointing
@@ -869,6 +869,14 @@ class PPOTrainer:
                     'entropy': metrics['entropy']
                 }
                 
+                # ── Persist per-update metrics to disk for convergence graphs ──
+                try:
+                    _log_path = os.path.join(self.telemetry_dir, 'training_log.jsonl')
+                    with open(_log_path, 'a') as _lf:
+                        _lf.write(json.dumps(current_stats) + '\n')
+                except Exception:
+                    pass
+
                 # Force refresh
                 live.update(make_layout())
 
