@@ -150,54 +150,69 @@ class RewardEngine:
         # ── Curriculum State ─────────────────────────────────────
         self.level = 0              # 0=Bootstrap, 1=Quality, 2=Reliability
         self.success_history = []   # Rolling window of success rate
-        self.HISTORY_LEN = 50       # Window size for level promotion/demotion
+        self.HISTORY_LEN = 200      # Window size (was 50 — too easy to promote)
+        self.MIN_STEPS_PER_LEVEL = 100  # Must spend ≥100 steps before promotion
+        self.steps_at_current_level = 0 # Counter for minimum-steps gate
         self.MIN_TPUT_SUCCESS = 2.0 # Mbps required to count as "satisfied"
-        self.DEMOTION_THRESHOLD = 0.2 # If <20% users satisfied, consider demotion
-        self.PROMOTION_THRESHOLD_L1 = 0.5 # 50% for Level 1
-        self.PROMOTION_THRESHOLD_L2 = 0.8 # 80% for Level 2
+        self.DEMOTION_THRESHOLD = 0.3 # If <30% users satisfied, consider demotion (was 0.2)
+        self.PROMOTION_THRESHOLD_L1 = 0.6 # 60% for Level 1 (was 0.5)
+        self.PROMOTION_THRESHOLD_L2 = 0.85 # 85% for Level 2 (was 0.8)
         self.current_scenario = None
 
     def _update_curriculum(self, current_success_rate: float, jains_index: float, rb_util: float):
         """
-        Smart Curriculum: Promotes based on Fairness (allocating resources well) 
-        rather than just raw throughput (which might be physically impossible).
+        Smart Curriculum with minimum-steps gating.
+        Must spend MIN_STEPS_PER_LEVEL at each level AND fill enough history
+        before promotion is considered. Fairness shortcut helps at L0 but 
+        still requires minimum history.
         """
         self.success_history.append(current_success_rate)
         if len(self.success_history) > self.HISTORY_LEN:
             self.success_history.pop(0)
+        self.steps_at_current_level += 1
         
         avg_success = sum(self.success_history) / len(self.success_history)
+        has_enough_history = len(self.success_history) >= min(self.HISTORY_LEN // 2, 100)
+        has_min_steps = self.steps_at_current_level >= self.MIN_STEPS_PER_LEVEL
 
-        # === NEW PROMOTION LOGIC ===
+        # Gate: Must have both minimum steps AND enough history before any promotion
+        if not (has_enough_history and has_min_steps):
+            return
+
+        # === PROMOTION LOGIC ===
         # Level 0 -> 1 (Bootstrap -> Quality)
         # Promote if:
-        # 1. 50% users are happy (Original condition)
+        # 1. 60% users are happy
         # OR
-        # 2. We are being fair (Jain's > 0.9) AND using the spectrum (RB Util > 0.8)
+        # 2. Fairness is excellent (Jain's > 0.9) AND spectrum is utilized (RB Util > 0.8)
+        #    (This helps when physical throughput is limited but allocation is fair)
         
         can_promote_l1 = (avg_success > self.PROMOTION_THRESHOLD_L1) or \
                          (jains_index > 0.9 and rb_util > 0.8)
 
         if self.level == 0 and can_promote_l1:
             self.level = 1
-            print(f"\n🎉 PROMOTED TO LEVEL 1 (Quality): Fairness/Tput Gate Passed. Jains={jains_index:.2f}, Util={rb_util:.2f}")
-            self.success_history = [] # Reset buffer to prove yourself at next level
+            self.steps_at_current_level = 0
+            print(f"\n🎉 PROMOTED TO LEVEL 1 (Quality): AvgSuccess={avg_success:.2f}, Jains={jains_index:.2f}, Util={rb_util:.2f}")
+            self.success_history = self.success_history[-20:]  # Keep tail (don't fully reset)
             
         elif self.level == 1:
             # Level 1 -> 2 (Quality -> Reliability)
             if avg_success > self.PROMOTION_THRESHOLD_L2:
                 self.level = 2
-                print(f"\n🚀 PROMOTED TO LEVEL 2 (Reliability): Excellent QoS achieved.")
-                self.success_history = []
+                self.steps_at_current_level = 0
+                print(f"\n🚀 PROMOTED TO LEVEL 2 (Reliability): AvgSuccess={avg_success:.2f}")
+                self.success_history = self.success_history[-20:]
             elif avg_success < self.DEMOTION_THRESHOLD and jains_index < 0.7:
-                # Only demote if fairness ALSO is poor
                 self.level = 0
-                print(f"\n📉 DEMOTED TO LEVEL 0: Network became unfair.")
-                self.success_history = []
+                self.steps_at_current_level = 0
+                print(f"\n📉 DEMOTED TO LEVEL 0: AvgSuccess={avg_success:.2f}, Jains={jains_index:.2f}")
+                self.success_history = self.success_history[-20:]
         elif self.level == 2 and avg_success < self.DEMOTION_THRESHOLD:
             self.level = 1
-            print(f"\n📉 DEMOTED TO LEVEL 1 (Quality): Performance drop detected")
-            self.success_history = []
+            self.steps_at_current_level = 0
+            print(f"\n📉 DEMOTED TO LEVEL 1: AvgSuccess={avg_success:.2f}")
+            self.success_history = self.success_history[-20:]
 
     def compute(self,
                 e2_msg: E2Message,
@@ -241,10 +256,10 @@ class RewardEngine:
 
         # Scenario-specific success threshold adjustments
         target_tput = self.MIN_TPUT_SUCCESS
-        if self.current_scenario in ['iot_tsunami', 'flash_crowd']: 
-            target_tput = 0.5 # Lower expectation for extreme congestion case
-        elif self.current_scenario in ['spectrum_crunch', 'urban_canyon']:
-            target_tput = 1.0
+        if self.current_scenario in ['iot_tsunami']: 
+            target_tput = 0.5 # Very low bar for massive device scenario
+        elif self.current_scenario in ['flash_crowd', 'spectrum_crunch', 'urban_canyon']:
+            target_tput = 1.0 # Moderate bar (was 0.5 for flash_crowd — too easy)
 
         satisfied_ues = np.sum(tputs > target_tput)
         success_rate = satisfied_ues / max(len(tputs), 1)
@@ -258,9 +273,9 @@ class RewardEngine:
         soft_factor = min(avg_success / 0.9, 1.0) 
 
         w_delay_eff = (self.W_DELAY_LIN * soft_factor) if self.level >= 1 else 0.0
-        w_queue_eff = (self.W_QUEUE * soft_factor)     if self.level >= 1 else 0.0
+        w_queue_eff = (self.W_QUEUE * soft_factor)     if self.level >= 0 else 0.0  # Queue from start
 
-        w_loss_eff   = (self.W_LOSS * soft_factor)      if self.level >= 2 else 0.0
+        w_loss_eff   = (self.W_LOSS * soft_factor)      if self.level >= 1 else 0.0  # Loss from Level 1 (was 2)
         w_energy_eff = (self.W_ENERGY * soft_factor)    if self.level >= 2 else 0.0
         w_load_eff   = (self.W_LOAD * soft_factor)      if self.level >= 2 else 0.0
         
@@ -845,11 +860,11 @@ class ORANns3Env(gym.Env):
         )
         
         # Cell-Only Action Space: 5 Actions per cell
-        # 1. TxPower (differential)
-        # 2. SchedulerWeight (differential)
-        # 3. Hysteresis (absolute: handover stickiness)
-        # 4. MacDelay (absolute: processing latency)
-        # 5. MaxHarq (absolute: retransmission limit)
+        # 1. TxPower (differential)  → SetTxPower(dBm)
+        # 2. TimeToTrigger (differential) → A3Rsrp HandoverAlgorithm TTT (ms)
+        # 3. Hysteresis (absolute)   → A3Rsrp Hysteresis (dB)
+        # 4. MacDelay (absolute)     → SetMacChDelay(TTIs)
+        # 5. CqiTimer (absolute)     → CqiTimerThreshold on MAC scheduler (ms)
         self.actions_per_cell = 5
         action_dim = self.config.num_cells * self.actions_per_cell
 
@@ -867,13 +882,12 @@ class ORANns3Env(gym.Env):
         # Differential Control State Tracking (Cell-only)
         self.current_params = {
             'cell': {c: {
-                'tx_power': 23.0,       # dBm
-                'scheduler_type': 0,    # Discrete
-                'max_harq': 4.0, 
-                'hysteresis': 2.0,      # dB
-                'mac_delay': 0.0,       # ms
-                'noise_figure': 5.0,    # dB
-                'scheduler_weight': 1.0 
+                'tx_power': 23.0,           # dBm
+                'time_to_trigger': 256.0,   # ms (A3 TTT default)
+                'cqi_timer': 1000.0,        # ms (CQI report validity)
+                'hysteresis': 2.0,          # dB
+                'mac_delay': 0.0,           # TTIs
+                'noise_figure': 5.0,        # dB
             } for c in range(self.config.num_cells)}
         }
         
@@ -888,13 +902,12 @@ class ORANns3Env(gym.Env):
         # Reset Differential Control State to Defaults (Cell-only)
         self.current_params = {
             'cell': {c: {
-                'tx_power': 23.0,       # dBm
-                'scheduler_type': 0,    # Discrete
-                'max_harq': 4.0, 
-                'hysteresis': 2.0,      # dB
-                'mac_delay': 0.0,       # ms
-                'noise_figure': 5.0,    # dB
-                'scheduler_weight': 1.0 
+                'tx_power': 23.0,           # dBm
+                'time_to_trigger': 256.0,   # ms (A3 TTT default)
+                'cqi_timer': 1000.0,        # ms (CQI report validity)
+                'hysteresis': 2.0,          # dB
+                'mac_delay': 0.0,           # TTIs
+                'noise_figure': 5.0,        # dB
             } for c in range(self.config.num_cells)}
         }
         
@@ -1170,10 +1183,12 @@ class ORANns3Env(gym.Env):
                 self.current_params['cell'][c]['tx_power'] + delta_p, 10.0, 46.0
             )
 
-            # 2. Scheduler Weight: Differential +/- 0.1 (mapped from [0,1])
-            delta_w = (cell_act[1] * 2.0 - 1.0) * 0.1
-            self.current_params['cell'][c]['scheduler_weight'] = np.clip(
-                self.current_params['cell'][c]['scheduler_weight'] + delta_w, 0.0, 5.0
+            # 2. TimeToTrigger: Differential +/- 50 ms (A3Rsrp handover delay)
+            #    Range 0-5120 ms. Controls how long a handover condition must
+            #    persist before triggering. Lower = faster handover, higher = more stable.
+            delta_ttt = (cell_act[1] * 2.0 - 1.0) * 50.0
+            self.current_params['cell'][c]['time_to_trigger'] = np.clip(
+                self.current_params['cell'][c]['time_to_trigger'] + delta_ttt, 0.0, 5120.0
             )
 
             # 3. Hysteresis: Absolute 0.0–10.0 dB (mobility sensitivity)
@@ -1182,16 +1197,18 @@ class ORANns3Env(gym.Env):
             # 4. MAC Delay: Absolute 0–4 TTIs (latency vs scheduling quality)
             self.current_params['cell'][c]['mac_delay'] = round(cell_act[3] * 4.0)
 
-            # 5. Max HARQ: Absolute 1–8 retransmissions (reliability vs latency)
-            self.current_params['cell'][c]['max_harq'] = 1 + round(cell_act[4] * 7.0)
+            # 5. CQI Timer: Absolute 100–2000 ms (CQI report validity window)
+            #    Controls how long a CQI measurement is considered valid.
+            #    Lower = more responsive but more overhead, higher = stable but stale.
+            self.current_params['cell'][c]['cqi_timer'] = 100 + round(cell_act[4] * 1900.0)
 
             rc_actions['cell'].append({
                 'cell_id': c,
                 'tx_power_dbm': float(self.current_params['cell'][c]['tx_power']),
-                'scheduler_weight': float(self.current_params['cell'][c]['scheduler_weight']),
+                'time_to_trigger_ms': float(self.current_params['cell'][c]['time_to_trigger']),
                 'hysteresis_db': float(self.current_params['cell'][c]['hysteresis']),
                 'mac_ch_delay': int(self.current_params['cell'][c]['mac_delay']),
-                'max_harq_tx': int(self.current_params['cell'][c]['max_harq']),
+                'cqi_timer_ms': int(self.current_params['cell'][c]['cqi_timer']),
                 'noise_figure_db': 5.0,  # Fixed (environment parameter)
             })
             
