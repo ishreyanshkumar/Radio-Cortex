@@ -95,7 +95,7 @@ def make_vec_env(
     use_subprocess: bool = True,
     seed: Optional[int] = None,
     vec_env_cls: Optional[Any] = None, # Added custom VecEnv class support
-) -> VecEnv:
+) -> "VecEnv":
     """
     Create a vectorized environment with parallel execution and normalization.
     

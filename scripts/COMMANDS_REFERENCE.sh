@@ -16,6 +16,7 @@
 
 # Fast training (Recommended)
 # python3 radio_cortex_complete.py --mode train --scenario all --n-envs 4 --total-timesteps 50000
+# python3 radio_cortex_complete.py --mode train --scenario flash_crowd --n-envs 4 --total-timesteps 50000
 
 # Training specific model
 # python3 radio_cortex_complete.py --mode train --model bdh --scenario flash_crowd

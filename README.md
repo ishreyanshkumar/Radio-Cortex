@@ -1,6 +1,6 @@
 # Radio-Cortex: O-RAN RL Congestion Control
 
-Radio-Cortex is a closed-loop control system that uses Reinforcement Learning (RL) to optimize network parameters (Tx Power, Scheduler Weight, Hysteresis) in an O-RAN compliant ns-3 simulation. It demonstrates a real-time feedback loop where an RL agent (PPO) receives KPM (Key Performance Metrics) from ns-3 via Kafka and sends back RC (RAN Control) actions.
+Radio-Cortex is a closed-loop control system that uses Reinforcement Learning (RL) to optimize network parameters (Tx Power, Scheduler Weight, Hysteresis, MAC Delay, HARQ) in an O-RAN compliant ns-3 simulation. It features a real-time feedback loop where an RL agent (PPO) receives KPM (Key Performance Metrics) from ns-3 via Kafka and sends back RC (RAN Control) actions, with a live Rich TUI dashboard and per-step KPM verification logging.
 
 ### 🏆 Key Innovations & Solved Challenges
 Radio-Cortex pushes the boundary of O-RAN intelligence by solving three fundamental problems in applying RL to wireless networks:
@@ -72,18 +72,16 @@ ns-3 requires specific libraries (like `librdkafka`) for the O-RAN interface to 
 # 1. Install librdkafka (system-level)
 sudo apt-get install librdkafka-dev
  
-# 2. Build ns-3
-cd ns-3-allinone/ns-3.46.1
- 
-./ns3 configure -d optimized --enable-examples --enable-tests
-./ns3 build
- 
-# 3. Link the Radio-Cortex scenario into ns-3 scratch
-cd scratch
+# 2. Link the Radio-Cortex scenario into ns-3 scratch (MUST be done before build)
+cd ns-3-allinone/ns-3.46.1/scratch
 rm -rf *  # CLEANUP: Remove default examples to avoid build conflicts
 ln -sf ../../../oran-congestion-scenario.cc .
 ln -sf ../../../CMakeLists.txt .  # Link CMakeLists to register the scenario
-cd ../../..
+cd ..
+
+# 3. Configure and Build ns-3
+./ns3 configure -d optimized --enable-examples --enable-tests
+./ns3 build
 ```
  
 ### 4. Running the Training
@@ -231,9 +229,6 @@ Train the O-RAN Intelligent Controller using PPO (Proximal Policy Optimization).
 
 # 8-stage "Lean Power Suite" curriculum (Optimized for Speed)
 bash scripts/train_curriculum.sh
-
-# Resume from Stage 5 (e.g., after a crash)
-bash scripts/train_curriculum.sh --start 5
 
 # Preview the plan without executing
 bash scripts/train_curriculum.sh --dry-run
@@ -525,7 +520,36 @@ Radio-Cortex features a high-fidelity convergence dashboard that replaces standa
     - **Value range**: `1.0` (Perfect), `0.0` (Guessing Mean), `< 0.0` (Still exploring/Worse than mean).
     - **Coloring**: `Green` (>0.8) indicates a "Converged" critic; `Red` (<0.4 or negative) is normal for the first ~50 updates.
 - **Entropy**: Measures the agent's confidence. Should gradually decrease as the agent becomes more specialized at handling specific congestion scenarios.
-- **Activity Heartbeat**: A pulsing `●` light showing real-time data influx from ns-3.
+- **Activity Heartbeat**: A pulsing `●` / `○` light showing real-time data influx from ns-3.
+- **Live Environment Metrics**: Per-environment throughput, delay, loss, SINR, queue, RB utilization, and power — updated at 10Hz.
+
+---
+
+### 📋 Logs & KPM Verification
+
+All debug and verification logs are stored in the `logs/` directory:
+
+| File Pattern | Description |
+|:---|:---|
+| `logs/ns3_out_X.log` | ns-3 stdout for environment X |
+| `logs/ns3_err_X.log` | ns-3 stderr for environment X |
+| `logs/kpm_verification_X.jsonl` | KPM verification audit trail for environment X |
+| `logs/action_logs.jsonl` | Per-step actions, rewards, and full metrics |
+
+**KPM Verification** logs every received KPM report with:
+- `is_real: true/false` — whether data came from ns-3 or a fallback
+- `sample_ues` — throughput, SINR, RSRP, delay, loss for first 3 UEs
+- `sample_cells` — RB utilization, queue, power, connected UEs
+- `reason` — error message when `is_real: false` (fallback)
+
+Use this to verify that all training data is authentic:
+```bash
+# Check if any fallback data was used during training
+grep '"is_real": false' logs/kpm_verification_*.jsonl | wc -l
+
+# View sample real KPM data
+head -3 logs/kpm_verification_0.jsonl | python3 -m json.tool
+```
 
 ---
 
@@ -575,36 +599,36 @@ print(f'Mean Reward: {np.mean([d[\"reward\"] for d in data]):.4f}')"
 ## 🔬 Advanced Workflows
 
 ### Scenario Curriculum (8-Stage "Lean Power Suite")
-The curriculum script trains on progressively harder scenarios. Each stage loads the previous checkpoint.
+The curriculum script trains on progressively harder scenarios. Each stage loads the previous checkpoint and mixes in maintenance tasks.
 
 ```bash
 # Run the full 8-stage curriculum
 bash scripts/train_curriculum.sh
 ```
 
-| Stage | Steps | Primary Scenario | Skill Learned |
-|:---:|:---:|:---|:---|
-| 1 | 60k | Flash Crowd | Basic load balancing |
-| 2 | 100k | Sleepy Campus | Energy efficiency |
-| 3 | 120k | Urban Canyon | Signal recovery |
-| 4 | 180k | Mobility Storm | Handover control |
-| 5 | 240k | Traffic Burst | Overload management |
-| 6 | 240k | Ambulance | QoS priority |
-| 7 | 300k | Spectrum Crunch | Spectral efficiency |
-| 8 | 500k | Power Suite Mix | Generalization |
+| Stage | Focus | Timesteps | Skill Description |
+|:---:|:---|:---:|:---|
+| 1 | Flash Crowd | 84k | Basic load balancing (Bootstrap) |
+| 2 | Sleepy Campus | 210k | Energy efficiency (Green RAN) |
+| 3 | Urban Canyon | 252k | Signal recovery & Robustness |
+| 4 | Mobility Storm | 378k | Handover Optimization |
+| 5 | Traffic Burst | 504k | Congestion Management |
+| 6 | Ambulance | 504k | QoS Priority & Slicing |
+| 7 | Spectrum Crunch | 630k | Spectral Efficiency |
+| 8 | Power Suite Mix | 1.05M | Generalization & Maintenance |
 
-**Total: ~7.2M timesteps** to full mastery across all key challenges.
+**Total: ~3.6M timesteps** to full mastery across all key challenges.
 
 ### Network Size Curriculum (Manual)
 ```bash
 # Stage 1: Small Network (5 UEs)
-python3 radio_cortex_complete.py --mode train --num-ues 5 --num-cells 2 --total-timesteps 10000 --model-path models/stage1.pt
+python3 radio_cortex_complete.py --mode train --num-ues 5 --num-cells 2 --total-timesteps 50000 --model-path models/stage1.pt
 
 # Stage 2: Medium Network (20 UEs)
-python3 radio_cortex_complete.py --mode train --num-ues 20 --num-cells 3 --total-timesteps 20000 --model-path models/stage2.pt
+python3 radio_cortex_complete.py --mode train --num-ues 20 --num-cells 3 --total-timesteps 100000 --model-path models/stage2.pt
 
 # Stage 3: Large Network (40 UEs)
-python3 radio_cortex_complete.py --mode train --num-ues 40 --num-cells 5 --total-timesteps 40000 --model-path models/stage3.pt
+python3 radio_cortex_complete.py --mode train --num-ues 40 --num-cells 5 --total-timesteps 200000 --model-path models/stage3.pt
 ```
 
 ### Batch Experiments (Bash Loop)

@@ -651,9 +651,18 @@ class PPOTrainer:
             for env_i, info in enumerate(infos):
                 e2 = info.get('e2_metrics')
                 if e2:
-                    # Calculate aggregates
-                    ue_kpms = list(e2.ue_metrics.values()) if e2.ue_metrics else []
-                    cell_kpms = list(e2.cell_metrics.values()) if e2.cell_metrics else []
+                    # Handle both E2Message objects and plain dicts (from SubprocVecEnv)
+                    if hasattr(e2, 'ue_metrics'):
+                        ue_kpms_raw = e2.ue_metrics
+                        cell_kpms_raw = e2.cell_metrics
+                    elif isinstance(e2, dict):
+                        ue_kpms_raw = e2.get('ue_metrics', {})
+                        cell_kpms_raw = e2.get('cell_metrics', {})
+                    else:
+                        continue
+                    
+                    ue_kpms = list(ue_kpms_raw.values()) if ue_kpms_raw else []
+                    cell_kpms = list(cell_kpms_raw.values()) if cell_kpms_raw else []
                     
                     tput = np.mean([m['throughput'] for m in ue_kpms]) if ue_kpms else 0.0
                     delay = np.mean([m['delay'] for m in ue_kpms]) if ue_kpms else 0.0
@@ -668,16 +677,13 @@ class PPOTrainer:
                     live_env_metrics[env_i] = {
                         'tput': tput, 'delay': delay, 'loss': loss, 
                         'sinr': sinr, 'rsrp': rsrp, 'queue': queue, 'rb': rb, 'power': power,
-                        'level': info.get('z_level', 0),          # New: Curriculum Level
-                        'success': info.get('z_success', 0.0)     # New: Success Rate
-                        # Optimization: Skip building detailed_ue every step to save CPU
+                        'level': info.get('z_level', 0),
+                        'success': info.get('z_success', 0.0)
                     }
             
-            # Force refresh of the live display to ensure progress bars and tables update every timestep.
-            # Optimization: Commenting out to allow rich to update asynchronously.
-            # if live_display:
-            #     live_display.update(make_layout())
-            pass
+            # Force refresh of the live display
+            if live_display:
+                live_display.update(make_layout())
 
         # Stats display table (Updated for Convergence Metrics)
         def create_stats_table(current_metrics=None):

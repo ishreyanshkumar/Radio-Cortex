@@ -35,15 +35,18 @@ if command -v apt-get &> /dev/null; then
 fi
 
 cd ns-3-allinone/ns-3.46.1
-USER=nonroot ./ns3 configure -d optimized --enable-examples --enable-tests
-USER=nonroot ./ns3 build
 
 echo "Linking scenario..."
 cd scratch
 rm -rf * # CLEANUP as per README
 ln -sf ../../../oran-congestion-scenario.cc .
 ln -sf ../../../CMakeLists.txt .
-cd ../../..
+cd ..
+
+./ns3 configure -d optimized --enable-examples --enable-tests
+./ns3 build
+
+cd ../..
 
 # 4. Bootstrap Kafka
 echo "[4/4] Starting Kafka..."

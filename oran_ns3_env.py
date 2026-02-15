@@ -823,6 +823,13 @@ class ORANns3Env(gym.Env):
         self.reward_engine = RewardEngine(self.config)
         self.prev_action = None
         
+        # KPM Verification Logger — writes every KPM report to logs/kpm_verification.jsonl
+        os.makedirs('logs', exist_ok=True)
+        suffix = self.config.topic_suffix or '_0'
+        self._kpm_log_path = f'logs/kpm_verification{suffix}.jsonl'
+        self._kpm_log_file = open(self._kpm_log_path, 'w')
+        self._kpm_step_counter = 0
+        
         # ──────────────────────────────────────────────────────────
         # Cell-Centric State Space  (Enriched Cell Tokens)
         # Each cell gets 12 features: 5 native + 7 aggregated UE stats
@@ -931,15 +938,18 @@ class ORANns3Env(gym.Env):
         if self.config.verbose:
             print("Waiting for initial KPM report...")
         try:
-            # Optimized timeout for initialization (reduced from 30s to 12s)
-            e2_msg = self.ns3.receive_kpm_report(max_wait_s=12.0, wait_for_new=True)
+            # Increased timeout for robustness
+            e2_msg = self.ns3.receive_kpm_report(max_wait_s=60.0, wait_for_new=True)
         except Exception as e:
             print(f"Failed to initialize environment: {e}")
             self.close()
-            raise e
+            # Return dummy state to prevent worker crash
+            dummy_state = np.zeros(self.observation_space.shape, dtype=np.float32)
+            self._log_kpm_verification(None, is_real=False, reason=f'reset_fallback: {e}')
+            return dummy_state, {"error": str(e), "is_fallback": True}
+
         state = self._extract_state(e2_msg)
         
-        reset_duration = time.time() - start_reset
         reset_duration = time.time() - start_reset
         if self.config.verbose:
             print(f"Environment reset complete in {reset_duration:.2f}s")
@@ -963,7 +973,7 @@ class ORANns3Env(gym.Env):
             
             e2_msg = self.ns3.receive_kpm_report(
                 wait_for_new=True,
-                max_wait_s=(self.config.kpm_interval_ms / 1000.0) * 5.0
+                max_wait_s=60.0
             )
             next_state = self._extract_state(e2_msg)
             
@@ -983,11 +993,15 @@ class ORANns3Env(gym.Env):
                 terminated = True
             truncated = False
             
+            # Log KPM verification (real data)
+            self._log_kpm_verification(e2_msg, is_real=True)
+            
             info = {
                 'step': self.current_step,
-                'e2_metrics': e2_msg,
+                'e2_metrics': self._serialize_e2_message(e2_msg),  # Plain dict for SubprocVecEnv pickling
                 'actions_applied': rc_actions,
                 'ns3_finished': bool(self.ns3.ns3_process and self.ns3.ns3_process.poll() is not None),
+                'is_fallback': False,
                 **breakdown,
             }
             
@@ -997,11 +1011,71 @@ class ORANns3Env(gym.Env):
             # end the episode rather than killing the worker process.
             import traceback, sys
             print(f"[ENV PID {os.getpid()}] step() error (returning done): {e}", file=sys.stderr, flush=True)
-            traceback.print_exc(file=sys.stderr)
-            fallback_state = np.zeros(self.observation_space.shape, dtype=np.float32)
-            # Create dummy E2Message to prevent KeyError in evaluation loops
-            dummy_msg = E2Message(timestamp=time.time(), ue_metrics={}, cell_metrics={})
-            return fallback_state, -10.0, True, False, {'step_error': str(e), 'e2_metrics': dummy_msg}
+            
+            # Log KPM verification (fallback)
+            self._log_kpm_verification(None, is_real=False, reason=f'step_error: {e}')
+            
+            # Return valid dummy tuple to prevent SubprocVecEnv worker crash
+            dummy_obs = np.zeros(self.observation_space.shape, dtype=np.float32)
+            return dummy_obs, 0.0, True, False, {"error": str(e), "is_fallback": True}
+    
+    # ─── KPM Verification & Serialization Helpers ────────────────
+    
+    @staticmethod
+    def _serialize_e2_message(e2_msg: E2Message) -> dict:
+        """Convert E2Message dataclass to a plain dict for SubprocVecEnv pickle compatibility."""
+        return {
+            'timestamp': e2_msg.timestamp,
+            'ue_metrics': e2_msg.ue_metrics,    # Already a plain dict
+            'cell_metrics': e2_msg.cell_metrics  # Already a plain dict
+        }
+    
+    def _log_kpm_verification(self, e2_msg, is_real: bool, reason: str = ''):
+        """Log every KPM report to logs/kpm_verification_X.jsonl for data authenticity verification."""
+        self._kpm_step_counter += 1
+        entry = {
+            'step': self._kpm_step_counter,
+            'timestamp': time.time(),
+            'is_real': is_real,
+            'env_id': self.config.topic_suffix,
+        }
+        if is_real and e2_msg is not None:
+            # Sample a few UE metrics to prove data is real
+            ue_ids = sorted(e2_msg.ue_metrics.keys())[:3]
+            entry['num_ues'] = len(e2_msg.ue_metrics)
+            entry['num_cells'] = len(e2_msg.cell_metrics)
+            entry['sample_ues'] = {}
+            for uid in ue_ids:
+                m = e2_msg.ue_metrics[uid]
+                entry['sample_ues'][uid] = {
+                    'tput': round(m.get('throughput', 0), 4),
+                    'sinr': round(m.get('sinr', -10), 2),
+                    'rsrp': round(m.get('rsrp', -140), 2),
+                    'delay': round(m.get('delay', 0), 2),
+                    'loss': round(m.get('packet_loss', 0), 4),
+                    'cell': m.get('serving_cell', -1),
+                }
+            # Sample cell metrics
+            cell_ids = sorted(e2_msg.cell_metrics.keys())[:2]
+            entry['sample_cells'] = {}
+            for cid in cell_ids:
+                c = e2_msg.cell_metrics[cid]
+                entry['sample_cells'][cid] = {
+                    'rb_util': round(c.get('rb_utilization', 0), 4),
+                    'queue': c.get('queue_length', 0),
+                    'power': round(c.get('tx_power', 23), 2),
+                    'ues': c.get('num_connected_ues', 0),
+                }
+        else:
+            entry['reason'] = reason
+        
+        try:
+            self._kpm_log_file.write(json.dumps(entry) + '\n')
+            # Flush every 10 entries for near-real-time visibility
+            if self._kpm_step_counter % 10 == 0:
+                self._kpm_log_file.flush()
+        except Exception:
+            pass  # Don't let logging failures crash training
     
     def _extract_state(self, e2_msg: E2Message) -> np.ndarray:
         """
