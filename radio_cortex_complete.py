@@ -25,6 +25,7 @@ import torch
 from pathlib import Path
 import json
 import time
+from datetime import datetime
 from typing import Dict, List, Optional, Tuple
 
 from concurrent.futures import ProcessPoolExecutor, as_completed
@@ -819,7 +820,10 @@ def main():
             config.scenario = args.scenario
 
         if args.model_path is None:
-            args.model_path = f"models/radiocortex_{args.model}.pt"
+            # Generate unique filename with timestamp to prevent overwriting
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            args.model_path = f"models/radiocortex_{args.model}_{timestamp}.pt"
+            print(f"Creating new model file: {args.model_path}")
 
         trainer = train_radio_cortex(
             config=config,

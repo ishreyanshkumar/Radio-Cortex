@@ -17,7 +17,6 @@ import time
 import sys
 import os
 import random
-import csv
 from typing import Dict, List, Tuple, Optional, Union
 from dataclasses import dataclass
 from enum import Enum
@@ -116,23 +115,22 @@ class RewardEngine:
         self.config = config
 
         # ── Weights ──────────────────────────────────────────────
-        # ── Weights (AGGRESSIVE MODE — fix passive safety trap) ──
-        self.W_TPUT      = 2.0      # DOUBLED: Focus on throughput
+        self.W_TPUT      = 1.0      # Throughput (Log Utility)
         self.W_DELAY_LIN = 0.5      # Linear Delay Penalty
-        self.W_DELAY_BAR = 2.7      # Punish SLA breaches
+        self.W_DELAY_BAR = 2.0      # Increased from 1.0: punish SLA breaches more
         self.W_LOSS      = 2.5      # Increased from 1.0: core stability penalty
-        self.W_SE        = 0.15     # Reward robust channel conditions
-        self.W_ENERGY    = 0.05     # REDUCED 10x: Let it use max power!
+        self.W_SE        = 0.15     # Tripled from 0.05: reward robust channel conditions
+        self.W_ENERGY    = 0.5      # Energy Efficiency
         self.W_LOAD      = 1.0      # Load Balancing
-        self.W_QUEUE     = 0.8      # "Backpressure" signal
+        self.W_QUEUE     = 0.8      # Increased from 0.3: "Backpressure" signal
         self.W_SMOOTH    = 0.05     # Action Smoothing
         self.BIAS        = 1.0      # Survival Bias (Ensures Level 0 is positive)
 
         # ── Thresholds / Normalizers ─────────────────────────────
-        self.T_MAX     = 50.0      # Max Throughput (Mbps)
-        self.D_MAX     = 65.0      # Normalizing Delay (ms)
+        self.T_MAX     = 100.0      # Max Throughput (Mbps)
+        self.D_MAX     = 100.0      # Normalizing Delay (ms)
         self.D_SLA     = 45.0       # Tightened from 60.0: earlier barrier entry
-        self.BETA_LOSS = 10.0        # Steeper from 3.0: exponential loss penalty
+        self.BETA_LOSS = 5.0        # Steeper from 3.0: exponential loss penalty
         self.EPSILON   = 1e-6       # Safe log
         self.Q_MAX     = 500.0      # Tightened from 1000.0: more sensitive queue penalization
 
@@ -152,69 +150,39 @@ class RewardEngine:
         # ── Curriculum State ─────────────────────────────────────
         self.level = 0              # 0=Bootstrap, 1=Quality, 2=Reliability
         self.success_history = []   # Rolling window of success rate
-        self.HISTORY_LEN = 200      # Window size (was 50 — too easy to promote)
-        self.MIN_STEPS_PER_LEVEL = 100  # Must spend ≥100 steps before promotion
-        self.steps_at_current_level = 0 # Counter for minimum-steps gate
+        self.HISTORY_LEN = 50       # Window size for level promotion/demotion
         self.MIN_TPUT_SUCCESS = 2.0 # Mbps required to count as "satisfied"
-        self.DEMOTION_THRESHOLD = 0.3 # If <30% users satisfied, consider demotion (was 0.2)
-        self.PROMOTION_THRESHOLD_L1 = 0.6 # 60% for Level 1 (was 0.5)
-        self.PROMOTION_THRESHOLD_L2 = 0.85 # 85% for Level 2 (was 0.8)
+        self.DEMOTION_THRESHOLD = 0.2 # If <20% users satisfied, consider demotion
+        self.PROMOTION_THRESHOLD_L1 = 0.5 # 50% for Level 1
+        self.PROMOTION_THRESHOLD_L2 = 0.8 # 80% for Level 2
         self.current_scenario = None
 
-    def _update_curriculum(self, current_success_rate: float, jains_index: float, rb_util: float):
-        """
-        Smart Curriculum with minimum-steps gating.
-        Must spend MIN_STEPS_PER_LEVEL at each level AND fill enough history
-        before promotion is considered. Fairness shortcut helps at L0 but 
-        still requires minimum history.
-        """
+    def _update_curriculum(self, current_success_rate: float):
+        """Update curriculum level based on sustained success rate with promotion/demotion logic."""
         self.success_history.append(current_success_rate)
         if len(self.success_history) > self.HISTORY_LEN:
             self.success_history.pop(0)
-        self.steps_at_current_level += 1
         
         avg_success = sum(self.success_history) / len(self.success_history)
-        has_enough_history = len(self.success_history) >= min(self.HISTORY_LEN // 2, 100)
-        has_min_steps = self.steps_at_current_level >= self.MIN_STEPS_PER_LEVEL
 
-        # Gate: Must have both minimum steps AND enough history before any promotion
-        if not (has_enough_history and has_min_steps):
-            return
-
-        # === PROMOTION LOGIC ===
-        # Level 0 -> 1 (Bootstrap -> Quality)
-        # Promote if:
-        # 1. 60% users are happy
-        # OR
-        # 2. Fairness is excellent (Jain's > 0.9) AND spectrum is utilized (RB Util > 0.8)
-        #    (This helps when physical throughput is limited but allocation is fair)
-        
-        can_promote_l1 = (avg_success > self.PROMOTION_THRESHOLD_L1) or \
-                         (jains_index > 0.9 and rb_util > 0.8)
-
-        if self.level == 0 and can_promote_l1:
+        # Level promotion and demotion logic
+        if self.level == 0 and avg_success > self.PROMOTION_THRESHOLD_L1:
             self.level = 1
-            self.steps_at_current_level = 0
-            print(f"\n🎉 PROMOTED TO LEVEL 1 (Quality): AvgSuccess={avg_success:.2f}, Jains={jains_index:.2f}, Util={rb_util:.2f}")
-            self.success_history = self.success_history[-20:]  # Keep tail (don't fully reset)
-            
+            print(f"\n🎉 PROMOTED TO LEVEL 1 (Quality): Soft-enabling Delay Penalty (Scenario: {self.current_scenario})")
+            self.success_history = []
         elif self.level == 1:
-            # Level 1 -> 2 (Quality -> Reliability)
             if avg_success > self.PROMOTION_THRESHOLD_L2:
                 self.level = 2
-                self.steps_at_current_level = 0
-                print(f"\n🚀 PROMOTED TO LEVEL 2 (Reliability): AvgSuccess={avg_success:.2f}")
-                self.success_history = self.success_history[-20:]
-            elif avg_success < self.DEMOTION_THRESHOLD and jains_index < 0.7:
+                print(f"\n🚀 PROMOTED TO LEVEL 2 (Reliability): Soft-enabling Loss/Jitter Penalty")
+                self.success_history = []
+            elif avg_success < self.DEMOTION_THRESHOLD:
                 self.level = 0
-                self.steps_at_current_level = 0
-                print(f"\n📉 DEMOTED TO LEVEL 0: AvgSuccess={avg_success:.2f}, Jains={jains_index:.2f}")
-                self.success_history = self.success_history[-20:]
+                print(f"\n📉 DEMOTED TO LEVEL 0 (Bootstrap): Re-focusing on Throughput baseline")
+                self.success_history = []
         elif self.level == 2 and avg_success < self.DEMOTION_THRESHOLD:
             self.level = 1
-            self.steps_at_current_level = 0
-            print(f"\n📉 DEMOTED TO LEVEL 1: AvgSuccess={avg_success:.2f}")
-            self.success_history = self.success_history[-20:]
+            print(f"\n📉 DEMOTED TO LEVEL 1 (Quality): Performance drop detected")
+            self.success_history = []
 
     def compute(self,
                 e2_msg: E2Message,
@@ -249,23 +217,16 @@ class RewardEngine:
         r_tput = float(np.clip(r_tput, *self.CLIP_TPUT))
 
         # ── Calculate Success Rate (for Curriculum) ──────────────
-        jains = self._jains_index(tputs)
-        
-        if e2_msg.cell_metrics:
-            avg_rb_util = np.mean([m['rb_utilization'] for m in e2_msg.cell_metrics.values()])
-        else:
-            avg_rb_util = 0.0
-
         # Scenario-specific success threshold adjustments
         target_tput = self.MIN_TPUT_SUCCESS
-        if self.current_scenario in ['iot_tsunami']: 
-            target_tput = 0.5 # Very low bar for massive device scenario
-        elif self.current_scenario in ['flash_crowd', 'spectrum_crunch', 'urban_canyon']:
-            target_tput = 1.0 # Moderate bar (was 0.5 for flash_crowd — too easy)
+        if self.current_scenario == 'iot_tsunami':
+            target_tput = 0.5
+        elif self.current_scenario in ['spectrum_crunch', 'urban_canyon']:
+            target_tput = 1.0
 
         satisfied_ues = np.sum(tputs > target_tput)
         success_rate = satisfied_ues / max(len(tputs), 1)
-        self._update_curriculum(success_rate, jains, avg_rb_util)
+        self._update_curriculum(success_rate)
 
         # ── Apply Curriculum Masking & Soft-Start ─────────────────
         # Use success rate to softly introduce penalties within a level
@@ -274,10 +235,10 @@ class RewardEngine:
         # Soft factor (0.0 to 1.0) based on progress within the level
         soft_factor = min(avg_success / 0.9, 1.0) 
 
-        w_delay_eff = (self.W_DELAY_LIN * soft_factor) if self.level >= 0 else 0.0
-        w_queue_eff = (self.W_QUEUE * soft_factor)     if self.level >= 0 else 0.0  # Queue from start
+        w_delay_eff = (self.W_DELAY_LIN * soft_factor) if self.level >= 1 else 0.0
+        w_queue_eff = (self.W_QUEUE * soft_factor)     if self.level >= 1 else 0.0
 
-        w_loss_eff   = (self.W_LOSS * soft_factor)      if self.level >= 0 else 0.0  # Loss from Level 0 (ALWAYS ON)
+        w_loss_eff   = (self.W_LOSS * soft_factor)      if self.level >= 2 else 0.0
         w_energy_eff = (self.W_ENERGY * soft_factor)    if self.level >= 2 else 0.0
         w_load_eff   = (self.W_LOAD * soft_factor)      if self.level >= 2 else 0.0
         
@@ -415,7 +376,6 @@ class RewardEngine:
             'r_se': 0.0, 'r_energy': 0.0, 'r_load': 0.0, 'r_queue': 0.0,
             'r_smooth': 0.0, 'se_avg': 0.0, 'jains': 0.0, 'p95_delay': 0.0,
             'avg_throughput': 0.0, 'avg_delay': 0.0, 'avg_loss': 0.0,
-            'z_level': 0, 'z_success': 0.0,
         }
 
 
@@ -610,7 +570,7 @@ class NS3Interface:
             rc_topic = f'e2_rc_control{self.config.topic_suffix}'
             self.kafka_consumer = KafkaConsumer(
                 kpm_topic,
-                bootstrap_servers=[os.getenv('KAFKA_BOOTSTRAP', 'localhost:9092')],
+                bootstrap_servers=['localhost:9092'],
                 auto_offset_reset='earliest',  # Read from beginning to catch startup msgs
                 enable_auto_commit=False,
                 value_deserializer=lambda x: json.loads(x.decode('utf-8')),
@@ -635,7 +595,7 @@ class NS3Interface:
             self.last_kpm_ts = None
             
             self.kafka_producer = KafkaProducer(
-                bootstrap_servers=[os.getenv('KAFKA_BOOTSTRAP', 'localhost:9092')],
+                bootstrap_servers=['localhost:9092'],
                 linger_ms=5,        # 🚀 OPTIMIZATION: Wait 5ms to batch syscalls
                 batch_size=32768,   # 🚀 OPTIMIZATION: Allow 32KB batches
                 value_serializer=lambda x: json.dumps(x).encode('utf-8')
@@ -841,39 +801,14 @@ class ORANns3Env(gym.Env):
         self.reward_engine = RewardEngine(self.config)
         self.prev_action = None
         
-        # KPM Verification Logger — writes every KPM report to logs/kpm_verification.jsonl
-        os.makedirs('logs', exist_ok=True)
-        suffix = self.config.topic_suffix or '_0'
-        self._kpm_log_path = f'logs/kpm_verification{suffix}.jsonl'
-        self._kpm_log_file = open(self._kpm_log_path, 'w')
-        self._kpm_step_counter = 0
-        
-        # Reward Component Logger — writes detailed reward breakdown to logs/reward_metrics_X.csv
-        try:
-            self._reward_log_path = f'logs/reward_metrics{suffix}.csv'
-            # Check if file exists to write header only once (though with suffix per env, likely new)
-            file_exists = os.path.isfile(self._reward_log_path) and os.path.getsize(self._reward_log_path) > 0
-            self._reward_log_file = open(self._reward_log_path, 'a', newline='')
-            self._reward_csv_writer = csv.writer(self._reward_log_file)
-            
-            if not file_exists:
-                # Header based on RewardEngine breakdown keys
-                header = ['step', 'reward', 'r_tput', 'r_delay', 'r_loss', 'r_se', 'r_energy', 'r_load', 
-                          'r_queue', 'r_smooth', 'se_avg', 'jains', 'p95_delay', 'avg_throughput', 
-                          'avg_delay', 'avg_loss', 'z_level', 'z_success']
-                self._reward_csv_writer.writerow(header)
-                self._reward_log_file.flush()
-        except Exception as e:
-            print(f"Warning: Failed to initialize reward logger: {e}")
-            self._reward_log_file = None
-        
-        # ──────────────────────────────────────────────────────────
-        # Cell-Centric State Space  (Enriched Cell Tokens)
-        # Each cell gets 12 features: 5 native + 7 aggregated UE stats
-        # This is SCALE-INVARIANT — works for 20 or 2000 UEs.
-        # ──────────────────────────────────────────────────────────
-        self.features_per_cell = 12
-        state_dim = self.config.num_cells * self.features_per_cell
+        # State space: flattened network metrics
+        # Per-UE features: throughput, delay, loss, sinr, rsrp, rsrq, ul_rbs,
+        #                rb_allocated, cqi, rsrp_var, rsrq_var, buffer_occupancy  (12 per UE)
+        # Per-cell features: queue_length, rb_utilization, tx_power, cell_load, avg_rb_request (5 per cell)
+        state_dim = (
+            self.config.num_ues * 12 +  # UE metrics (expanded)
+            self.config.num_cells * 5    # Cell metrics (expanded)
+        )
         self.observation_space = spaces.Box(
             low=-np.inf,
             high=np.inf,
@@ -881,36 +816,46 @@ class ORANns3Env(gym.Env):
             dtype=np.float32
         )
         
-        # Cell-Only Action Space: 5 Actions per cell
-        # 1. TxPower (differential)  → SetTxPower(dBm)
-        # 2. TimeToTrigger (differential) → A3Rsrp HandoverAlgorithm TTT (ms)
-        # 3. Hysteresis (absolute)   → A3Rsrp Hysteresis (dB)
-        # 4. MacDelay (absolute)     → SetMacChDelay(TTIs)
-        # 5. CqiTimer (absolute)     → CqiTimerThreshold on MAC scheduler (ms)
-        self.actions_per_cell = 5
-        action_dim = self.config.num_cells * self.actions_per_cell
+        # Per-cell: [TxPower, SchedulerWeight]  (2 per cell — removing Hysteresis)
+        # Per-UE: [priority_weight] for each UE
+        # Fixed defaults (not RL-controlled): SchedulerType=0(PF), MaxHarq=4, MacDelay=0, NoiseFig=5dB, Hysteresis=3dB
+        per_cell_low = [
+            10.0,  # TxPower min (dBm)
+            0.0,   # SchedulerWeight min
+        ]
+        per_cell_high = [
+            46.0,  # TxPower max
+            5.0,   # SchedulerWeight max
+        ]
 
-        self.action_space = spaces.Box(
-            low=np.array([0.0] * action_dim, dtype=np.float32),
-            high=np.array([1.0] * action_dim, dtype=np.float32),
-            dtype=np.float32
-        )
+        # Per-UE priority weight bounds
+        per_ue_low = [0.0] * self.config.num_ues
+        per_ue_high = [10.0] * self.config.num_ues
+
+        low = np.array(per_cell_low * self.config.num_cells + per_ue_low, dtype=np.float32)
+        high = np.array(per_cell_high * self.config.num_cells + per_ue_high, dtype=np.float32)
+
+        self.action_space = spaces.Box(low=low, high=high, dtype=np.float32)
         
         # Episode tracking
         self.current_step = 0
         self.max_steps = int(self.config.sim_time * 1000 / self.config.kpm_interval_ms)
         self.episode_metrics = []
         
-        # Differential Control State Tracking (Cell-only)
+        # Differential Control State Tracking
         self.current_params = {
             'cell': {c: {
-                'tx_power': 23.0,           # dBm
-                'time_to_trigger': 256.0,   # ms (A3 TTT default)
-                'cqi_timer': 1000.0,        # ms (CQI report validity)
-                'hysteresis': 2.0,          # dB
-                'mac_delay': 0.0,           # TTIs
-                'noise_figure': 5.0,        # dB
-            } for c in range(self.config.num_cells)}
+                'tx_power': 23.0,       # dBm
+                'scheduler_type': 0,    # Discrete
+                'max_harq': 4.0, 
+                'hysteresis': 2.0,      # dB
+                'mac_delay': 0.0,       # ms
+                'noise_figure': 5.0,    # dB
+                'scheduler_weight': 1.0 
+            } for c in range(self.config.num_cells)},
+            'ue': {u: {
+                'priority_weight': 1.0
+            } for u in range(self.config.num_ues)}
         }
         
     def reset(self, seed=None, options=None) -> Tuple[np.ndarray, dict]:
@@ -921,16 +866,23 @@ class ORANns3Env(gym.Env):
         if seed is not None:
             self.config.seed = seed
             
-        # Reset Differential Control State to Defaults (Cell-only)
+        # Initialize sorted indices (default identity)
+        self.sorted_ue_indices = list(range(self.config.num_ues))
+        
+        # Reset Differential Control State to Defaults
         self.current_params = {
             'cell': {c: {
-                'tx_power': 23.0,           # dBm
-                'time_to_trigger': 256.0,   # ms (A3 TTT default)
-                'cqi_timer': 1000.0,        # ms (CQI report validity)
-                'hysteresis': 2.0,          # dB
-                'mac_delay': 0.0,           # TTIs
-                'noise_figure': 5.0,        # dB
-            } for c in range(self.config.num_cells)}
+                'tx_power': 23.0,       # dBm
+                'scheduler_type': 0,    # Discrete (Handled absolutely for now or via small steps)
+                'max_harq': 4.0, 
+                'hysteresis': 2.0,      # dB
+                'mac_delay': 0.0,       # ms
+                'noise_figure': 5.0,    # dB
+                'scheduler_weight': 1.0 
+            } for c in range(self.config.num_cells)},
+            'ue': {u: {
+                'priority_weight': 1.0
+            } for u in range(self.config.num_ues)}
         }
         
         # Multi-scenario training: select scenario for this episode
@@ -973,18 +925,15 @@ class ORANns3Env(gym.Env):
         if self.config.verbose:
             print("Waiting for initial KPM report...")
         try:
-            # Increased timeout for robustness
-            e2_msg = self.ns3.receive_kpm_report(max_wait_s=60.0, wait_for_new=True)
+            # Optimized timeout for initialization (reduced from 30s to 12s)
+            e2_msg = self.ns3.receive_kpm_report(max_wait_s=12.0, wait_for_new=True)
         except Exception as e:
             print(f"Failed to initialize environment: {e}")
             self.close()
-            # Return dummy state to prevent worker crash
-            dummy_state = np.zeros(self.observation_space.shape, dtype=np.float32)
-            self._log_kpm_verification(None, is_real=False, reason=f'reset_fallback: {e}')
-            return dummy_state, {"error": str(e), "is_fallback": True}
-
+            raise e
         state = self._extract_state(e2_msg)
         
+        reset_duration = time.time() - start_reset
         reset_duration = time.time() - start_reset
         if self.config.verbose:
             print(f"Environment reset complete in {reset_duration:.2f}s")
@@ -1008,7 +957,7 @@ class ORANns3Env(gym.Env):
             
             e2_msg = self.ns3.receive_kpm_report(
                 wait_for_new=True,
-                max_wait_s=60.0
+                max_wait_s=(self.config.kpm_interval_ms / 1000.0) * 5.0
             )
             next_state = self._extract_state(e2_msg)
             
@@ -1022,51 +971,17 @@ class ORANns3Env(gym.Env):
                 **breakdown,
             })
             
-            # Log reward components to CSV
-            if self._reward_log_file:
-                try:
-                    row = [
-                        self.current_step,
-                        round(reward, 4),
-                        round(breakdown.get('r_tput', 0), 4),
-                        round(breakdown.get('r_delay', 0), 4),
-                        round(breakdown.get('r_loss', 0), 4),
-                        round(breakdown.get('r_se', 0), 4),
-                        round(breakdown.get('r_energy', 0), 4),
-                        round(breakdown.get('r_load', 0), 4),
-                        round(breakdown.get('r_queue', 0), 4),
-                        round(breakdown.get('r_smooth', 0), 4),
-                        round(breakdown.get('se_avg', 0), 4),
-                        round(breakdown.get('jains', 0), 4),
-                        round(breakdown.get('p95_delay', 0), 2),
-                        round(breakdown.get('avg_throughput', 0), 2),
-                        round(breakdown.get('avg_delay', 0), 2),
-                        round(breakdown.get('avg_loss', 0), 4),
-                        int(breakdown.get('z_level', 0)),
-                        round(breakdown.get('z_success', 0), 4)
-                    ]
-                    self._reward_csv_writer.writerow(row)
-                    # Flush periodically to ensure data is written even if crashed
-                    if self.current_step % 10 == 0:
-                        self._reward_log_file.flush()
-                except Exception:
-                    pass
-            
             self.current_step += 1
             terminated = self.current_step >= self.max_steps
             if self.ns3.ns3_process and self.ns3.ns3_process.poll() is not None:
                 terminated = True
             truncated = False
             
-            # Log KPM verification (real data)
-            self._log_kpm_verification(e2_msg, is_real=True)
-            
             info = {
                 'step': self.current_step,
-                'e2_metrics': self._serialize_e2_message(e2_msg),  # Plain dict for SubprocVecEnv pickling
+                'e2_metrics': e2_msg,
                 'actions_applied': rc_actions,
                 'ns3_finished': bool(self.ns3.ns3_process and self.ns3.ns3_process.poll() is not None),
-                'is_fallback': False,
                 **breakdown,
             }
             
@@ -1076,192 +991,153 @@ class ORANns3Env(gym.Env):
             # end the episode rather than killing the worker process.
             import traceback, sys
             print(f"[ENV PID {os.getpid()}] step() error (returning done): {e}", file=sys.stderr, flush=True)
-            
-            # Log KPM verification (fallback)
-            self._log_kpm_verification(None, is_real=False, reason=f'step_error: {e}')
-            
-            # Return valid dummy tuple to prevent SubprocVecEnv worker crash
-            dummy_obs = np.zeros(self.observation_space.shape, dtype=np.float32)
-            return dummy_obs, 0.0, True, False, {"error": str(e), "is_fallback": True}
-    
-    # ─── KPM Verification & Serialization Helpers ────────────────
-    
-    @staticmethod
-    def _serialize_e2_message(e2_msg: E2Message) -> dict:
-        """Convert E2Message dataclass to a plain dict for SubprocVecEnv pickle compatibility."""
-        return {
-            'timestamp': e2_msg.timestamp,
-            'ue_metrics': e2_msg.ue_metrics,    # Already a plain dict
-            'cell_metrics': e2_msg.cell_metrics  # Already a plain dict
-        }
-    
-    def _log_kpm_verification(self, e2_msg, is_real: bool, reason: str = ''):
-        """Log every KPM report to logs/kpm_verification_X.jsonl for data authenticity verification."""
-        self._kpm_step_counter += 1
-        entry = {
-            'step': self._kpm_step_counter,
-            'timestamp': time.time(),
-            'is_real': is_real,
-            'env_id': self.config.topic_suffix,
-        }
-        if is_real and e2_msg is not None:
-            # Sample a few UE metrics to prove data is real
-            ue_ids = sorted(e2_msg.ue_metrics.keys())[:3]
-            entry['num_ues'] = len(e2_msg.ue_metrics)
-            entry['num_cells'] = len(e2_msg.cell_metrics)
-            entry['sample_ues'] = {}
-            for uid in ue_ids:
-                m = e2_msg.ue_metrics[uid]
-                entry['sample_ues'][uid] = {
-                    'tput': round(m.get('throughput', 0), 4),
-                    'sinr': round(m.get('sinr', -10), 2),
-                    'rsrp': round(m.get('rsrp', -140), 2),
-                    'delay': round(m.get('delay', 0), 2),
-                    'loss': round(m.get('packet_loss', 0), 4),
-                    'cell': m.get('serving_cell', -1),
-                }
-            # Sample cell metrics
-            cell_ids = sorted(e2_msg.cell_metrics.keys())[:2]
-            entry['sample_cells'] = {}
-            for cid in cell_ids:
-                c = e2_msg.cell_metrics[cid]
-                entry['sample_cells'][cid] = {
-                    'rb_util': round(c.get('rb_utilization', 0), 4),
-                    'queue': c.get('queue_length', 0),
-                    'power': round(c.get('tx_power', 23), 2),
-                    'ues': c.get('num_connected_ues', 0),
-                }
-        else:
-            entry['reason'] = reason
-        
-        try:
-            self._kpm_log_file.write(json.dumps(entry) + '\n')
-            # Flush every 10 entries for near-real-time visibility
-            if self._kpm_step_counter % 10 == 0:
-                self._kpm_log_file.flush()
-        except Exception:
-            pass  # Don't let logging failures crash training
+            traceback.print_exc(file=sys.stderr)
+            fallback_state = np.zeros(self.observation_space.shape, dtype=np.float32)
+            # Create dummy E2Message to prevent KeyError in evaluation loops
+            dummy_msg = E2Message(timestamp=time.time(), ue_metrics={}, cell_metrics={})
+            return fallback_state, -10.0, True, False, {'step_error': str(e), 'e2_metrics': dummy_msg}
     
     def _extract_state(self, e2_msg: E2Message) -> np.ndarray:
-        """
-        Cell-Centric State Extraction.
-        Aggregates UE metrics into their serving cells to produce
-        Enriched Cell Tokens (12 features per cell).
-        """
-        # 1. Initialize per-cell UE aggregators
-        cell_stats = {c: {'tputs': [], 'delays': [], 'losses': []}
-                      for c in range(self.config.num_cells)}
+        """Convert E2 KPM message to RL state vector"""
+        state = []
         
-        # 2. Map each UE to its serving cell
-        for ue_id, m in e2_msg.ue_metrics.items():
-            c_id = m.get('serving_cell', -1)
-            if 0 <= c_id < self.config.num_cells:
-                cell_stats[c_id]['tputs'].append(m.get('throughput', 0.0))
-                cell_stats[c_id]['delays'].append(m.get('delay', 0.0))
-                cell_stats[c_id]['losses'].append(m.get('packet_loss', 0.0))
+        # UE metrics
+        # UE metrics with Canonical Sorting
+        # Collect all UE metrics first
+        ue_data = []
+        actual_ue_count = len(e2_msg.ue_metrics)
+        if actual_ue_count > self.config.num_ues:
+            # Only log once per session to avoid noise
+            if not hasattr(self, '_reported_ue_mismatch'):
+                print(f"\n🚨 [CRITICAL WARNING] Received KPMs for {actual_ue_count} UEs, but configured for {self.config.num_ues}!")
+                print("   The agent is BLIND to some UEs. Check NS3Config scenario/num_ues alignment.")
+                self._reported_ue_mismatch = True
+
+        for ue_id in range(self.config.num_ues):
+            ue = e2_msg.ue_metrics.get(ue_id, {})
+            # Sorting Key: Buffer Occupancy (Descending), then UE ID (Ascending) for ties
+            sort_key = (-ue.get('buffer_occupancy', 0.0), ue_id)
+            ue_data.append((ue_id, ue, sort_key))
+            
+        # Sort UEs canonically (Default) or Shuffle them (Testing)
+        if self.config.shuffle_ues:
+            random.shuffle(ue_data)
+        else:
+            ue_data.sort(key=lambda x: x[2])
         
-        # 3. Build flat state vector: 12 features per cell
+        # Update sorted indices for action mapping
+        self.sorted_ue_indices = [x[0] for x in ue_data]
+        
+        # 🚀 OPTIMIZATION 1: Pre-allocate NumPy array to bypass dynamic list resizing
         state = np.zeros(self.observation_space.shape, dtype=np.float32)
         idx = 0
         
-        for c in range(self.config.num_cells):
-            # --- A. Native Cell Metrics (5 features) ---
-            cm = e2_msg.cell_metrics.get(c, {})
-            state[idx]   = cm.get('queue_length', 0) / 1000.0
-            state[idx+1] = cm.get('rb_utilization', 0.0)
-            state[idx+2] = (cm.get('tx_power', 23.0) - 10.0) / 36.0
-            state[idx+3] = cm.get('cell_load', 0.0) / max(1.0, self.config.num_ues)
-            state[idx+4] = cm.get('avg_rb_request', 0.0) / 100.0
-            
-            # --- B. Aggregated UE Metrics (7 features) ---
-            stats = cell_stats[c]
-            n_ues = len(stats['tputs'])
-            
-            if n_ues > 0:
-                # Averages (General Capacity)
-                avg_tput  = np.mean(stats['tputs'])
-                avg_delay = np.mean(stats['delays'])
-                avg_loss  = np.mean(stats['losses'])
-                
-                # Worst-Case (Special UE / Ambulance Detection)
-                max_delay = np.max(stats['delays'])
-                max_loss  = np.max(stats['losses'])
-                
-                # Jain's Fairness Index
-                sum_t = sum(stats['tputs'])
-                sum_sq_t = sum(x * x for x in stats['tputs'])
-                jains = 1.0 if sum_sq_t < 1e-9 else (sum_t ** 2) / (n_ues * sum_sq_t)
-            else:
-                avg_tput, avg_delay, avg_loss = 0.0, 0.0, 0.0
-                max_delay, max_loss = 0.0, 0.0
-                jains = 1.0
-            
-            state[idx+5]  = avg_tput / 100.0         # Avg throughput
-            state[idx+6]  = avg_delay / 100.0         # Avg delay
-            state[idx+7]  = avg_loss                  # Avg packet loss
-            state[idx+8]  = max_delay / 100.0         # Worst-case delay ("Is someone lagging?")
-            state[idx+9]  = max_loss                  # Worst-case loss  ("Is someone dropping?")
-            state[idx+10] = jains                     # Fairness index
-            state[idx+11] = n_ues / 50.0              # UE load count
-            
-            idx += self.features_per_cell
+        # Flatten state based on sorted order
+        for _, ue, _ in ue_data:
+            # Map expanded UE features (12 total):
+            state[idx]   = ue.get('throughput', 0.0) / 100.0
+            state[idx+1] = ue.get('delay', 0.0) / 1000.0
+            state[idx+2] = ue.get('packet_loss', 0.0)
+            state[idx+3] = (ue.get('sinr', 0.0) + 10.0) / 40.0
+            state[idx+4] = (ue.get('rsrp', -140.0) + 140.0) / 100.0
+            state[idx+5] = (ue.get('rsrq', -20.0) + 20.0) / 20.0
+            state[idx+6] = ue.get('ul_rbs', 0.0) / 100.0
+            state[idx+7] = ue.get('rb_allocated', 0) / 100.0
+            state[idx+8] = ue.get('cqi', 0.0) / 15.0
+            state[idx+9] = ue.get('rsrp_var', 0.0) / 50.0
+            state[idx+10]= ue.get('rsrq_var', 0.0) / 50.0
+            state[idx+11]= ue.get('buffer_occupancy', 0.0) / 10000.0
+            idx += 12
+        
+        # Cell metrics
+        for cell_id in range(self.config.num_cells):
+            cell = e2_msg.cell_metrics.get(cell_id, {})
+            state[idx]   = cell.get('queue_length', 0) / 1000.0
+            state[idx+1] = cell.get('rb_utilization', 0.0)
+            state[idx+2] = (cell.get('tx_power', 23.0) - 10.0) / 36.0
+            state[idx+3] = cell.get('cell_load', 0.0) / max(1.0, self.config.num_ues)
+            state[idx+4] = cell.get('avg_rb_request', 0.0) / 100.0
+            idx += 5
             
         return state
     
     def _parse_action(self, action: np.ndarray) -> Dict:
         """
-        5-Dimensional Cell Control.
-        Actions are [0, 1] normalized, mapped to physical ranges here.
+        Convert RL action to E2SM-RC control messages.
+        Simplified: 3 dims per cell (TxPower, SchedulerWeight, Hysteresis) + 1 per UE.
+        Fixed params (HARQ, Hysteresis, etc.) use sensible defaults.
         """
+        # Ensure action is a flat 1-D array (VecEnv may pass scalars or 0-d arrays)
         action = np.asarray(action, dtype=np.float64).flatten()
         
-        expected_size = self.config.num_cells * self.actions_per_cell
+        expected_size = self.config.num_cells * 2 + self.config.num_ues
         if action.size != expected_size:
+            import sys
             if action.size < expected_size:
-                action = np.pad(action, (0, expected_size - action.size), constant_values=0.5)
+                action = np.pad(action, (0, expected_size - action.size), constant_values=0.0)
             else:
                 action = action[:expected_size]
 
         rc_actions = {'cell': [], 'ue': []}
         offset = 0
         
+        # 1. Cell Actions (2 dims per cell: TxPower, SchedulerWeight)
         for c in range(self.config.num_cells):
-            cell_act = action[offset : offset + self.actions_per_cell]
-            offset += self.actions_per_cell
+            cell_act = action[offset : offset + 2]
+            offset += 2
             
-            # 1. TxPower: Differential +/- 1.0 dBm (mapped from [0,1])
-            delta_p = (cell_act[0] * 2.0 - 1.0) * 1.0
+            # Tx Power: +/- 1.0 dBm step (differential)
+            delta_p = cell_act[0] * 1.0 
             self.current_params['cell'][c]['tx_power'] = np.clip(
                 self.current_params['cell'][c]['tx_power'] + delta_p, 10.0, 46.0
             )
-
-            # 2. TimeToTrigger: Differential +/- 50 ms (A3Rsrp handover delay)
-            #    Range 0-5120 ms. Controls how long a handover condition must
-            #    persist before triggering. Lower = faster handover, higher = more stable.
-            delta_ttt = (cell_act[1] * 2.0 - 1.0) * 50.0
-            self.current_params['cell'][c]['time_to_trigger'] = np.clip(
-                self.current_params['cell'][c]['time_to_trigger'] + delta_ttt, 0.0, 5120.0
+            
+            # Scheduler Weight: +/- 0.1 step (differential)
+            delta_w = cell_act[1] * 0.1
+            self.current_params['cell'][c]['scheduler_weight'] = np.clip(
+                self.current_params['cell'][c]['scheduler_weight'] + delta_w, 0.0, 5.0
             )
 
-            # 3. Hysteresis: Absolute 0.0–10.0 dB (mobility sensitivity)
-            self.current_params['cell'][c]['hysteresis'] = cell_act[2] * 10.0
+            # Hysteresis: Fixed at 3.0 dB (Handover sensitivity)
+            self.current_params['cell'][c]['hysteresis'] = 3.0
 
-            # 4. MAC Delay: Absolute 0–4 TTIs (latency vs scheduling quality)
-            self.current_params['cell'][c]['mac_delay'] = round(cell_act[3] * 4.0)
-
-            # 5. CQI Timer: Absolute 100–2000 ms (CQI report validity window)
-            #    Controls how long a CQI measurement is considered valid.
-            #    Lower = more responsive but more overhead, higher = stable but stale.
-            self.current_params['cell'][c]['cqi_timer'] = 100 + round(cell_act[4] * 1900.0)
-
+            # Send ALL params to ns-3 (fixed ones use defaults from current_params)
             rc_actions['cell'].append({
                 'cell_id': c,
                 'tx_power_dbm': float(self.current_params['cell'][c]['tx_power']),
-                'time_to_trigger_ms': float(self.current_params['cell'][c]['time_to_trigger']),
+                'scheduler_type': int(self.current_params['cell'][c]['scheduler_type']),
+                'max_harq_tx': int(round(self.current_params['cell'][c]['max_harq'])),
                 'hysteresis_db': float(self.current_params['cell'][c]['hysteresis']),
-                'mac_ch_delay': int(self.current_params['cell'][c]['mac_delay']),
-                'cqi_timer_ms': int(self.current_params['cell'][c]['cqi_timer']),
-                'noise_figure_db': 5.0,  # Fixed (environment parameter)
+                'mac_ch_delay': int(round(self.current_params['cell'][c]['mac_delay'])),
+                'noise_figure_db': float(self.current_params['cell'][c]['noise_figure']),
+                'scheduler_weight': float(self.current_params['cell'][c]['scheduler_weight']),
+            })
+
+        # 2. UE Actions
+        # Apply to PHYSICAL UEs using sorted_ue_indices map
+        # Action index i corresponds to "i-th most critical UE"
+        
+        # Ensure we don't go out of bounds if sorted_ue_indices isn't populated (e.g. init)
+        if not hasattr(self, 'sorted_ue_indices') or len(self.sorted_ue_indices) != self.config.num_ues:
+             self.sorted_ue_indices = list(range(self.config.num_ues))
+        
+        for i in range(self.config.num_ues):
+            if offset >= len(action): break
+            
+            ue_act = action[offset] # Scalar
+            offset += 1
+            
+            physical_ue_id = self.sorted_ue_indices[i]
+            
+            # Priority Weight: +/- 0.2
+            delta_prio = ue_act * 0.2
+            self.current_params['ue'][physical_ue_id]['priority_weight'] = np.clip(
+                self.current_params['ue'][physical_ue_id]['priority_weight'] + delta_prio, 0.0, 10.0
+            )
+            
+            rc_actions['ue'].append({
+                'ue_id': physical_ue_id,
+                'priority_weight': float(self.current_params['ue'][physical_ue_id]['priority_weight'])
             })
             
         return rc_actions
@@ -1311,12 +1187,6 @@ class ORANns3Env(gym.Env):
     def close(self):
         """Cleanup ns-3 simulation"""
         self.ns3.stop_simulation()
-        
-        if hasattr(self, '_reward_log_file') and self._reward_log_file:
-            try:
-                self._reward_log_file.close()
-            except:
-                pass
 
 
 # ============================================================================

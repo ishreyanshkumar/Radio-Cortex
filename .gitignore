@@ -14,6 +14,7 @@ training.log
 kafka.log
 zookeeper.log
 action_logs.jsonl
+logs/
 
 # ns-3 and Kafka dependencies (Large folders/archives)
 ns-3-allinone/
