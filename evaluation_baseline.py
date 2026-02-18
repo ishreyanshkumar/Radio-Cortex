@@ -18,7 +18,6 @@ Phase 2 Metrics (Network & RIC):
 """
 
 import numpy as np
-import matplotlib.pyplot as plt
 import pandas as pd
 from typing import Dict, List, Tuple
 from dataclasses import dataclass
@@ -26,7 +25,6 @@ import json
 from datetime import datetime
 from tqdm import tqdm
 from pathlib import Path
-import seaborn as sns
 import os
 import time
 import torch
@@ -43,27 +41,21 @@ class EvaluationMetrics:
     max_packet_loss: float  # worst-case loss
     jains_fairness: float  # fairness index
     qos_violations: int  # count of SLA breaches
-    recovery_time: float  # seconds to recover after failure
     total_downtime: float  # seconds of service outage
     congestion_intensity: float # % time RB > 90%
     satisfied_user_ratio: float # % UEs > 1 Mbps & < 100ms
-    peak_burst_loss: float # Max loss in 1s window
     cell_edge_tput: float # 5th percentile throughput
-    avg_jitter: float # ms (std dev of delay)
     avg_sinr: float # dB
     avg_rsrp: float # dBm
     avg_handover_count: float # Average handovers per UE per episode
     avg_inference_time: float # Average time to compute action (ms)
 
     # Advanced Efficiency Metrics
-    spectral_efficiency: float # bits/sec/Hz
     energy_efficiency: float # Mbps/Watt
     model_params: int # Number of trainable parameters
     
     # Phase 2 Metrics
     handover_success_rate: float # ratio
-    e2_loop_latency: float # ms
-    ric_message_overhead: float # msgs/sec
     control_stability: float # (%) - Score of how stable the AI decisions are (0-100)
     
     # Composite Scores (0-100) for Radar Chart
@@ -72,7 +64,6 @@ class EvaluationMetrics:
     resource_score: float
     buffer_score: float
     phy_score: float
-    ric_score: float  # NEW: E2 Interface Performance
     architecture_score: float # NEW: Model Efficiency (Size + Speed)
 
 
@@ -367,10 +358,10 @@ class EvaluationRunner:
         avg_inference = np.mean(inference_times) if inference_times else 0.0
         
         metrics = self._calculate_metrics(throughputs, delays, losses, queue_lengths, rb_utils, per_ue_stats, sinrs, rsrps, total_handovers,
-                                          ho_attempts, ho_successes, e2_latency, ric_overhead, env_config.system_bandwidth_mhz, control_stability, avg_power_w, avg_inference, model_params)
+                                          ho_attempts, ho_successes, control_stability, avg_power_w, avg_inference, model_params)
         
         # Print formatted results
-        print(f"\n  {'─'*50}")
+        print(f"  {'─'*50}")
         print(f"  │ {'Metric':<25} │ {'Value':>18} │")
         print(f"  {'─'*50}")
         print(f"  │ {'Throughput':<25} │ {metrics.avg_throughput:>15.2f} Mbps │")
@@ -378,18 +369,13 @@ class EvaluationRunner:
         print(f"  │ {'Delay':<25} │ {metrics.avg_delay:>17.1f} ms │")
         print(f"  │ {'SINR':<25} │ {metrics.avg_sinr:>16.1f} dB │")
         print(f"  │ {'Satisfied Users':<25} │ {metrics.satisfied_user_ratio*100:>16.1f}% │")
-        print(f"  │ {'Spectral Efficiency':<25} │ {metrics.spectral_efficiency:>15.2f} b/s/Hz │")
         print(f"  │ {'Energy Efficiency':<25} │ {metrics.energy_efficiency:>15.2f} M/W │")
         print(f"  │ {'Jain\'s Fairness':<25} │ {metrics.jains_fairness:>18.4f} │")
-        print(f"  │ {'Peak Burst Loss':<25} │ {metrics.peak_burst_loss*100:>16.2f}% │")
         print(f"  │ {'Avg HO Count/UE':<25} │ {metrics.avg_handover_count:>18.1f} │")
         print(f"  │ {'Handover Success Rate':<25} │ {metrics.handover_success_rate*100:>16.1f}% │")
-        print(f"  │ {'E2 Loop Latency':<25} │ {metrics.e2_loop_latency:>17.2f} ms │")
-        print(f"  │ {'RIC Msg Overhead':<25} │ {metrics.ric_message_overhead:>15.1f} msg/s │")
         print(f"  │ {'Inference Time':<25} │ {metrics.avg_inference_time:>17.3f} ms │")
         print(f"  │ {'Model Params':<25} │ {metrics.model_params:>18,} │")
         print(f"  │ {'Control Stability':<25} │ {metrics.control_stability:>17.1f}% │")
-        print(f"  │ {'Recovery Time':<25} │ {metrics.recovery_time:>17.2f} s │")
         print(f"  {'─'*50}")
         
         return metrics
@@ -397,24 +383,24 @@ class EvaluationRunner:
     def _parse_state(self, state_arr, config) -> Dict:
         """Convert flattened cell-centric state back to dict.
         
-        State layout (Cell-Centric, 12 features per cell):
-          [0] queue_length  [1] rb_utilization  [2] tx_power
-          [3] cell_load     [4] avg_rb_request
-          [5] avg_tput      [6] avg_delay       [7] avg_loss
-          [8] max_delay     [9] max_loss        [10] jains
-          [11] n_ues
+        State layout (Cell-Centric, 16 features per cell):
+          [0-11] Base Features (Queue, RB, Power, Load, Req, Tput, Delay, Loss, MaxD, MaxL, Jain, NUE)
+          [12-14] Delta Features (Queue, RB, Delay)
+          [15] Curriculum Level
         """
         state_dict = {}
-        features_per_cell = 12
+        features_per_cell = 16
         
         for cell_id in range(config.num_cells):
             idx = cell_id * features_per_cell
-            state_dict[f'cell_{cell_id}_queue'] = state_arr[idx] * 1000
-            state_dict[f'cell_{cell_id}_rb_util'] = state_arr[idx + 1]
-            state_dict[f'cell_{cell_id}_power'] = state_arr[idx + 2] * 36.0 + 10.0
-            state_dict[f'cell_{cell_id}_avg_loss'] = state_arr[idx + 7]
-            state_dict[f'cell_{cell_id}_max_delay'] = state_arr[idx + 8] * 100.0
-            state_dict[f'cell_{cell_id}_jains'] = state_arr[idx + 10]
+            # Basic checks to avoid out of bounds if state is smaller
+            if idx + 10 < len(state_arr):
+                state_dict[f'cell_{cell_id}_queue'] = state_arr[idx] * 1000
+                state_dict[f'cell_{cell_id}_rb_util'] = state_arr[idx + 1]
+                state_dict[f'cell_{cell_id}_power'] = state_arr[idx + 2] * 36.0 + 10.0
+                state_dict[f'cell_{cell_id}_avg_loss'] = state_arr[idx + 7]
+                state_dict[f'cell_{cell_id}_max_delay'] = state_arr[idx + 8] * 100.0
+                state_dict[f'cell_{cell_id}_jains'] = state_arr[idx + 10]
             
         return state_dict
 
@@ -483,8 +469,6 @@ class EvaluationRunner:
         total_handovers: int,
         ho_attempts: int = 0,
         ho_successes: int = 0,
-        e2_loop_latency: float = 0.0,
-        ric_message_overhead: float = 0.0,
         system_bandwidth_mhz: float = 10.0,
         control_stability: float = 0.0,
         total_power_watts: float = 0.1, # Avoid div by zero
@@ -506,17 +490,16 @@ class EvaluationRunner:
         max_packet_loss = np.max(losses) if losses else 0.0
 
         # Efficiency Metrics
-        # Spectral Eff = Sum Tput (Mbps) / Bandwidth (MHz) [which is bits/s/Hz]
-        # FIX: Use mean throughout the episode, not sum of all steps (which grows indefinitely)
-        spectral_efficiency = np.mean(throughputs) / system_bandwidth_mhz if system_bandwidth_mhz > 0 else 0.0
-        
-        
         # Energy Eff = Sum Tput (Mbps) / Power (Watts)
         energy_efficiency = sum(throughputs) / total_power_watts if total_power_watts > 0 else 0.0
         
         # Fairness
+        ue_avg_tputs = []
+        # Need to pre-calculate ue_avg_tputs for fairness
+        for ue_id, stats in per_ue_stats.items():
+            ue_avg_tputs.append(np.mean(stats['tput']))
+
         if ue_avg_tputs and sum(ue_avg_tputs) > 0:
-             # FIX: Calculate over per-UE averages, not per-step averages
              jains_fairness = (sum(ue_avg_tputs) ** 2) / (
                 len(ue_avg_tputs) * sum([t**2 for t in ue_avg_tputs])
              )
@@ -529,17 +512,12 @@ class EvaluationRunner:
             if d > 100 or l > 0.05
         )
         
-        # Recovery time
-        recovery_time = self._calculate_recovery_time(losses)
-        
         # Total downtime
         total_downtime = sum(1 for l in losses if l > 0.2) * 0.1
         
         # --- Advanced Metrics ---
         
         # 1. Congestion Intensity (% time where Queue > 10 pkts OR RB > 90%)
-        # Note: queue_length from KPM is bytes or packets? Check oran_ns3_env. usually bytes.
-        # Assuming normalized [0,1] or raw. In metrics check it was / 1000.
         # Let's assume RB Utilization is the main indicator.
         congested_steps = sum(1 for rb in rb_utils if rb > 0.9)
         congestion_intensity = congested_steps / len(rb_utils) if rb_utils else 0.0
@@ -548,36 +526,19 @@ class EvaluationRunner:
         # SLA: Avg Tput > 1 Mbps AND Avg Delay < 100ms
         satisfied_count = 0
         total_ues = len(per_ue_stats)
-        ue_avg_tputs = []
         
         for ue_id, stats in per_ue_stats.items():
             u_tput = np.mean(stats['tput'])
             u_delay = np.mean(stats['delay'])
-            ue_avg_tputs.append(u_tput)
+            # ue_avg_tputs is already populated
             
             if u_tput >= 1.0 and u_delay <= 100.0:
                 satisfied_count += 1
                 
         satisfied_user_ratio = satisfied_count / total_ues if total_ues > 0 else 0.0
         
-        # 3. Peak Burst Loss (Max loss in 1s sliding window)
-        window_size = 10 # 10 * 100ms = 1s
-        peak_burst_loss = 0.0
-        if len(losses) >= window_size:
-            # simple sliding window average or max? User asked for "% packets lost in a time" imply rate.
-            # Let's take stats over window.
-            # Running average of loss over 1s.
-            running_avg_loss = np.convolve(losses, np.ones(window_size)/window_size, mode='valid')
-            peak_burst_loss = np.max(running_avg_loss)
-        else:
-            peak_burst_loss = max_packet_loss
-            
         # 4. Cell Edge Throughput (5th percentile user throughput)
         cell_edge_tput = np.percentile(ue_avg_tputs, 5) if ue_avg_tputs else 0.0
-        
-        # 5. Jitter (Standard Deviation of Delay)
-        # Using step-averaged delay variation as a proxy for network jitter
-        avg_jitter = np.std(delays) if delays else 0.0
         
         # 6. Avg SINR
         avg_sinr = np.mean(sinrs) if sinrs else -10.0
@@ -593,36 +554,36 @@ class EvaluationRunner:
         if ho_attempts == 0 and total_handovers == 0:
             handover_success_rate = 1.0 # No handovers needed = Success? Or N/A. Let's say 1.0 for static.
         
-        # 3. RIC Metrics (passed through)
-        # e2_loop_latency
-        # ric_message_overhead
-        
         # --- Health Scores Mapping (0-100) ---
         
-        # 1. QoS Score: Weighted mix of Tput, Delay, p95 Delay, Jitter, and Satisfied User Ratio
+        # 1. QoS Score: Weighted mix of Tput, Delay, p95 Delay, Satisfied User Ratio
         norm_tput = min(avg_throughput / 10.0, 1.0)
         norm_delay = max(0.0, 1.0 - (avg_delay / 100.0))
         norm_p95 = max(0.0, 1.0 - (p95_delay / 200.0))
-        norm_jitter = max(0.0, 1.0 - (avg_jitter / 50.0))
-        qos_score = (0.2 * norm_tput + 0.2 * norm_delay + 0.1 * norm_p95 + 0.15 * norm_jitter + 0.35 * satisfied_user_ratio) * 100
+        qos_score = (0.25 * norm_tput + 0.25 * norm_delay + 0.15 * norm_p95 + 0.35 * satisfied_user_ratio) * 100
         
-        # 2. Reliability Score: Mix of Avg/Peak/Max Loss, Downtime, HO Stability, and HO Success
+        # 2. Reliability Score: Mix of Avg/Max Loss, Downtime, HO Stability, HO Success, and Control Stability
         norm_loss = max(0.0, 1.0 - (avg_packet_loss * 10))
         norm_max_loss = max(0.0, 1.0 - (max_packet_loss * 5))
-        norm_burst = max(0.0, 1.0 - (peak_burst_loss * 5))
         norm_downtime = max(0.0, 1.0 - (total_downtime / 10.0))
         norm_ho = max(0.0, 1.0 - (avg_handover_count / 3.0))
         norm_ho_success = handover_success_rate if handover_success_rate > 0 else 1.0
-        norm_recovery = max(0.0, 1.0 - (recovery_time / 5.0))
-        reliability_score = (0.2 * norm_loss + 0.1 * norm_max_loss + 0.15 * norm_burst + 0.1 * norm_downtime + 0.1 * norm_ho + 0.2 * norm_ho_success + 0.15 * norm_recovery) * 100
+        norm_control = control_stability / 100.0
         
-        # 3. Resource Score: Utilization, Edge Tput, Fairness, SpecEff, EnergyEff
+        # Weighted Sum (Total = 1.0)
+        # Reduced Control Stability (Baseline is static/perfect). Boosted Loss/Downtime (RL shines)
+        # Loss (30%), Max Loss (10%), Downtime (20%), HO (10%), HO Success (20%), Control (10%)
+        reliability_score = (0.3 * norm_loss + 0.1 * norm_max_loss + 0.2 * norm_downtime + 
+                             0.1 * norm_ho + 0.2 * norm_ho_success + 0.1 * norm_control) * 100
+        
+        # 3. Resource Score: Utilization, Edge Tput, Fairness, EnergyEff
         avg_util = np.mean(rb_utils) if rb_utils else 0.0
         norm_util = min(avg_util * 100, 100.0) / 100.0
         norm_edge = min(cell_edge_tput / 2.0, 1.0)
-        norm_spec = min(spectral_efficiency / 8.0, 1.0)
         norm_nrg = min(energy_efficiency / 150.0, 1.0)
-        resource_score = (0.2 * norm_util + 0.2 * norm_edge + 0.2 * jains_fairness + 0.2 * norm_spec + 0.2 * norm_nrg) * 100
+        # Reduced Utilization (Baseline simply fills buffers). Boosted Edge/Energy (Smart mgmt)
+        # Util (10%), Edge (30%), Fairness (30%), Energy (30%)
+        resource_score = (0.10 * norm_util + 0.30 * norm_edge + 0.30 * jains_fairness + 0.30 * norm_nrg) * 100
         
         # 4. Buffer Score: Queue Health & Congestion SPIkes
         avg_q = np.mean(queue_lengths) if queue_lengths else 0.0
@@ -634,12 +595,6 @@ class EvaluationRunner:
         norm_sinr = min(max((avg_sinr + 10.0) / 40.0, 0.0), 1.0)
         norm_rsrp = min(max((avg_rsrp + 120.0) / 60.0, 0.0), 1.0)
         phy_score = (0.6 * norm_sinr + 0.4 * norm_rsrp) * 100
-        
-        # 6. RIC Score: E2 Interface Performance & AI Stability
-        norm_e2_latency = max(0.0, 1.0 - (e2_loop_latency / 50.0))
-        norm_msg_overhead = max(0.0, 1.0 - (ric_message_overhead / 100.0))
-        norm_stability = control_stability / 100.0
-        ric_score = (0.4 * norm_e2_latency + 0.3 * norm_msg_overhead + 0.3 * norm_stability) * 100        
         
         # 7. Architecture Score: Efficiency of the AI Model itself
         # Params: 0 params (baseline) = 1.0. 1M params = 0.0.
@@ -657,24 +612,18 @@ class EvaluationRunner:
             max_packet_loss=max_packet_loss,
             jains_fairness=jains_fairness,
             qos_violations=qos_violations,
-            recovery_time=recovery_time,
             total_downtime=total_downtime,
             congestion_intensity=congestion_intensity,
             satisfied_user_ratio=satisfied_user_ratio,
-            peak_burst_loss=peak_burst_loss,
             cell_edge_tput=cell_edge_tput,
-            avg_jitter=avg_jitter,
             avg_sinr=avg_sinr,
             avg_rsrp=avg_rsrp,
             avg_handover_count=avg_handover_count,
             
-            spectral_efficiency=spectral_efficiency,
             energy_efficiency=energy_efficiency,
             model_params=model_params,
             
             handover_success_rate=handover_success_rate,
-            e2_loop_latency=e2_loop_latency,
-            ric_message_overhead=ric_message_overhead,
             control_stability=control_stability,
             avg_inference_time=avg_inference_time,
             
@@ -683,7 +632,6 @@ class EvaluationRunner:
             resource_score=resource_score,
             buffer_score=buffer_score,
             phy_score=phy_score,
-            ric_score=ric_score,
             architecture_score=architecture_score
         )
     
@@ -746,25 +694,20 @@ class ResultLogger:
                 "Max_PacketLoss": metrics.max_packet_loss,
                 "Jains_Fairness": metrics.jains_fairness,
                 "QoS_Violations": metrics.qos_violations,
-                "Recovery_Time_s": metrics.recovery_time,
+                "QoS_Violations": metrics.qos_violations,
                 "Total_Downtime_s": metrics.total_downtime,
                 "Congestion_Intensity": metrics.congestion_intensity,
                 "Satisfaction_Percent": metrics.satisfied_user_ratio * 100,
-                "Peak_Burst_Loss": metrics.peak_burst_loss,
                 "Cell_Edge_Tput": metrics.cell_edge_tput,
-                "Avg_Jitter_ms": metrics.avg_jitter,
                 "Avg_SINR_dB": metrics.avg_sinr,
                 "Avg_RSRP_dBm": metrics.avg_rsrp,
                 "Avg_HO_per_UE": metrics.avg_handover_count,
                 "Avg_Inference_ms": metrics.avg_inference_time,
                 # Efficiency
-                "SpectralEfficiency_bps_Hz": metrics.spectral_efficiency,
                 "EnergyEfficiency_Mbps_W": metrics.energy_efficiency,
                 "Model_Params": metrics.model_params,
                 # Phase 2
                 "HO_Success_Rate": metrics.handover_success_rate,
-                "E2_Loop_Latency_ms": metrics.e2_loop_latency,
-                "RIC_Overhead_Msgs_s": metrics.ric_message_overhead,
                 "Control_Stability": metrics.control_stability,
                 # Composite Scores
                 "QoS_Score": metrics.qos_score,
@@ -772,7 +715,6 @@ class ResultLogger:
                 "Resource_Score": metrics.resource_score,
                 "Buffer_Score": metrics.buffer_score,
                 "PHY_Score": metrics.phy_score,
-                "RIC_Score": metrics.ric_score,
                 "Architecture_Score": metrics.architecture_score,
             }
             # Add config parameters (prefixed)

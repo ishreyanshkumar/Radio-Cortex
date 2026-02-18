@@ -11,7 +11,7 @@ Radio-Cortex pushes the boundary of O-RAN intelligence by solving three fundamen
 
 2.  **Curriculum Reward Engine (Multi-Objective Safety)**:
     -   *Problem*: Network optimization is a zero-sum game (e.g., High Throughput vs. Low Energy). Naive RL agents often "reward hack" or receive persistently negative rewards, causing learning collapse.
-     -   *Solution*: We implemented a **3-Level Curriculum Reward Engine** with *Survival Bias* and **gated promotion** (minimum 100 steps per level + 200-step history window). **Level 0 (Bootstrap)**: Throughput + Queue + SE reward + a constant `+1.0` bias (guarantees positive rewards). **Level 1 (Quality)**: Adds Delay and Loss penalties at ≥60% UE satisfaction. **Level 2 (Reliability)**: Adds Energy and Load penalties at ≥85% satisfaction. This ensures stable, progressive learning.
+     -   *Solution*: We implemented a **3-Level Curriculum Reward Engine** with *Survival Bias* and **gated promotion** (minimum 50 steps per level + 50-step history window). **Level 0 (Bootstrap)**: Throughput + Packet Loss (Survival) + a constant `+1.0` bias. **Level 1 (Quality)**: Adds Delay and Fairness rewards. **Level 2 (Efficiency)**: Adds Energy, Load Balancing, and Handover optimization. This ensures stable, progressive learning.
 
 3.  **Cell-Centric Action Space (15-Dim Differential + Absolute Control)**:
     -   *Problem*: RL agents often output erratic "bang-bang" control actions and large per-UE action spaces cause slow convergence.
@@ -220,7 +220,7 @@ Radio-Cortex supports 12 diverse scenarios that stress-test different aspects of
 | `mixed_reality` | Slicing | Concurrent VR (Latent) and TCP (Bulk) users. | Slice Isolation |
 | `urban_canyon` | PHY | Sudden signal blockage behind buildings. | Recovery Time |
 | `iot_tsunami` | Scale | Massive device count (100+ UEs, small packets). | Scheduling Delay |
-| `spectrum_crunch` | Resources | Multi-band management (Carrier Aggregation). | Spectral Efficiency |
+| `spectrum_crunch` | Resources | Multi-band management (Carrier Aggregation). | Aggregate Throughput |
 
 
 ### 🚀 CLI Training Reference
@@ -309,21 +309,16 @@ python3 -m http.server 8080
 | | Jitter | Standard deviation of delay (variability). |
 | | Satisfied User Ratio | % of users meeting SLA (Tput > 1Mbps, Delay < 100ms). |
 | **Reliability** | Packet Loss Ratio | Ratio of lost packets to total sent. |
-| | Peak Burst Loss | Max loss in any 1s window (instability indicator). |
-| | Recovery Time | Time to return to <2% loss after failure. |
 | | Handover Success Rate | Ratio of successful vs attempted handovers. |
 | **Resource Efficiency** | Spectrum Utilization | Average usage of Resource Blocks (RBs). |
 | | Congestion Intensity | % of time network utilization > 90%. |
 | | Cell Edge Throughput | 5th percentile user throughput (fairness proxy). |
 | | Jain's Fairness | Measure of resource distribution equality (0-1). |
-| | Spectral Efficiency | System Throughput / Bandwidth (bits/sec/Hz). |
 | | Energy Efficiency | System Throughput / Total Power (Mbps/Watt). |
 | **PHY / Wireless** | Average SINR | Signal-to-Interference-plus-Noise Ratio (dB). |
 | | Average RSRP | Reference Signal Received Power (Signal Strength, dBm). |
 | **Mobility** | Handover Count | Number of cell switches per UE. |
-| **RIC / E2 Interface** | E2 Loop Latency | Control loop response time (ms). |
-| | RIC Message Overhead | E2 messages per second. |
-| | Control Stability | AI decision consistency score (0-100). |
+| **RIC / E2 Interface** | Control Stability | AI decision consistency score (0-100). |
 
 ### 🧠 Curriculum Reward Engine
 
@@ -342,8 +337,7 @@ Computed per-UE and averaged across the network to ensure fairness.
 
 *   **Throughput ($\alpha$-fairness):** $r_{tput} = W_{tput} \cdot \log(1 + T/T_{max})$
 *   **Delay (Two-Tier, Level ≥ 1):** Linear penalty + Quadratic SLA Barrier (both gated by curriculum)
-*   **Packet Loss (IQX, Level ≥ 1):** $r_{loss} = -W_{loss} \cdot (\exp(\beta \cdot L) - 1)$
-*   **Spectral Efficiency:** $r_{se} = W_{se} \cdot \log_2(1 + SINR)$
+*   **Packet Loss (Level ≥ 1):** $r_{loss} = -W_{loss} \cdot (\exp(\beta \cdot L) - 1)$
 
 #### 🏗️ 2. Cell-Level Utility (Network Efficiency)
 

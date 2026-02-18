@@ -82,20 +82,20 @@ class PPOTrainer:
     """
     
     def __init__(
-        self,
-        env: gym.Env,
+        self,        env: gym.Env,
         hidden_dim: int = 256,
-        lr: float = 3e-4,
+        lr: float = 1e-4,
         gamma: float = 0.99,
         gae_lambda: float = 0.95,
-        clip_epsilon: float = 0.2,
+        clip_epsilon: float = 0.15, # Tightened from 0.2 for stability with more epochs
         vf_coef: float = 0.5,
-        ent_coef: float = 0.001,
+        ent_coef: float = 0.005,
         max_grad_norm: float = 0.5,
         device: Optional[str] = None,
         checkpoint_dir: str = 'models',
         checkpoint_interval: int = 5,
-        model_type: str = 'bdh'
+        model_type: str = 'bdh',
+        lr_scheduler_gamma: float = 0.999 # Default decay per update
     ):
         self.hyperparams = {
             'hidden_dim': hidden_dim,
@@ -106,7 +106,8 @@ class PPOTrainer:
             'vf_coef': vf_coef,
             'ent_coef': ent_coef,
             'max_grad_norm': max_grad_norm,
-            'model_type': model_type
+            'model_type': model_type,
+            'lr_scheduler_gamma': lr_scheduler_gamma
         }
         self.env = env
         if device is None:
@@ -151,6 +152,8 @@ class PPOTrainer:
             self.policy = ActorCritic(state_dim, action_dim, hidden_dim).to(device)
             
         self.optimizer = torch.optim.Adam(self.policy.parameters(), lr=lr)
+        # Decay LR by gamma every step (approximating 0.999 per update)
+        self.scheduler = torch.optim.lr_scheduler.ExponentialLR(self.optimizer, gamma=lr_scheduler_gamma)
         
         # Mixed Precision (AMP) support - targeting bfloat16 for stability on 16GB cards
         self.enable_amp = device == 'cuda'
@@ -444,8 +447,8 @@ class PPOTrainer:
             'advantages': advantages.flatten(),
         }
     
-    def update_policy(self, rollout: Dict, num_epochs: int = 5, batch_size: int = 64):
-        """Update policy using PPO objective"""
+    def update_policy(self, rollout: Dict, num_epochs: int = 20, batch_size: int = 64):
+        """Update policy using PPO objective - Optimized for sample efficiency"""
         states = rollout['states'].to(self.device)
         actions = rollout['actions'].to(self.device)
         old_log_probs = rollout['log_probs'].to(self.device)
@@ -503,6 +506,9 @@ class PPOTrainer:
                 nn.utils.clip_grad_norm_(self.policy.parameters(), self.max_grad_norm)
                 self.scaler.step(self.optimizer)
                 self.scaler.update()
+                
+        # Update learning rate
+        self.scheduler.step()
         
         # Calculate Explained Variance in mini-batches to avoid OOM
         with torch.no_grad():
@@ -536,7 +542,7 @@ class PPOTrainer:
         high = self.env.action_space.high
         return low + (action + 1.0) * 0.5 * (high - low)
     
-    def train(self, total_timesteps: int, rollout_steps: int = 20, log_interval: int = 1, batch_size: int = 64, checkpoint_interval: int = None):
+    def train(self, total_timesteps: int, rollout_steps: int = 20, log_interval: int = 1, batch_size: int = 64, checkpoint_interval: int = None, num_epochs: int = 20):
         """Main training loop
         
         Args:
@@ -697,6 +703,7 @@ class PPOTrainer:
             table.add_column("Value Loss", justify="center")
             table.add_column("KL", justify="center")         # New: KL Divergence
             table.add_column("Entropy", justify="center")
+            table.add_column("LR", justify="center")
             
             if current_metrics:
                 # Color code trend and expl variance
@@ -716,7 +723,8 @@ class PPOTrainer:
                     f"{current_metrics.get('policy_loss', 0.0):.4f}",
                     f"{current_metrics.get('value_loss', 0.0):.4f}",
                     f"{current_metrics.get('approx_kl', 0.0):.4f}",
-                    f"{current_metrics.get('entropy', 0.0):.4f}"
+                    f"{current_metrics.get('entropy', 0.0):.4f}",
+                    f"{self.scheduler.get_last_lr()[0]:.2e}" # Log LR
                 )
             else:
                 table.add_row("-", "0", "0.000", "→", "0.000", "0.0000", "0.0000", "0.0000", "0.0000")
@@ -840,7 +848,7 @@ class PPOTrainer:
                 rollout = self.collect_rollout(rollout_steps, progress=progress, task_id=main_task, on_step=on_step_callback)
             
                 # Update policy
-                metrics = self.update_policy(rollout, batch_size=batch_size)
+                metrics = self.update_policy(rollout, batch_size=batch_size, num_epochs=num_epochs)
                 
                 # Update Dashboard Stats (Final for this update)
                 avg_reward = rollout['returns'].mean().item()
@@ -911,94 +919,7 @@ class PPOTrainer:
                     self._rotate_checkpoints()
         
         print("\n✓ Training complete")
-        self._plot_convergence()
-    
-    def _plot_convergence(self):
-        """Auto-generate reward convergence graph from training_log.jsonl."""
-        try:
-            import matplotlib
-            matplotlib.use('Agg')
-            import matplotlib.pyplot as plt
-            import numpy as _np
-        except ImportError:
-            print("  ⚠️  matplotlib not installed, skipping convergence plot")
-            return
 
-        log_path = os.path.join(self.telemetry_dir, 'training_log.jsonl')
-        if not os.path.exists(log_path):
-            print("  ⚠️  No training_log.jsonl found, skipping convergence plot")
-            return
-
-        # Parse the log
-        updates, rewards, policy_losses, value_losses = [], [], [], []
-        with open(log_path) as f:
-            for line in f:
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    entry = json.loads(line)
-                    updates.append(entry.get('update', 0))
-                    rewards.append(entry.get('reward', 0.0))
-                    policy_losses.append(entry.get('policy_loss', 0.0))
-                    value_losses.append(entry.get('value_loss', 0.0))
-                except (json.JSONDecodeError, KeyError):
-                    continue
-
-        if len(rewards) < 2:
-            print("  ⚠️  Not enough data points for convergence plot")
-            return
-
-        # Smoothing helper
-        def smooth(vals, window=5):
-            if len(vals) < window:
-                return vals
-            kernel = _np.ones(window) / window
-            return _np.convolve(vals, kernel, mode='valid').tolist()
-
-        model_name = self.hyperparams.get('model_type', 'unknown')
-        out_dir = 'train_results'
-        os.makedirs(out_dir, exist_ok=True)
-
-        fig, axes = plt.subplots(1, 3, figsize=(18, 5))
-        fig.suptitle(f'Training Convergence — {model_name.upper()}',
-                     fontsize=14, fontweight='bold')
-
-        # ── Reward ──
-        ax = axes[0]
-        ax.plot(updates, rewards, alpha=0.3, color='#4ECDC4', linewidth=0.8, label='Raw')
-        smoothed = smooth(rewards)
-        ax.plot(updates[:len(smoothed)], smoothed, color='#FF6B35', linewidth=2, label='Smoothed')
-        ax.axhline(y=0, color='gray', linestyle=':', alpha=0.5)
-        ax.set_xlabel('Update')
-        ax.set_ylabel('Avg Reward')
-        ax.set_title('Reward Convergence')
-        ax.legend(fontsize=8)
-        ax.grid(True, alpha=0.3)
-
-        # ── Policy Loss ──
-        ax = axes[1]
-        smoothed_pl = smooth(policy_losses)
-        ax.plot(updates[:len(smoothed_pl)], smoothed_pl, color='#45B7D1', linewidth=2)
-        ax.set_xlabel('Update')
-        ax.set_ylabel('Policy Loss')
-        ax.set_title('Policy Loss')
-        ax.grid(True, alpha=0.3)
-
-        # ── Value Loss ──
-        ax = axes[2]
-        smoothed_vl = smooth(value_losses)
-        ax.plot(updates[:len(smoothed_vl)], smoothed_vl, color='#DDA0DD', linewidth=2)
-        ax.set_xlabel('Update')
-        ax.set_ylabel('Value Loss')
-        ax.set_title('Value Loss')
-        ax.grid(True, alpha=0.3)
-
-        plt.tight_layout(rect=[0, 0, 1, 0.93])
-        save_path = os.path.join(out_dir, f'convergence_{model_name}.png')
-        plt.savefig(save_path, dpi=150, bbox_inches='tight')
-        plt.close()
-        print(f"📊 Convergence plot saved to {save_path}")
 
     def save(self, path: str):
         """Save trained model"""

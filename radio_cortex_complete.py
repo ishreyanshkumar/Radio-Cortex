@@ -142,7 +142,9 @@ def train_radio_cortex(
     device: Optional[str] = None,
     checkpoint_interval: int = 5,
     n_envs: int = 12,
-    model_type: str = 'bdh'
+    model_type: str = 'bdh',
+    num_epochs: int = 20,
+    lr_scheduler_gamma: float = 0.999
 ):
     """
     Train Radio-Cortex agent
@@ -197,7 +199,8 @@ def train_radio_cortex(
         max_grad_norm=max_grad_norm,
         device=device,
         checkpoint_interval=checkpoint_interval,
-        model_type=model_type
+        model_type=model_type,
+        lr_scheduler_gamma=lr_scheduler_gamma
     )
 
     # --- ADDED: Resumption Logic ---
@@ -215,7 +218,8 @@ def train_radio_cortex(
         total_timesteps=total_timesteps,
         rollout_steps=rollout_steps,
         log_interval=log_interval,
-        batch_size=batch_size
+        batch_size=batch_size,
+        num_epochs=num_epochs
     )
     
     # Save
@@ -603,7 +607,8 @@ def evaluate_single_scenario(
                 pass
             
             # Verify if it matches current config
-            expected_state_dim = config.num_cells * 12   # Cell-centric: 12 features per cell
+            # Verify if it matches current config
+            expected_state_dim = config.num_cells * 16   # Cell-centric: 16 features per cell (Updated)
             expected_action_dim = config.num_cells * 5    # 5 actions per cell
             
             # Determine device: Default to CPU for evaluation to stay within 16GB limit.
@@ -637,7 +642,7 @@ def evaluate_single_scenario(
                 action_dim = expected_action_dim
                 if stored_state_dim > 0 and stored_action_dim > 0:
                     if stored_action_dim != expected_action_dim or stored_state_dim != expected_state_dim:
-                        # Cell-centric: state = num_cells * 12, action = num_cells * 5
+                        # Cell-centric: state = num_cells * 16, action = num_cells * 5
                         detected_cells = stored_action_dim // 5
                         print(f"      [WARN] Dimension mismatch: stored cells={detected_cells}, config cells={config.num_cells}")
                         state_dim = stored_state_dim
@@ -755,6 +760,8 @@ def main():
     hyper.add_argument('--max-grad-norm', type=float, default=0.5, help='Gradient clipping threshold')
     hyper.add_argument('--checkpoint-interval', type=int, default=5, help='Checkpoint frequency (updates)')
     hyper.add_argument('--log-interval', type=int, default=5, help='Console log frequency (updates)')
+    hyper.add_argument('--ppo-epochs', type=int, default=20, help='PPO update epochs per batch')
+    hyper.add_argument('--lr-gamma', type=float, default=0.999, help='Exponential LR decay gamma per update')
 
     args = parser.parse_args()
 
@@ -847,7 +854,9 @@ def main():
             device=args.device,
             checkpoint_interval=args.checkpoint_interval,
             n_envs=args.n_envs,
-            model_type=args.model
+            model_type=args.model,
+            num_epochs=args.ppo_epochs,
+            lr_scheduler_gamma=args.lr_gamma
         )
     
     elif args.mode == 'eval':

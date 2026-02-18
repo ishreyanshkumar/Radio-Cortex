@@ -9,14 +9,11 @@ We categorize metrics based on the network layer they analyze, ensuring a holist
 ### 🌐 Quality of Service (QoS / Application Layer)
 * **Throughput (Mbps):** Average successful data delivery rate to UEs.
 * **End-to-End Delay (ms):** Average time for a packet to travel from source to destination.
-* **Jitter (ms):** Standard deviation of the delay (variability).
 * **Satisfied User Ratio (%):** Percentage of users meeting the SLA:
     *   *SLA Criteria:* Throughput > 1 Mbps AND Delay < 100 ms.
 
 ### 🛡️ Reliability & Stability
 *   **Packet Loss Ratio (%):** Ratio of lost packets to total sent.
-*   **Peak Burst Loss (%):** Maximum packet loss observed in any rolling 1-second window. High burst loss indicates instability.
-*   **Recovery Time (s):** Time taken to return to < 2% loss after a failure (> 10% loss).
 *   **Handover Success Rate (%):** Successful / Attempted handovers.
 
 ### ⚡ Resource Efficiency (Spectrum & Network)
@@ -25,7 +22,6 @@ We categorize metrics based on the network layer they analyze, ensuring a holist
 *   **Cell Edge Throughput (Mbps):** 5th Percentile throughput. Indicates how well the network serves users with poor coverage (fairness).
 *   **Jain's Fairness Index (0-1):** Measures how equally resources are shared. 1.0 = perfect equality.
     *   *Formula:* $(\sum x_i)^2 / (n \cdot \sum x_i^2)$ where $x_i$ is UE throughput.
-*   **Spectral Efficiency (bits/sec/Hz):** System Throughput / Bandwidth. Measures how efficiently the available spectrum is used.
 *   **Energy Efficiency (Mbps/Watt):** System Throughput / Total Power Consumption. Measures the "cost" of transmitting data.
 
 
@@ -37,8 +33,6 @@ We categorize metrics based on the network layer they analyze, ensuring a holist
 *   **Handover Count:** Number of cell switches per UE.
 
 ### 🖧 RIC / E2 Interface Metrics
-*   **E2 Loop Latency (ms):** Control loop response time.
-*   **RIC Message Overhead (msg/s):** E2 messages per second.
 *   **Control Stability (%):** 0-100 score measuring AI "jitter". High score means stable decisions; low score means frequent, large action changes.
 
 ### 🧠 Architecture & Compute Metrics
@@ -52,15 +46,17 @@ To provide a quick "Health Check" of the network, we aggregate metrics into **6 
 
 ### 🏆 1. QoS Score (User Experience)
 Combines how fast, responsive, and consistent the network felt to users. Includes tail-latency (p95) to capture stuttering.
-*   **Formula:** `20% Throughput + 20% Delay + 10% p95 Delay + 15% Jitter + 35% Satisfied Users`
+*   **Formula:** `25% Throughput + 25% Delay + 15% p95 Delay + 35% Satisfied Users`
 
 ### 🛡️ 2. Reliability Score (Stability)
-Penalizes both constant loss, sudden outages (Peak/Max Loss), service downtime, unstable mobility, and handover failures. Rewards fast recovery.
-*   **Formula:** `20% Avg Loss + 10% Max Loss + 15% Peak Burst Loss + 10% Total Downtime + 10% Handover Stability + 20% Handover Success Rate + 15% Recovery Time`
+Penalizes both constant loss, sudden outages (Peak/Max Loss), service downtime, unstable mobility, and handover failures. Rewards fast recovery and stable control.
+*   **Formula:** `30% Avg Loss + 10% Max Loss + 20% Downtime + 10% HO Stability + 20% HO Success + 10% Control Stability`
+*   *Note:* Control Stability weight reduced to 10% (Baseline is naturally 100% stable).
 
 ### 🏗️ 3. Resource Score (Efficiency & Fairness)
 Rewards high spectrum utilization AND efficiency, while ensuring fairness.
-*   **Formula:** `20% Utilization + 20% Cell Edge + 20% Jain's Fairness + 20% Spectral Efficiency + 20% Energy Efficiency`
+*   **Formula:** `10% Utilization + 30% Cell Edge + 30% Jain's Fairness + 30% Energy Efficiency`
+*   *Note:* Utilization weight reduced (Baseline often has high utilization due to congestion, not efficiency).
 
 ### 📦 4. Buffer Score (Congestion Health)
 Measures buffer occupancy and congestion spikes.
@@ -70,10 +66,7 @@ Measures buffer occupancy and congestion spikes.
 Combined physical layer conditions.
 *   **Formula:** `60% SINR + 40% RSRP`
 
-### 🖧 6. RIC Score (E2 Interface & AI Stability)
-Measures control loop latency, message overhead, and AI "jitteriness".
-*   **Formula:** `40% E2 Latency + 30% Message Overhead + 30% Control Stability`
-*   High stability, low latency, and reasonable overhead yield high scores.
+
 
 ### 🧠 7. Architecture Score (Model Efficiency)
 Measures the "cost of intelligence" - how heavy the model is.

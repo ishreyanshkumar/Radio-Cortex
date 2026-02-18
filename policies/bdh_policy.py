@@ -11,6 +11,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.utils.checkpoint as checkpoint
+import numpy as np
 from typing import Optional
 
 from . import bdh as bdh_mod
@@ -28,7 +29,7 @@ class BDHPolicy(nn.Module):
         super().__init__()
 
         # --- Layout ---
-        self.cell_features = 12   # Must match env features_per_cell
+        self.cell_features = 16   # Updated: 12 base + 3 diff + 1 curriculum
         self.cell_actions = 5     # TxPower, SchedulerWeight, Hysteresis, MacDelay, MaxHarq
         self.num_cells = getattr(env_config, 'num_cells', 3) if env_config else 3
 
@@ -38,7 +39,7 @@ class BDHPolicy(nn.Module):
                 n_layer=4,
                 n_embd=256,
                 n_head=4,
-                mlp_internal_dim_multiplier=32,
+                mlp_internal_dim_multiplier=4, # Reduced from 32/128 for speed (Slim BDH)
                 vocab_size=256
             )
         else:
@@ -52,6 +53,7 @@ class BDHPolicy(nn.Module):
         # --- Cell Encoder ---
         self.cell_encoder = nn.Sequential(
             nn.Linear(self.cell_features, emb_dim),
+            nn.LayerNorm(emb_dim),
             nn.ReLU(),
             nn.Linear(emb_dim, emb_dim)
         )
@@ -62,7 +64,7 @@ class BDHPolicy(nn.Module):
             nn.ReLU(),
             nn.Linear(emb_dim, self.cell_actions)
         )
-        self.cell_logstd_head = nn.Linear(emb_dim, self.cell_actions)
+        self.cell_logstd_head = nn.Parameter(torch.zeros(1, self.num_cells, self.cell_actions)) # Learnable LogStd
 
         # --- Global Value Head ---
         self.value_head = nn.Sequential(
@@ -70,6 +72,21 @@ class BDHPolicy(nn.Module):
             nn.ReLU(),
             nn.Linear(emb_dim, 1)
         )
+        
+        self.apply(self._init_weights)
+
+    def _init_weights(self, module):
+        # Orthogonal Initialization for better PPO convergence
+        if isinstance(module, (nn.Linear, nn.Conv2d)):
+            if module.weight is not None:
+                nn.init.orthogonal_(module.weight, gain=np.sqrt(2))
+            if module.bias is not None:
+                nn.init.constant_(module.bias, 0)
+        elif isinstance(module, nn.LayerNorm):
+            if module.weight is not None:
+                nn.init.constant_(module.weight, 1)
+            if module.bias is not None:
+                nn.init.constant_(module.bias, 0)
 
     # ── Tokenization ──────────────────────────────────────────────
 
@@ -131,13 +148,17 @@ class BDHPolicy(nn.Module):
         cell_tokens = self._process_state(state)  # (B, M, D)
 
         # 2. Contextualize (cells attend to each other)
+        # Note: Reduced MLP dimension inside BDHConfig makes this step faster
         context = self._bdh_layer_stack(cell_tokens)  # (B, M, D)
 
         # 3. Decode cell actions
-        action_mean = self.cell_action_head(context)   # (B, M, 2)
-        logstd = self.cell_logstd_head(context)        # (B, M, 2)
+        action_mean = self.cell_action_head(context)   # (B, M, 5)
+        
+        # LogStd is now a learned parameter (1, M, 5), not a function of context
+        # This is standard PPO practice for continuous control (state-independent std)
+        logstd = self.cell_logstd_head.expand(B, -1, -1) # (B, M, 5)
 
-        flat_mean = action_mean.reshape(B, -1)         # (B, M*2)
+        flat_mean = action_mean.reshape(B, -1)         # (B, M*5)
         flat_logstd = logstd.reshape(B, -1)
         flat_logstd = torch.clamp(flat_logstd, -2, 1)
 

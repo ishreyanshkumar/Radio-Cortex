@@ -123,11 +123,11 @@ class RewardEngine:
         # r_se was dominating (0.3-0.8) because se_avg ≈ 3-5 bits/s/Hz
         # from typical SINR values (12-25 dB), making even W_SE=0.15
         # produce large rewards. Slashed W_SE to a tiny keep-alive only.
-        self.W_TPUT      = 8.0      # Boosted: primary learning signal
+        self.W_TPUT      = 12.0      # Boosted: primary learning signal
         self.W_DELAY_LIN = 2.0      # Boosted: make delay visible in chart (was 1.5)
         self.W_DELAY_BAR = 2.7      # Punish SLA breaches
         self.W_LOSS      = 1.0      # Core stability penalty (was 2.5, then 2.0)
-        self.W_SE        = 0.03     # SLASHED: tiny keep-alive gradient only
+        # self.W_SE removed
         self.W_ENERGY    = 0.05     # Reduced: let it use max power
         self.W_LOAD      = 1.0      # Load Balancing
         self.W_QUEUE     = 0.8      # Backpressure signal
@@ -143,36 +143,34 @@ class RewardEngine:
         self.Q_MAX     = 500.0     # Queue penalization threshold
 
         # ── Clip bounds (Stage 1 — per component) ───────────────
-        self.CLIP_TPUT   = (-0.5, 5.0)    # log(1+x) for x≥0 is ≥0, but allow small neg for numerical safety
+        self.CLIP_TPUT   = (-0.5, 50.0)   # Uncapped for high throughput (was 5.0)
         self.CLIP_DELAY  = (-50.0, 0.0)    # Delay is ALWAYS a penalty (≤0)
-        self.CLIP_LOSS   = (-5.0, 0.0)     # Loss is ALWAYS a penalty (≤0) (was -50.0, then -15.0)
-        self.CLIP_SE     = (0.0, 2.0)     # SE is ALWAYS a bonus (≥0)
+        self.CLIP_LOSS   = (-50.0, 0.0)     # Loss is ALWAYS a penalty (≤0) (was -5.0)
+        # CLIP_SE removed
         self.CLIP_ENERGY = (-2.0, 0.0)    # Energy is ALWAYS a penalty (≤0)
         self.CLIP_LOAD   = (-2.0, 0.0)    # Load imbalance is ALWAYS a penalty (≤0)
         self.CLIP_QUEUE  = (-2.0, 0.0)    # Queue congestion is ALWAYS a penalty (≤0)
         self.CLIP_SMOOTH = (-1.0, 0.0)    # Smoothing is ALWAYS a penalty (≤0)
 
         # ── Clip bounds (Stage 2 — total) ────────────────────────
-        self.CLIP_TOTAL = (-100.0, 10.0)
+        self.CLIP_TOTAL = (-100.0, 50.0) # Uncapped max (was 10.0)
 
         # ── Curriculum State ─────────────────────────────────────
-        self.level = 0              # 0=Bootstrap, 1=Quality, 2=Reliability
+        self.level = 0              # 0=Survival, 1=Quality, 2=Efficiency
         self.success_history = []   # Rolling window of success rate
-        self.HISTORY_LEN = 200      # Window size (was 50 — too easy to promote)
-        self.MIN_STEPS_PER_LEVEL = 100  # Must spend ≥100 steps before promotion
+        self.HISTORY_LEN = 50       # Window size (was 200 - faster promotion)
+        self.MIN_STEPS_PER_LEVEL = 50  # Must spend ≥50 steps before promotion
         self.steps_at_current_level = 0 # Counter for minimum-steps gate
-        self.MIN_TPUT_SUCCESS = 2.0 # Mbps required to count as "satisfied"
-        self.DEMOTION_THRESHOLD = 0.3 # If <30% users satisfied, consider demotion (was 0.2)
-        self.PROMOTION_THRESHOLD_L1 = 0.6 # 60% for Level 1 (was 0.5)
-        self.PROMOTION_THRESHOLD_L2 = 0.85 # 85% for Level 2 (was 0.8)
+        self.MIN_TPUT_SUCCESS = 1.0 # 1 Mbps required to count as "satisfied" (Standardized)
+        self.DEMOTION_THRESHOLD = 0.4 # If <40% users satisfied, consider demotion (was 0.3)
+        self.PROMOTION_THRESHOLD_L1 = 0.7 # 70% for Level 1 (was 0.6)
+        self.PROMOTION_THRESHOLD_L2 = 0.90 # 90% for Level 2 (was 0.85)
         self.current_scenario = None
 
     def _update_curriculum(self, current_success_rate: float, jains_index: float, rb_util: float):
         """
         Smart Curriculum with minimum-steps gating.
-        Must spend MIN_STEPS_PER_LEVEL at each level AND fill enough history
-        before promotion is considered. Fairness shortcut helps at L0 but 
-        still requires minimum history.
+        Must spend MIN_STEPS_PER_LEVEL at each level AND fill enough history.
         """
         self.success_history.append(current_success_rate)
         if len(self.success_history) > self.HISTORY_LEN:
@@ -180,7 +178,7 @@ class RewardEngine:
         self.steps_at_current_level += 1
         
         avg_success = sum(self.success_history) / len(self.success_history)
-        has_enough_history = len(self.success_history) >= min(self.HISTORY_LEN // 2, 100)
+        has_enough_history = len(self.success_history) >= min(self.HISTORY_LEN // 2, 25)
         has_min_steps = self.steps_at_current_level >= self.MIN_STEPS_PER_LEVEL
 
         # Gate: Must have both minimum steps AND enough history before any promotion
@@ -188,39 +186,34 @@ class RewardEngine:
             return
 
         # === PROMOTION LOGIC ===
-        # Level 0 -> 1 (Bootstrap -> Quality)
-        # Promote if:
-        # 1. 60% users are happy
-        # OR
-        # 2. Fairness is excellent (Jain's > 0.9) AND spectrum is utilized (RB Util > 0.8)
-        #    (This helps when physical throughput is limited but allocation is fair)
-        
-        can_promote_l1 = (avg_success > self.PROMOTION_THRESHOLD_L1) or \
-                         (jains_index > 0.9 and rb_util > 0.8)
+        # Level 0 -> 1 (Survival -> Quality)
+        # Promote if 70% users satisfied consistently
+        if self.level == 0:
+            if avg_success > self.PROMOTION_THRESHOLD_L1:
+                self.level = 1
+                self.steps_at_current_level = 0
+                print(f"\n🎉 PROMOTED TO LEVEL 1 (Quality): AvgSuccess={avg_success:.2f}")
+                self.success_history = self.success_history[-10:] # Reset history
 
-        if self.level == 0 and can_promote_l1:
-            self.level = 1
-            self.steps_at_current_level = 0
-            print(f"\n🎉 PROMOTED TO LEVEL 1 (Quality): AvgSuccess={avg_success:.2f}, Jains={jains_index:.2f}, Util={rb_util:.2f}")
-            self.success_history = self.success_history[-20:]  # Keep tail (don't fully reset)
-            
+        # Level 1 -> 2 (Quality -> Efficiency)
         elif self.level == 1:
-            # Level 1 -> 2 (Quality -> Reliability)
             if avg_success > self.PROMOTION_THRESHOLD_L2:
                 self.level = 2
                 self.steps_at_current_level = 0
-                print(f"\n🚀 PROMOTED TO LEVEL 2 (Reliability): AvgSuccess={avg_success:.2f}")
-                self.success_history = self.success_history[-20:]
-            elif avg_success < self.DEMOTION_THRESHOLD and jains_index < 0.7:
+                print(f"\n🚀 PROMOTED TO LEVEL 2 (Efficiency): AvgSuccess={avg_success:.2f}")
+                self.success_history = self.success_history[-10:]
+            elif avg_success < self.DEMOTION_THRESHOLD:
                 self.level = 0
                 self.steps_at_current_level = 0
-                print(f"\n📉 DEMOTED TO LEVEL 0: AvgSuccess={avg_success:.2f}, Jains={jains_index:.2f}")
-                self.success_history = self.success_history[-20:]
+                print(f"\n📉 DEMOTED TO LEVEL 0: AvgSuccess={avg_success:.2f}")
+                self.success_history = self.success_history[-10:]
+
+        # Level 2 Demotion
         elif self.level == 2 and avg_success < self.DEMOTION_THRESHOLD:
             self.level = 1
             self.steps_at_current_level = 0
             print(f"\n📉 DEMOTED TO LEVEL 1: AvgSuccess={avg_success:.2f}")
-            self.success_history = self.success_history[-20:]
+            self.success_history = self.success_history[-10:]
 
     def compute(self,
                 e2_msg: E2Message,
@@ -273,46 +266,40 @@ class RewardEngine:
         success_rate = satisfied_ues / max(len(tputs), 1)
         self._update_curriculum(success_rate, jains, avg_rb_util)
 
-        # ── Apply Curriculum Masking & Soft-Start ─────────────────
-        # Use success rate to softly introduce penalties within a level
-        avg_success = sum(self.success_history) / max(len(self.success_history), 1)
+        # ── Apply Curriculum Masking ("Focus & Promote") ──────────
+        # Level 0: Tput, Loss
+        # Level 1: + Delay, Fairness (Jain's implied via Tput log)
+        # Level 2: + Energy, Load, Handover
         
-        # Soft factor (0.0 to 1.0) based on progress within the level
-        soft_factor = min(avg_success / 0.9, 1.0) 
-
-        w_delay_eff = (self.W_DELAY_LIN * soft_factor) if self.level >= 0 else 0.0
-        w_queue_eff = (self.W_QUEUE * soft_factor)     if self.level >= 0 else 0.0  # Queue from start
-
-        w_loss_eff   = (self.W_LOSS * soft_factor)      if self.level >= 0 else 0.0  # Loss from Level 0 (ALWAYS ON)
-        w_energy_eff = (self.W_ENERGY * soft_factor)    if self.level >= 2 else 0.0
-        w_load_eff   = (self.W_LOAD * soft_factor)      if self.level >= 2 else 0.0
+        # Soft factor removed - strict gating for clear focus
         
-        # ── 1b. Delay  (Two-tier: linear everywhere + quadratic past SLA) ──
-        d_norm    = np.minimum(delays / self.D_MAX, 1.0)                    # Tier 1: 0→1 linear
-        d_barrier = np.maximum(delays - self.D_SLA, 0.0) ** 2              # Tier 2: explodes past SLA
-        r_delay = float(-np.mean(
-            w_delay_eff * d_norm
-            + w_delay_eff * (self.W_DELAY_BAR / self.D_MAX ** 2) * d_barrier
-        ))
-        r_delay = float(np.clip(r_delay, *self.CLIP_DELAY))
+        # ── 1b. Delay  ────────────────────────────────────────────
+        # Enabled at Level 1+
+        r_delay = 0.0
+        if self.level >= 1:
+             d_norm    = np.minimum(delays / self.D_MAX, 1.0)
+             d_barrier = np.maximum(delays - self.D_SLA, 0.0) ** 2
+             r_delay = float(-np.mean(
+                 self.W_DELAY_LIN * d_norm
+                 + (self.W_DELAY_BAR / self.D_MAX ** 2) * d_barrier
+             ))
+             r_delay = float(np.clip(r_delay, *self.CLIP_DELAY))
 
-        # ── 1c. Packet Loss  (IQX exponential) ─────────────────
-        #   exp(5 × 0.01)-1 = 0.05  (1% loss → mild)
-        #   exp(5 × 0.10)-1 = 0.65  (10% loss → painful)
-        #   exp(5 × 0.50)-1 = 11.2  (50% loss → catastrophic)
-        r_loss = float(-np.mean(np.exp(self.BETA_LOSS * losses) - 1.0)) * w_loss_eff
-        r_loss = float(np.clip(r_loss, *self.CLIP_LOSS))
+        # ── 1c. Packet Loss  ──────────────────────────────────────
+        # Always On (Survival Metric)
+        mean_loss = float(np.mean(losses))
+        loss_penalty_raw = mean_loss * 5.0  # Linear penalty
+        if mean_loss > 0.1:                 # Quadratic kicker
+            loss_penalty_raw += (mean_loss - 0.1) ** 2 * 20.0
 
-        # ── 1d. Spectral Efficiency  (Shannon keep-alive) ──────
-        #   Gives the AI a gradient even when no traffic is flowing,
-        #   rewarding good channel conditions.
-        sinr_linear = np.power(10.0, sinrs / 10.0)
-        se_per_ue   = np.log2(1.0 + sinr_linear)           # bits/s/Hz per UE
-        se_avg      = float(np.mean(se_per_ue))
-        r_se = se_avg * self.W_SE
-        r_se = float(np.clip(r_se, *self.CLIP_SE))
+        r_loss = -float(loss_penalty_raw) * self.W_LOSS
+        r_loss = float(np.clip(r_loss, -20.0, 0.0))
 
-        ue_score = r_tput + r_delay + r_loss + r_se
+        # ── 1d. Spectral Efficiency (REMOVED) ─────────────────────
+        # User requested removal as it's a proxy for SINR/Tput
+        # r_se = 0.0 - REMOVED
+
+        ue_score = r_tput + r_delay + r_loss
 
         # ════════════════════════════════════════════════════════
         # 2.  NETWORK UTILITY  (Efficiency & Stability)
@@ -327,35 +314,27 @@ class RewardEngine:
             rbs    = np.array([m['avg_rb_request']  for m in e2_msg.cell_metrics.values()])
             queues = np.array([m['queue_length']    for m in e2_msg.cell_metrics.values()])
 
-            # ── 2a. Energy Efficiency ───────────────────────────
-            #   Penalizes high resource block usage across cells.
-            #   50 RBs × 100 TTIs = 5000 max RBs per interval.
-            total_rbs_max = 5000.0
-            r_energy = float(-np.mean(rbs / total_rbs_max)) * w_energy_eff
-            r_energy = float(np.clip(r_energy, *self.CLIP_ENERGY))
+            # ── 2a. Energy Efficiency (Level 2+) ────────────────
+            if self.level >= 2:
+                total_rbs_max = 5000.0
+                r_energy = float(-np.mean(rbs / total_rbs_max)) * self.W_ENERGY
+                r_energy = float(np.clip(r_energy, *self.CLIP_ENERGY))
 
-            # ── 2b. Load Balancing ──────────────────────────────
-            #   Penalizes uneven load across cells.
-            #   std(loads) is high when one cell is overloaded
-            #   and another is idle → AI learns to distribute.
-            r_load = float(-np.std(loads)) * w_load_eff
-            r_load = float(np.clip(r_load, *self.CLIP_LOAD))
+                # ── 2b. Load Balancing (Level 2+) ──────────────────
+                r_load = float(-np.std(loads)) * self.W_LOAD
+                r_load = float(np.clip(r_load, *self.CLIP_LOAD))
 
-            # ── 2c. Queue Congestion  (NEW) ─────────────────────
-            #   Penalizes cells with growing queues.
-            #   This gives early warning BEFORE delay spikes —
-            #   a full queue today = high delay tomorrow.
-            q_norm = np.minimum(queues / self.Q_MAX, 1.0)
-            r_queue = float(-np.mean(q_norm)) * w_queue_eff
-            r_queue = float(np.clip(r_queue, *self.CLIP_QUEUE))
+            # ── 2c. Queue Congestion (Level 1+) ─────────────────
+            # Early warning system enabled with Delay
+            if self.level >= 1:
+                q_norm = np.minimum(queues / self.Q_MAX, 1.0)
+                r_queue = float(-np.mean(q_norm)) * self.W_QUEUE
+                r_queue = float(np.clip(r_queue, *self.CLIP_QUEUE))
 
         network_score = r_energy + r_load + r_queue
 
-        # ── 2d. Action Smoothing (normalized by range) ──────────
-        #   Penalizes the AI for jerky, oscillating actions.
-        #   Normalizing by range makes power change (10→46 dBm)
-        #   comparable to scheduler change (0→2).
-        if prev_action is not None and action is not None:
+        # ── 2d. Action Smoothing (Level 1+) ─────────────────────
+        if self.level >= 1 and prev_action is not None and action is not None:
             if action_space is not None:
                 a_range = action_space.high - action_space.low
                 a_range = np.where(a_range < 1e-6, 1.0, a_range)
@@ -387,13 +366,13 @@ class RewardEngine:
             'r_tput':   r_tput,
             'r_delay':  r_delay,
             'r_loss':   r_loss,
-            'r_se':     r_se,
+            # 'r_se':     r_se, # Removed
             'r_energy': r_energy,
             'r_load':   r_load,
             'r_queue':  r_queue,
             'r_smooth': r_smooth,
             # Diagnostic KPIs (not part of reward, but essential for logging)
-            'se_avg':       se_avg,
+            # 'se_avg':       se_avg, # Removed
             'jains':        jains,
             'p95_delay':    p95_dly,
             'avg_throughput': avg_tput,
@@ -418,8 +397,11 @@ class RewardEngine:
         """Return zeroed breakdown dict (for edge cases like empty metrics)."""
         return {
             'r_total': 0.0, 'r_tput': 0.0, 'r_delay': 0.0, 'r_loss': 0.0,
-            'r_se': 0.0, 'r_energy': 0.0, 'r_load': 0.0, 'r_queue': 0.0,
-            'r_smooth': 0.0, 'se_avg': 0.0, 'jains': 0.0, 'p95_delay': 0.0,
+            # r_se removed
+            'r_energy': 0.0, 'r_load': 0.0, 'r_queue': 0.0,
+            'r_smooth': 0.0, 
+            # se_avg removed
+            'jains': 0.0, 'p95_delay': 0.0,
             'avg_throughput': 0.0, 'avg_delay': 0.0, 'avg_loss': 0.0,
             'z_level': 0, 'z_success': 0.0,
         }
@@ -884,10 +866,12 @@ class ORANns3Env(gym.Env):
         
         # ──────────────────────────────────────────────────────────
         # Cell-Centric State Space  (Enriched Cell Tokens)
-        # Each cell gets 12 features: 5 native + 7 aggregated UE stats
-        # This is SCALE-INVARIANT — works for 20 or 2000 UEs.
+        # Each cell gets 16 features: 
+        #   12 Base Features (5 native + 7 UE agg)
+        #   + 3 Delta Features (Queue, RB, Latency)
+        #   + 1 Curriculum Level
         # ──────────────────────────────────────────────────────────
-        self.features_per_cell = 12
+        self.features_per_cell = 16
         state_dim = self.config.num_cells * self.features_per_cell
         self.observation_space = spaces.Box(
             low=-np.inf,
@@ -897,16 +881,17 @@ class ORANns3Env(gym.Env):
         )
         
         # Cell-Only Action Space: 5 Actions per cell
-        # 1. TxPower (differential)  → SetTxPower(dBm)
-        # 2. TimeToTrigger (differential) → A3Rsrp HandoverAlgorithm TTT (ms)
-        # 3. Hysteresis (absolute)   → A3Rsrp Hysteresis (dB)
-        # 4. MacDelay (absolute)     → SetMacChDelay(TTIs)
-        # 5. CqiTimer (absolute)     → CqiTimerThreshold on MAC scheduler (ms)
+        # ALL DIFFERENTIAL for stable convergence:
+        # 1. TxPower      (diff +/- 1.0 dBm)
+        # 2. TimeToTrigger(diff +/- 50 ms)
+        # 3. Hysteresis   (diff +/- 1.0 dB)
+        # 4. MacDelay     (diff +/- 1 TTI)
+        # 5. CqiTimer     (diff +/- 100 ms)
         self.actions_per_cell = 5
         action_dim = self.config.num_cells * self.actions_per_cell
 
         self.action_space = spaces.Box(
-            low=np.array([0.0] * action_dim, dtype=np.float32),
+            low=np.array([-1.0] * action_dim, dtype=np.float32), # Continuous differential
             high=np.array([1.0] * action_dim, dtype=np.float32),
             dtype=np.float32
         )
@@ -915,6 +900,9 @@ class ORANns3Env(gym.Env):
         self.current_step = 0
         self.max_steps = int(self.config.sim_time * 1000 / self.config.kpm_interval_ms)
         self.episode_metrics = []
+        
+        # Tracking for Delta Features
+        self._prev_obs_raw = None # Stores raw metrics for delta diffs
         
         # Differential Control State Tracking (Cell-only)
         self.current_params = {
@@ -932,6 +920,8 @@ class ORANns3Env(gym.Env):
         """Reset environment and start new ns-3 simulation episode"""
         start_reset = time.time()
         super().reset(seed=seed)
+        
+        self._prev_obs_raw = None # Reset delta tracking
         
         if seed is not None:
             self.config.seed = seed
@@ -1177,14 +1167,23 @@ class ORANns3Env(gym.Env):
                 cell_stats[c_id]['delays'].append(m.get('delay', 0.0))
                 cell_stats[c_id]['losses'].append(m.get('packet_loss', 0.0))
         
-        # 3. Build flat state vector: 12 features per cell
+        # 3. Build flat state vector: 16 features per cell
         state = np.zeros(self.observation_space.shape, dtype=np.float32)
         idx = 0
+        
+        # Temporary storage for current steps' raw metrics to compute deltas next step
+        current_obs_raw = {} 
         
         for c in range(self.config.num_cells):
             # --- A. Native Cell Metrics (5 features) ---
             cm = e2_msg.cell_metrics.get(c, {})
-            state[idx]   = cm.get('queue_length', 0) / 1000.0
+            q_len   = cm.get('queue_length', 0)
+            rb_util = cm.get('rb_utilization', 0.0)
+            tx_pwr  = cm.get('tx_power', 23.0)
+            c_load  = cm.get('cell_load', 0.0)
+            avg_rb  = cm.get('avg_rb_request', 0.0)
+            
+            state[idx]   = q_len / 1000.0
             state[idx+1] = cm.get('rb_utilization', 0.0)
             state[idx+2] = (cm.get('tx_power', 23.0) - 10.0) / 36.0
             state[idx+3] = cm.get('cell_load', 0.0) / max(1.0, self.config.num_ues)
@@ -1213,7 +1212,7 @@ class ORANns3Env(gym.Env):
                 max_delay, max_loss = 0.0, 0.0
                 jains = 1.0
             
-            state[idx+5]  = avg_tput / 100.0         # Avg throughput
+            state[idx+5]  = avg_tput / 20.0          # 5Mbps -> 0.25 (Better gradient)
             state[idx+6]  = avg_delay / 100.0         # Avg delay
             state[idx+7]  = avg_loss                  # Avg packet loss
             state[idx+8]  = max_delay / 100.0         # Worst-case delay ("Is someone lagging?")
@@ -1221,8 +1220,32 @@ class ORANns3Env(gym.Env):
             state[idx+10] = jains                     # Fairness index
             state[idx+11] = n_ues / 50.0              # UE load count
             
+            # --- C. Delta Features (3 features) --- NEW
+            # Needs previous step's raw values. 
+            if self._prev_obs_raw and c in self._prev_obs_raw:
+                prev = self._prev_obs_raw[c]
+                # Delta Queue: (curr - prev) / 100.0 (Normalize diff)
+                d_queue = (q_len - prev['queue']) / 100.0
+                # Delta RB: (curr - prev)
+                d_rb    = rb_util - prev['rb']
+                # Delta Delay: (curr - prev) / 10.0 
+                d_delay = (avg_delay - prev['delay']) / 10.0
+            else:
+                d_queue, d_rb, d_delay = 0.0, 0.0, 0.0
+            
+            state[idx+12] = np.clip(d_queue, -1.0, 1.0)
+            state[idx+13] = np.clip(d_rb, -1.0, 1.0)
+            state[idx+14] = np.clip(d_delay, -1.0, 1.0)
+            
+            # --- D. Curriculum Level (1 feature) --- NEW
+            state[idx+15] = float(self.reward_engine.level) / 2.0 # Normalized 0.0, 0.5, 1.0
+            
+            # Store raw for next step
+            current_obs_raw[c] = {'queue': q_len, 'rb': rb_util, 'delay': avg_delay}
+            
             idx += self.features_per_cell
             
+        self._prev_obs_raw = current_obs_raw
         return state
     
     def _parse_action(self, action: np.ndarray) -> Dict:
@@ -1246,37 +1269,93 @@ class ORANns3Env(gym.Env):
             cell_act = action[offset : offset + self.actions_per_cell]
             offset += self.actions_per_cell
             
-            # 1. TxPower: Differential +/- 1.0 dBm (mapped from [0,1])
-            delta_p = (cell_act[0] * 2.0 - 1.0) * 1.0
-            self.current_params['cell'][c]['tx_power'] = np.clip(
-                self.current_params['cell'][c]['tx_power'] + delta_p, 10.0, 46.0
-            )
+    def _parse_action(self, action: np.ndarray) -> Dict:
+        """
+        5-Dimensional Cell Control - UNIFIED DIFFERENTIAL.
+        All actions are differentials to nudge the strict baseline.
+        """
+        action = np.asarray(action, dtype=np.float64).flatten()
+        
+        expected_size = self.config.num_cells * self.actions_per_cell
+        if action.size != expected_size:
+            if action.size < expected_size:
+                action = np.pad(action, (0, expected_size - action.size), constant_values=0.0)
+            else:
+                action = action[:expected_size]
 
-            # 2. TimeToTrigger: Differential +/- 50 ms (A3Rsrp handover delay)
-            #    Range 0-5120 ms. Controls how long a handover condition must
-            #    persist before triggering. Lower = faster handover, higher = more stable.
-            delta_ttt = (cell_act[1] * 2.0 - 1.0) * 50.0
+        rc_actions = {'cell': [], 'ue': []}
+        offset = 0
+        self.boundary_penalty = 0.0 # Reset per step
+        
+        for c in range(self.config.num_cells):
+            cell_act = action[offset : offset + self.actions_per_cell]
+            offset += self.actions_per_cell
+            
+            # 1. TxPower: Differential +/- 1.0 dBm
+            # LOCKED at Level 0/1 to Focus on Service (Max Power)
+            if self.reward_engine.level < 2:
+                delta_p = 0.0
+                self.current_params['cell'][c]['tx_power'] = 46.0 # Force Max
+            else:
+                delta_p = float(cell_act[0]) * 1.0 # act is -1..1
+                self.current_params['cell'][c]['tx_power'] = np.clip(
+                    self.current_params['cell'][c]['tx_power'] + delta_p, 10.0, 46.0
+                )
+
+            # 2. TimeToTrigger: Differential +/- 50 ms
+            delta_ttt = float(cell_act[1]) * 50.0
             self.current_params['cell'][c]['time_to_trigger'] = np.clip(
                 self.current_params['cell'][c]['time_to_trigger'] + delta_ttt, 0.0, 5120.0
             )
 
-            # 3. Hysteresis: Absolute 0.0–10.0 dB (mobility sensitivity)
-            self.current_params['cell'][c]['hysteresis'] = cell_act[2] * 10.0
+            # 3. Hysteresis: Differential +/- 1.0 dB (WAS ABSOLUTE)
+            delta_hyst = float(cell_act[2]) * 1.0
+            self.current_params['cell'][c]['hysteresis'] = np.clip(
+                 self.current_params['cell'][c]['hysteresis'] + delta_hyst, 0.0, 10.0
+            )
 
-            # 4. MAC Delay: Absolute 0–4 TTIs (latency vs scheduling quality)
-            self.current_params['cell'][c]['mac_delay'] = round(cell_act[3] * 4.0)
+            # 4. MAC Delay: Differential +/- 1.0 TTI (WAS ABSOLUTE, discrete)
+            # Accumulate as float, round for usage
+            delta_mac = float(cell_act[3]) * 1.0
+            self.current_params['cell'][c]['mac_delay'] = np.clip(
+                 self.current_params['cell'][c]['mac_delay'] + delta_mac, 0.0, 30.0 # Cap max delay reasonable
+            )
+            used_mac_delay = int(round(self.current_params['cell'][c]['mac_delay']))
 
-            # 5. CQI Timer: Absolute 100–2000 ms (CQI report validity window)
-            #    Controls how long a CQI measurement is considered valid.
-            #    Lower = more responsive but more overhead, higher = stable but stale.
-            self.current_params['cell'][c]['cqi_timer'] = 100 + round(cell_act[4] * 1900.0)
+            # 5. CQI Timer: Differential +/- 100 ms (WAS ABSOLUTE)
+            delta_cqi = float(cell_act[4]) * 100.0
+            self.current_params['cell'][c]['cqi_timer'] = np.clip(
+                 self.current_params['cell'][c]['cqi_timer'] + delta_cqi, 10.0, 2000.0
+            )
+
+            # --- Soft Action Masking (Constraint Awareness) ---
+            # Calculate penalty for pushing against boundaries (wasted action magnitude)
+            # If delta was +1 but value was already max, clip makes no change.
+            # Penalty proportional to |desired_change - actual_change|
+            # We approximate this by checking if we hit the bounds.
+            
+            # Simple heuristic: If action magnitude > 0.1 and we are at bounds, penalize.
+            # TxPower (10-46)
+            tx = self.current_params['cell'][c]['tx_power']
+            if (tx >= 46.0 and delta_p > 0) or (tx <= 10.0 and delta_p < 0):
+                self.boundary_penalty += 0.05 * abs(float(cell_act[0]))
+
+            # TTT (0-5120)
+            ttt = self.current_params['cell'][c]['time_to_trigger']
+            if (ttt >= 5120.0 and delta_ttt > 0) or (ttt <= 0.0 and delta_ttt < 0):
+                self.boundary_penalty += 0.05 * abs(float(cell_act[1]))
+            
+            # Hysteresis (0-10)
+            hyst = self.current_params['cell'][c]['hysteresis']
+            if (hyst >= 10.0 and delta_hyst > 0) or (hyst <= 0.0 and delta_hyst < 0):
+                self.boundary_penalty += 0.05 * abs(float(cell_act[2]))
 
             rc_actions['cell'].append({
                 'cell_id': c,
                 'tx_power_dbm': float(self.current_params['cell'][c]['tx_power']),
                 'time_to_trigger_ms': float(self.current_params['cell'][c]['time_to_trigger']),
                 'hysteresis_db': float(self.current_params['cell'][c]['hysteresis']),
-                'mac_ch_delay': int(self.current_params['cell'][c]['mac_delay']),
+                'mac_ch_delay': used_mac_delay,
                 'cqi_timer_ms': int(self.current_params['cell'][c]['cqi_timer']),
                 'noise_figure_db': 5.0,  # Fixed (environment parameter)
             })
@@ -1293,7 +1372,14 @@ class ORANns3Env(gym.Env):
             # self._print_metrics_table(e2_msg) 
             pass
         
-        return self.reward_engine.compute(e2_msg, current_action, self.prev_action, self.action_space)
+        reward, terms = self.reward_engine.compute(e2_msg, current_action, self.prev_action, self.action_space)
+        
+        # Apply Soft Action Masking Penalty
+        if hasattr(self, 'boundary_penalty') and self.boundary_penalty > 0:
+            reward -= self.boundary_penalty
+            terms['boundary_penalty'] = -self.boundary_penalty
+            
+        return reward, terms
 
     def _print_metrics_table(self, e2_msg):
         """Helper to print UE metrics table."""
