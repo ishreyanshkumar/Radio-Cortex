@@ -130,17 +130,10 @@ run_stage() {
         --checkpoint-interval "$CHECKPOINT_INTERVAL" \
         $DEVICE_FLAG
 
-    # --- Disk Cleanup: Reclaim space from previous stages ---
-    # We keep the current stage model and the immediate previous one for fallback.
-    # If we just finished Stage 3, we can safely delete Stage 1.
-    if [[ $stage -gt 2 ]]; then
-        local old_stage=$((stage - 2))
-        local old_path="$MODEL_DIR/stage_${old_stage}.pt"
-        if [[ -f "$old_path" ]]; then
-            echo "  [Disk Cleanup] Removing finished Stage $old_stage checkpoint to save room: $old_path"
-            rm "$old_path"
-        fi
-    fi
+    # --- Log Cleanup: Reclaim space from ns-3 and metrics (GBs potentially) ---
+    echo "  [Log Cleanup] Removing stage logs and CSV metrics to save room..."
+    rm -f logs/ns3_out*.log logs/ns3_err*.log
+    rm -f logs/reward_metrics_*.csv logs/kpm_verification*.jsonl
 }
 
 # =============================================================================
@@ -164,29 +157,29 @@ run_stage() {
 
 declare -A STAGES
 
-# Stage 1: Foundation - Flash Crowd Mastery (Bootstrap: ~60 updates)
-STAGES[1]="--scenario flash_crowd --total-timesteps 1000000"
+# Stage 1: Foundation - Flash Crowd Mastery (Bootstrap: ~48 updates)
+STAGES[1]="--scenario flash_crowd --total-timesteps 800000"
 
-# Stage 2: Green RAN - Sleepy Campus (Energy: ~150 updates)
-STAGES[2]="--scenario flash_crowd:0.2,sleepy_campus:0.8 --total-timesteps 2500000"
+# Stage 2: Green RAN - Sleepy Campus (Energy: ~90 updates)
+STAGES[2]="--scenario flash_crowd:0.2,sleepy_campus:0.8 --total-timesteps 1500000"
 
-# Stage 3: PHY Robustness - Urban Canyon (~180 updates)
-STAGES[3]="--scenario flash_crowd:0.15,sleepy_campus:0.15,urban_canyon:0.7 --total-timesteps 3000000"
+# Stage 3: PHY Robustness - Urban Canyon (~120 updates)
+STAGES[3]="--scenario flash_crowd:0.15,sleepy_campus:0.15,urban_canyon:0.7 --total-timesteps 2000000"
 
-# Stage 4: Mobility - Mobility Storm (~240 updates)
-STAGES[4]="--scenario flash_crowd:0.1,sleepy_campus:0.1,urban_canyon:0.1,mobility_storm:0.7 --total-timesteps 4000000"
+# Stage 4: Mobility - Mobility Storm (~150 updates)
+STAGES[4]="--scenario flash_crowd:0.1,sleepy_campus:0.1,urban_canyon:0.1,mobility_storm:0.7 --total-timesteps 2500000"
 
-# Stage 5: Congestion - Traffic Burst (~300 updates)
-STAGES[5]="--scenario flash_crowd:0.08,sleepy_campus:0.08,urban_canyon:0.08,mobility_storm:0.08,traffic_burst:0.68 --total-timesteps 5000000"
+# Stage 5: Congestion - Traffic Burst (~180 updates)
+STAGES[5]="--scenario flash_crowd:0.08,sleepy_campus:0.08,urban_canyon:0.08,mobility_storm:0.08,traffic_burst:0.68 --total-timesteps 3000000"
 
-# Stage 6: URLLC - Ambulance Priority (~300 updates)
-STAGES[6]="--scenario flash_crowd:0.07,sleepy_campus:0.07,urban_canyon:0.07,mobility_storm:0.07,traffic_burst:0.07,ambulance:0.65 --total-timesteps 5000000"
+# Stage 6: URLLC - Ambulance Priority (~180 updates)
+STAGES[6]="--scenario flash_crowd:0.07,sleepy_campus:0.07,urban_canyon:0.07,mobility_storm:0.07,traffic_burst:0.07,ambulance:0.65 --total-timesteps 3000000"
 
-# Stage 7: Capacity - Spectrum Crunch (~360 updates)
-STAGES[7]="--scenario flash_crowd:0.06,sleepy_campus:0.06,urban_canyon:0.06,mobility_storm:0.06,traffic_burst:0.06,ambulance:0.06,spectrum_crunch:0.64 --total-timesteps 6000000"
+# Stage 7: Capacity - Spectrum Crunch (~180 updates)
+STAGES[7]="--scenario flash_crowd:0.06,sleepy_campus:0.06,urban_canyon:0.06,mobility_storm:0.06,traffic_burst:0.06,ambulance:0.06,spectrum_crunch:0.64 --total-timesteps 3000000"
 
-# Stage 8: Consolidation - Multi-Mix Generalization (~600 updates)
-STAGES[8]="--scenario flash_crowd:0.12,sleepy_campus:0.12,urban_canyon:0.12,mobility_storm:0.12,traffic_burst:0.12,ambulance:0.12,spectrum_crunch:0.12 --total-timesteps 10000000"
+# Stage 8: Consolidation - Multi-Mix Generalization (~240 updates)
+STAGES[8]="--scenario flash_crowd:0.12,sleepy_campus:0.12,urban_canyon:0.12,mobility_storm:0.12,traffic_burst:0.12,ambulance:0.12,spectrum_crunch:0.12 --total-timesteps 4000000"
 
 echo ""
 echo "╔══════════════════════════════════════════════════════════════╗"
