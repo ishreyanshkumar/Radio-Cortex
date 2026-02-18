@@ -50,13 +50,13 @@ Combines how fast, responsive, and consistent the network felt to users. Include
 
 ### 🛡️ 2. Reliability Score (Stability)
 Penalizes both constant loss, sudden outages (Peak/Max Loss), service downtime, unstable mobility, and handover failures. Rewards fast recovery and stable control.
-*   **Formula:** `30% Avg Loss + 10% Max Loss + 20% Downtime + 10% HO Stability + 20% HO Success + 10% Control Stability`
+*   **Formula:** `30% Avg Loss + 20% Downtime + 20% HO Success + 10% HO Stability + 10% Max Loss + 10% Control Stability`
 *   *Note:* Control Stability weight reduced to 10% (Baseline is naturally 100% stable).
 
 ### 🏗️ 3. Resource Score (Efficiency & Fairness)
 Rewards high spectrum utilization AND efficiency, while ensuring fairness.
 *   **Formula:** `10% Utilization + 30% Cell Edge + 30% Jain's Fairness + 30% Energy Efficiency`
-*   *Note:* Utilization weight reduced (Baseline often has high utilization due to congestion, not efficiency).
+*   *Note:* Utilization weight reduced (Baseline often has high utilization due to congestion, not efficiency). Cell Edge and Energy boosted for RL distinction.
 
 ### 📦 4. Buffer Score (Congestion Health)
 Measures buffer occupancy and congestion spikes.

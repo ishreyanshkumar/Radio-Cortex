@@ -104,12 +104,18 @@ For subsequent starts, you can use:
 source .venv/bin/activate
 ```
 
-### Quick Start
-1. **Curriculum Training**: `bash scripts/train_curriculum.sh` (8-stage "Lean Power Suite")
+#### 1. Turbo-Charged Curriculum Training
+1. **Curriculum Training**: `bash scripts/train_curriculum.sh` (8-stage "Grandmaster" suite for High-End Hardware)
 2. **Benchmarking**: `python3 scripts/benchmark_power_suite.py` (BDH vs Baseline vs MLP)
 3. **Single Scenario**: `python3 radio_cortex_complete.py --mode train --scenario flash_crowd --total-timesteps 200000`
 4. **Debug Scale**: `python3 debug_scalability.py` (Verify 5 UE -> 100 UE generalization)
 5. **Clean Workspace**: `bash scripts/cleanup.sh`
+
+#### 2. Storage Safety (Automated)
+Radio-Cortex is designed for multi-million step training without disk exhaustion.
+*   **Log Purge**: The curriculum script automatically deletes `logs/*.log` (potentially 10GB+) between stages.
+*   **CSV Archival**: Raw per-step CSVs are purged post-stage to save room (~3GB).
+*   **Preserved**: Only final stage models and summary results are kept.
 
 ## 🛠️ Utilities
 
@@ -151,38 +157,30 @@ You can customize the training hyperparameters and environment settings via comm
 
 ---
 
-### ⚡ Performance & Accuracy Guide
+### ⚡ High-Performance Training Guide
 
-#### What is `sim-time`?
-`sim-time` is the **simulated duration** of each training episode.
-- **Too High (e.g. 300s)**: Training is slow because each episode takes a long time to complete. If the agent makes a mistake early on, it "suffers" for 5 minutes of sim-time before resetting.
-- **Too Low (e.g. 5s)**: Training is fast but inaccurate. The agent doesn't see the full lifecycle of a congestion event (which often takes 10-20s to peak).
-- **Sweet Spot**: **20.0 - 40.0 seconds**. This is enough time for all scenarios to manifest while keeping worker throughput high.
+#### How to Train at "Grandmaster" Levels
+To achieve maximum accuracy for project displays or research, use the hypertuned curriculum:
 
-#### How to Train Faster (Without Loss of Accuracy)
-To reach convergence in minutes rather than hours, use these settings:
+1. **Max out Parallelism**: Set `--n-envs 32`.
+2. **Batch for Stability**: Set `--batch-size 4096`. 
+3. **Deep Learning**: Set `--ppo-epochs 20`. This allows the agent to extract maximum value from every expensive simulation step.
 
-1. **Max out Parallelism**: Set `--n-envs` to utilize your CPU cores. (Default: 12).
-2. **Optimize `sim-time`**: Set `--sim-time 20.0`. This is the sweet spot for frequency vs accuracy.
-3. **Use Optimized Build**: (Critical) Ensure you built ns-3 with `-d optimized`. 
-4. **Remove Latency Bottlenecks**: The environmental `time.sleep` has been removed, and UI rendering is throttled to 10Hz to maximize simulation throughput.
-
-**Recommended "Fast & Robust" Command:**
+**Recommended "Grandmaster" Suite:**
 ```bash
-python3 radio_cortex_complete.py --mode train --scenario flash_crowd --n-envs 16 --sim-time 30.0 --total-timesteps 200000
+./scripts/train_curriculum.sh
 ```
 
-#### Optimal Hyperparameters (16 envs + BDH)
+#### Optimal Hyperparameters (32 envs + BDH)
 
-| Parameter | Default | Optimal (BDH 12-env) | Rationale |
+| Parameter | Default | Optimal (Turbo Suite) | Rationale |
 |:---|:---:|:---:|:---|
-| `--learning-rate` | 3e-4 | **3e-4** | Standard LR for rapid bootstrap |
-| `--batch-size` | 256 | **256** | Balanced for 16GB VRAM GPUs |
-| `--rollout-steps` | 128 | **128** | Fast rollout cycles for frequent updates |
-| `--gamma` | 0.99 | **0.99** | Standard horizon for congestion control |
-| `--clip-epsilon` | 0.2 | **0.2** | Standard PPO clipping |
-| `--ent-coef` | 0.01 | **0.01** | Encourages initial exploration |
-| `--sim-time` | 20.0 | **20.0** | Optimized duration for 12-core hardware |
+| `--learning-rate` | 3e-4 | **3e-4** | Standard reliable LR |
+| `--batch-size` | 256 | **4096** | Massive batch for deep convergence |
+| `--rollout-steps` | 128 | **512** | Large buffer (16k steps) for stable batch |
+| `--ppo-epochs` | 10 | **20** | Squeeze max learning from rollouts |
+| `--hidden-dim` | 256 | **512** | Capture complex nuances in long suites |
+| `--sim-time` | 20.0 | **50.0** | Longer episodes to capture full congestion decay |
 
 > [!TIP]
 > All optimal hyperparameters are baked into `scripts/train_curriculum.sh`. Just run it.
@@ -592,26 +590,26 @@ print(f'Mean Reward: {np.mean([d[\"reward\"] for d in data]):.4f}')"
 
 ## 🔬 Advanced Workflows
 
-### Scenario Curriculum (8-Stage "Lean Power Suite")
-The curriculum script trains on progressively harder scenarios. Each stage loads the previous checkpoint and mixes in maintenance tasks.
+### Scenario Curriculum (8-Stage "Grandmaster" Suite)
+The curriculum script trains on progressively harder scenarios with automated inter-stage storage cleanup.
 
 ```bash
-# Run the full 8-stage curriculum
+# Run the full 8-stage "Grandmaster" curriculum
 bash scripts/train_curriculum.sh
 ```
 
-| Stage | Focus | Timesteps | Skill Description |
-|:---:|:---|:---:|:---|
-| 1 | Flash Crowd | 84k | Basic load balancing (Bootstrap) |
-| 2 | Sleepy Campus | 210k | Energy efficiency (Green RAN) |
-| 3 | Urban Canyon | 252k | Signal recovery & Robustness |
-| 4 | Mobility Storm | 378k | Handover Optimization |
-| 5 | Traffic Burst | 504k | Congestion Management |
-| 6 | Ambulance | 504k | QoS Priority & Slicing |
-| 7 | Spectrum Crunch | 630k | Spectral Efficiency |
-| 8 | Power Suite Mix | 1.05M | Generalization & Maintenance |
+| Stage | Focus | Timesteps | updates | Skill Description |
+|:---:|:---|:---:|:---:|:---|
+| 1 | Flash Crowd | 800k | ~50 | Basic load balancing (Bootstrap) |
+| 2 | Sleepy Campus | 1.5M | ~90 | Energy efficiency (Green RAN) |
+| 3 | Urban Canyon | 2.0M | ~120 | Signal recovery & Robustness |
+| 4 | Mobility Storm | 2.5M | ~150 | Handover Optimization |
+| 5 | Traffic Burst | 3.0M | ~180 | Congestion Management |
+| 6 | Ambulance | 3.0M | ~180 | QoS Priority & Slicing |
+| 7 | Spectrum Crunch | 3.0M | ~180 | Spectral Efficiency |
+| 8 | Generalization Mix | 4.0M | ~240 | Multi-goal Mastery |
 
-**Total: ~3.6M timesteps** to full mastery across all key challenges.
+**Total: ~14.7M timesteps** (approx 3-4 hours on hi-end hardware) to full multi-domain mastery.
 
 ### Network Size Curriculum (Manual)
 ```bash
