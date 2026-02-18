@@ -39,7 +39,7 @@ GAMMA=0.99
 GAE_LAMBDA=0.95
 CLIP_EPSILON=0.2
 VF_COEF=0.5
-ENT_COEF=0.01
+ENT_COEF=0.001  # Reduced from 0.01 to force convergence (was stuck at 28.86 entropy)
 MAX_GRAD_NORM=0.5
 HIDDEN_DIM=256
 

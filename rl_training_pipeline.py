@@ -90,7 +90,7 @@ class PPOTrainer:
         gae_lambda: float = 0.95,
         clip_epsilon: float = 0.2,
         vf_coef: float = 0.5,
-        ent_coef: float = 0.01,
+        ent_coef: float = 0.001,
         max_grad_norm: float = 0.5,
         device: Optional[str] = None,
         checkpoint_dir: str = 'models',
@@ -1084,9 +1084,12 @@ def evaluate_policy(
             # Collect metrics from info
             if 'e2_metrics' in info:
                 e2 = info['e2_metrics']
-                episode_data['throughputs'].extend([m['throughput'] for m in e2.ue_metrics.values()])
-                episode_data['delays'].extend([m['delay'] for m in e2.ue_metrics.values()])
-                episode_data['losses'].extend([m['packet_loss'] for m in e2.ue_metrics.values()])
+                # Handle both dict (from serialized env) and object
+                ue_metrics = e2['ue_metrics'] if isinstance(e2, dict) else e2.ue_metrics
+                
+                episode_data['throughputs'].extend([m['throughput'] for m in ue_metrics.values()])
+                episode_data['delays'].extend([m['delay'] for m in ue_metrics.values()])
+                episode_data['losses'].extend([m['packet_loss'] for m in ue_metrics.values()])
             
             if render:
                 env.render()

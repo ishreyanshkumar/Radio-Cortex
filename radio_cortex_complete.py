@@ -134,7 +134,7 @@ def train_radio_cortex(
     gae_lambda: float = 0.95,
     clip_epsilon: float = 0.2,
     vf_coef: float = 0.5,
-    ent_coef: float = 0.01,
+    ent_coef: float = 0.001,
     max_grad_norm: float = 0.5,
     rollout_steps: int = 256,
     log_interval: int = 5,
@@ -634,11 +634,13 @@ def evaluate_single_scenario(
             else:  # 'nn' or default
                 state_dim = expected_state_dim
                 action_dim = expected_action_dim
-                if stored_action_dim != expected_action_dim or stored_state_dim != expected_state_dim:
-                    detected_ues = stored_action_dim - (config.num_cells * 2)
-                    config.num_ues = detected_ues
-                    state_dim = stored_state_dim
-                    action_dim = stored_action_dim
+                if stored_state_dim > 0 and stored_action_dim > 0:
+                    if stored_action_dim != expected_action_dim or stored_state_dim != expected_state_dim:
+                        # Cell-centric: state = num_cells * 12, action = num_cells * 5
+                        detected_cells = stored_action_dim // 5
+                        print(f"      [WARN] Dimension mismatch: stored cells={detected_cells}, config cells={config.num_cells}")
+                        state_dim = stored_state_dim
+                        action_dim = stored_action_dim
                 from policies.neural_networks import ActorCritic
                 policy = ActorCritic(state_dim, action_dim).to(eval_device)
             
@@ -748,7 +750,7 @@ def main():
     hyper.add_argument('--gae-lambda', type=float, default=0.95, help='GAE normalization lambda')
     hyper.add_argument('--clip-epsilon', type=float, default=0.2, help='PPO clipping bound')
     hyper.add_argument('--vf-coef', type=float, default=0.5, help='Value function loss weight')
-    hyper.add_argument('--ent-coef', type=float, default=0.01, help='Entropy regularization weight')
+    hyper.add_argument('--ent-coef', type=float, default=0.001, help='Entropy regularization weight')
     hyper.add_argument('--max-grad-norm', type=float, default=0.5, help='Gradient clipping threshold')
     hyper.add_argument('--checkpoint-interval', type=int, default=5, help='Checkpoint frequency (updates)')
     hyper.add_argument('--log-interval', type=int, default=5, help='Console log frequency (updates)')

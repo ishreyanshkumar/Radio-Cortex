@@ -115,14 +115,15 @@ class RewardEngine:
         self.config = config
 
         # ── Weights ──────────────────────────────────────────────
-        self.W_TPUT      = 1.0      # Throughput (Log Utility)
+        # ── Weights (AGGRESSIVE MODE — fix passive safety trap) ──
+        self.W_TPUT      = 2.0      # DOUBLED: Focus on throughput
         self.W_DELAY_LIN = 0.5      # Linear Delay Penalty
-        self.W_DELAY_BAR = 2.0      # Increased from 1.0: punish SLA breaches more
-        self.W_LOSS      = 2.5      # Increased from 1.0: core stability penalty
-        self.W_SE        = 0.15     # Tripled from 0.05: reward robust channel conditions
-        self.W_ENERGY    = 0.5      # Energy Efficiency
+        self.W_DELAY_BAR = 2.0      # Punish SLA breaches
+        self.W_LOSS      = 5.0      # DOUBLED: Make packet loss very painful
+        self.W_SE        = 0.15     # Reward robust channel conditions
+        self.W_ENERGY    = 0.05     # REDUCED 10x: Let it use max power!
         self.W_LOAD      = 1.0      # Load Balancing
-        self.W_QUEUE     = 0.8      # Increased from 0.3: "Backpressure" signal
+        self.W_QUEUE     = 0.8      # "Backpressure" signal
         self.W_SMOOTH    = 0.05     # Action Smoothing
         self.BIAS        = 1.0      # Survival Bias (Ensures Level 0 is positive)
 
@@ -275,7 +276,7 @@ class RewardEngine:
         w_delay_eff = (self.W_DELAY_LIN * soft_factor) if self.level >= 1 else 0.0
         w_queue_eff = (self.W_QUEUE * soft_factor)     if self.level >= 0 else 0.0  # Queue from start
 
-        w_loss_eff   = (self.W_LOSS * soft_factor)      if self.level >= 1 else 0.0  # Loss from Level 1 (was 2)
+        w_loss_eff   = (self.W_LOSS * soft_factor)      if self.level >= 0 else 0.0  # Loss from Level 0 (ALWAYS ON)
         w_energy_eff = (self.W_ENERGY * soft_factor)    if self.level >= 2 else 0.0
         w_load_eff   = (self.W_LOAD * soft_factor)      if self.level >= 2 else 0.0
         
@@ -413,6 +414,7 @@ class RewardEngine:
             'r_se': 0.0, 'r_energy': 0.0, 'r_load': 0.0, 'r_queue': 0.0,
             'r_smooth': 0.0, 'se_avg': 0.0, 'jains': 0.0, 'p95_delay': 0.0,
             'avg_throughput': 0.0, 'avg_delay': 0.0, 'avg_loss': 0.0,
+            'z_level': 0, 'z_success': 0.0,
         }
 
 

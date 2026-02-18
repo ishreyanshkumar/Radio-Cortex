@@ -144,8 +144,6 @@ class EvaluationRunner:
         # Handover tracking
         prev_cells = {}
         total_handovers = 0
-        total_handovers = 0
-        actions_history = []
         inference_times = []
         
         # Get model parameters if available
@@ -229,88 +227,101 @@ class EvaluationRunner:
                     actions_per_cell = 5
                     if len(action_arr) >= actions_per_cell:
                         c0 = action_arr[:actions_per_cell]
-                        print(f"\n  Step {step_count:>3} │ 🤖 RIC Decision (Cell 0): TxΔ={c0[0]:.2f} │ SchedΔ={c0[1]:.2f} │ Hyst={c0[2]*10:.1f}dB │ Delay={round(c0[3]*4)} │ HARQ={1+round(c0[4]*7)}")
+                        print(f"\n  Step {step_count:>3} │ 🤖 RIC Decision (Cell 0): TxΔ={c0[0]:.2f} │ SchedΔ={c0[1]:.2f} │ Hyst={c0[2]*10:.1f}dB │ Delay={round(c0[3]*4)} │ CQI={100+round(c0[4]*1900)}ms")
             
             
-            # Track Handovers
-            if 'e2_metrics' in info:
-                ue_metrics = info['e2_metrics'].ue_metrics
-                for ue_id, m in ue_metrics.items():
-                    curr_cell = m.get('serving_cell', -1)
-                    if ue_id in prev_cells:
-                        if prev_cells[ue_id] != -1 and curr_cell != -1 and curr_cell != prev_cells[ue_id]:
-                            total_handovers += 1
-                    prev_cells[ue_id] = curr_cell
+                # Track Handovers
+                if 'e2_metrics' in info:
+                    # Fix: Handle plain dict from VecEnv/SubprocVecEnv
+                    e2_data = info['e2_metrics']
+                    if isinstance(e2_data, dict):
+                        # Wrap in SimpleNamespace for attribute access compatibility
+                        from types import SimpleNamespace
+                        e2_msg = SimpleNamespace(**e2_data)
+                        # Recursive wrap for ue_metrics/cell_metrics if needed, but code uses dict access for those
+                        # Actually code uses .ue_metrics and .cell_metrics on e2_msg, but then [key] on those.
+                        # The dict has keys 'ue_metrics' and 'cell_metrics'.
+                    else:
+                        e2_msg = e2_data
 
-            # Collect metrics from info (which contains raw KPMs)
-            e2_msg = info['e2_metrics']
-            ue_kpms = list(e2_msg.ue_metrics.values())
-            cell_kpms = list(e2_msg.cell_metrics.values())
-            
-            # Aggregate per-step metrics
-            step_tput = np.mean([m['throughput'] for m in ue_kpms]) if ue_kpms else 0.0
-            step_delay = np.mean([m['delay'] for m in ue_kpms]) if ue_kpms else 0.0
-            step_loss = np.mean([m['packet_loss'] for m in ue_kpms]) if ue_kpms else 0.0
-            step_sinr = np.mean([m['sinr'] for m in ue_kpms]) if ue_kpms else -10.0
-            step_rsrp = np.mean([m['rsrp'] for m in ue_kpms]) if ue_kpms else -140.0
-            
-            # New: Collect Congestion Stats
-            avg_queue = np.mean([c['queue_length'] for c in cell_kpms]) if cell_kpms else 0.0
-            avg_rb = np.mean([c['rb_utilization'] for c in cell_kpms]) if cell_kpms else 0.0
-            
-            # Accumulate Power (Watts)
-            # 10^(dBm/10) * 0.001
-            step_power_w = sum([(10**(c['tx_power']/10.0))*0.001 for c in cell_kpms]) if cell_kpms else 0.0
-            total_power_w_accum += step_power_w
-            step_count_power += 1
-            
-            # Send progress and metrics to main process
-            if progress_queue:
-                metrics_payload = {
-                    'reward': reward,
-                    'tput': step_tput,
-                    'delay': step_delay,
-                    'loss': step_loss,
-                    'power': step_power_w,
-                    'sinr': step_sinr,
-                    'rsrp': step_rsrp,
-                    'queue': avg_queue,
-                    'rb': avg_rb
-                }
+                    ue_metrics = e2_msg.ue_metrics
+                    for ue_id, m in ue_metrics.items():
+                        curr_cell = m.get('serving_cell', -1)
+                        if ue_id in prev_cells:
+                            if prev_cells[ue_id] != -1 and curr_cell != -1 and curr_cell != prev_cells[ue_id]:
+                                total_handovers += 1
+                        prev_cells[ue_id] = curr_cell
+
+                # Collect metrics from info (which contains raw KPMs)
+                # Ensure e2_msg is available (it was set above)
+                if 'e2_metrics' in info:
+                    ue_kpms = list(e2_msg.ue_metrics.values())
+                    cell_kpms = list(e2_msg.cell_metrics.values())
+                    
+                    # Aggregate per-step metrics
+                    step_tput = np.mean([m['throughput'] for m in ue_kpms]) if ue_kpms else 0.0
+                    step_delay = np.mean([m['delay'] for m in ue_kpms]) if ue_kpms else 0.0
+                    step_loss = np.mean([m['packet_loss'] for m in ue_kpms]) if ue_kpms else 0.0
+                    step_sinr = np.mean([m['sinr'] for m in ue_kpms]) if ue_kpms else -10.0
+                    step_rsrp = np.mean([m['rsrp'] for m in ue_kpms]) if ue_kpms else -140.0
+                    
+                    # New: Collect Congestion Stats
+                    avg_queue = np.mean([c['queue_length'] for c in cell_kpms]) if cell_kpms else 0.0
+                    avg_rb = np.mean([c['rb_utilization'] for c in cell_kpms]) if cell_kpms else 0.0
+                    
+                    # Accumulate Power (Watts)
+                    # 10^(dBm/10) * 0.001
+                    step_power_w = sum([(10**(c['tx_power']/10.0))*0.001 for c in cell_kpms]) if cell_kpms else 0.0
+                    total_power_w_accum += step_power_w
+                    step_count_power += 1
+                    
+                    # Send progress and metrics to main process
+                    if progress_queue:
+                        metrics_payload = {
+                            'reward': reward,
+                            'tput': step_tput,
+                            'delay': step_delay,
+                            'loss': step_loss,
+                            'power': step_power_w,
+                            'sinr': step_sinr,
+                            'rsrp': step_rsrp,
+                            'queue': avg_queue,
+                            'rb': avg_rb
+                        }
+                        
+                        # Add detailed UE metrics every 10 steps to reduce IPC load
+                        if step_i % 10 == 0:
+                             metrics_payload['ue_metrics'] = {
+                                 ue_id: {
+                                     'tput': m['throughput'],
+                                     'delay': m['delay'],
+                                     'loss': m['packet_loss'],
+                                     'sinr': m['sinr'],
+                                     'cell': m.get('serving_cell', -1)
+                                 } for ue_id, m in e2_msg.ue_metrics.items()
+                             }
+
+                        progress_queue.put(('update', task_id, 1, metrics_payload))
+                    elif pbar:
+                        pbar.update(1)
+                        pbar.set_postfix({'reward': f'{reward:.2f}', 'tput': f'{step_tput:.1f}'})
+                    
+                    throughputs.append(step_tput)
+                    delays.append(step_delay)
+                    losses.append(step_loss)
+                    sinrs.append(step_sinr)
+                    rsrps.append(step_rsrp)
+                    queue_lengths.append(avg_queue)
+                    rb_utils.append(avg_rb)
+                    
+                    # New: Collect Per-UE Stats for User Satisfaction
+                    for ue_id, m in e2_msg.ue_metrics.items():
+                        if ue_id not in per_ue_stats:
+                            per_ue_stats[ue_id] = {'tput': [], 'delay': []}
+                        per_ue_stats[ue_id]['tput'].append(m['throughput'])
+                        per_ue_stats[ue_id]['delay'].append(m['delay'])
                 
-                # Add detailed UE metrics every 10 steps to reduce IPC load
-                if step_i % 10 == 0:
-                     metrics_payload['ue_metrics'] = {
-                         ue_id: {
-                             'tput': m['throughput'],
-                             'delay': m['delay'],
-                             'loss': m['packet_loss'],
-                             'sinr': m['sinr'],
-                             'cell': m.get('serving_cell', -1)
-                         } for ue_id, m in e2_msg.ue_metrics.items()
-                     }
-
-                progress_queue.put(('update', task_id, 1, metrics_payload))
-            elif pbar:
-                pbar.update(1)
-                pbar.set_postfix({'reward': f'{reward:.2f}', 'tput': f'{step_tput:.1f}'})
-            
-            throughputs.append(step_tput)
-            delays.append(step_delay)
-            losses.append(step_loss)
-            sinrs.append(step_sinr)
-            rsrps.append(step_rsrp)
-            queue_lengths.append(avg_queue)
-            rb_utils.append(avg_rb)
-            
-            # New: Collect Per-UE Stats for User Satisfaction
-            for ue_id, m in e2_msg.ue_metrics.items():
-                if ue_id not in per_ue_stats:
-                    per_ue_stats[ue_id] = {'tput': [], 'delay': []}
-                per_ue_stats[ue_id]['tput'].append(m['throughput'])
-                per_ue_stats[ue_id]['delay'].append(m['delay'])
-            
-            state = next_state
+                state = next_state
         
         if pbar:
             pbar.update(total_steps - pbar.n) # Ensure full completion
@@ -496,17 +507,19 @@ class EvaluationRunner:
 
         # Efficiency Metrics
         # Spectral Eff = Sum Tput (Mbps) / Bandwidth (MHz) [which is bits/s/Hz]
-        spectral_efficiency = sum(throughputs) / system_bandwidth_mhz if system_bandwidth_mhz > 0 else 0.0
+        # FIX: Use mean throughout the episode, not sum of all steps (which grows indefinitely)
+        spectral_efficiency = np.mean(throughputs) / system_bandwidth_mhz if system_bandwidth_mhz > 0 else 0.0
         
         
         # Energy Eff = Sum Tput (Mbps) / Power (Watts)
         energy_efficiency = sum(throughputs) / total_power_watts if total_power_watts > 0 else 0.0
         
         # Fairness
-        if sum(throughputs) > 0:
-            jains_fairness = (sum(throughputs) ** 2) / (
-                len(throughputs) * sum([t**2 for t in throughputs])
-            )
+        if ue_avg_tputs and sum(ue_avg_tputs) > 0:
+             # FIX: Calculate over per-UE averages, not per-step averages
+             jains_fairness = (sum(ue_avg_tputs) ** 2) / (
+                len(ue_avg_tputs) * sum([t**2 for t in ue_avg_tputs])
+             )
         else:
             jains_fairness = 0.0
         

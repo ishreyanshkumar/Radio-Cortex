@@ -132,8 +132,10 @@ def _load_policy(checkpoint_path: Path, state_dim: int, action_dim: int, model_t
 
 
 def _saliency(policy: ActorCritic, state: np.ndarray, action_index: int) -> np.ndarray:
-    state_t = torch.tensor(state, dtype=torch.float32, requires_grad=True).unsqueeze(0)
-    action_mean, _ = policy(state_t)
+    state_t = torch.tensor(state, dtype=torch.float32).unsqueeze(0)
+    state_t.requires_grad_(True)
+    state_t.retain_grad()
+    action_mean, _, _ = policy(state_t)
     target = action_mean[0, action_index]
     target.backward()
     grad = state_t.grad[0].detach().numpy()

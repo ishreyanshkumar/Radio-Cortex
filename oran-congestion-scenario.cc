@@ -711,9 +711,16 @@ E2InterfaceManager::CollectCellMetrics(
     }
   }
 
-  // Total available RBs per cell per interval (50 RBs for 10 MHz, scaled by
-  // interval)
-  double totalRbsPerInterval = 50.0; // Base RBs for 10 MHz LTE
+  // Dynamic: read actual bandwidth from first eNB device (fallback 50 for 10
+  // MHz)
+  double totalRbsPerInterval = 50.0;
+  if (m_enbNodes.GetN() > 0) {
+    Ptr<LteEnbNetDevice> dev0 =
+        m_enbNodes.Get(0)->GetDevice(0)->GetObject<LteEnbNetDevice>();
+    if (dev0) {
+      totalRbsPerInterval = static_cast<double>(dev0->GetDlBandwidth());
+    }
+  }
 
   for (uint32_t i = 0; i < numCells; ++i) {
     Ptr<Node> enbNode = m_enbNodes.Get(i);
