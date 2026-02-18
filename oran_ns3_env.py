@@ -124,9 +124,9 @@ class RewardEngine:
         # from typical SINR values (12-25 dB), making even W_SE=0.15
         # produce large rewards. Slashed W_SE to a tiny keep-alive only.
         self.W_TPUT      = 8.0      # Boosted: primary learning signal
-        self.W_DELAY_LIN = 1.5      # Boosted: make delay visible in chart
+        self.W_DELAY_LIN = 2.0      # Boosted: make delay visible in chart (was 1.5)
         self.W_DELAY_BAR = 2.7      # Punish SLA breaches
-        self.W_LOSS      = 2.5      # Core stability penalty
+        self.W_LOSS      = 1.0      # Core stability penalty (was 2.5, then 2.0)
         self.W_SE        = 0.03     # SLASHED: tiny keep-alive gradient only
         self.W_ENERGY    = 0.05     # Reduced: let it use max power
         self.W_LOAD      = 1.0      # Load Balancing
@@ -138,14 +138,14 @@ class RewardEngine:
         self.T_MAX     = 10.0      # Lowered: actual tput ~1-3 Mbps, so 10 Mbps is reachable
         self.D_MAX     = 65.0      # Normalizing Delay (ms)
         self.D_SLA     = 45.0      # Earlier barrier entry
-        self.BETA_LOSS = 10.0      # Steep exponential loss penalty
+        self.BETA_LOSS = 5.0       # Steep exponential loss penalty (was 10.0)
         self.EPSILON   = 1e-6      # Safe log
         self.Q_MAX     = 500.0     # Queue penalization threshold
 
         # ── Clip bounds (Stage 1 — per component) ───────────────
         self.CLIP_TPUT   = (-0.5, 5.0)    # log(1+x) for x≥0 is ≥0, but allow small neg for numerical safety
         self.CLIP_DELAY  = (-50.0, 0.0)    # Delay is ALWAYS a penalty (≤0)
-        self.CLIP_LOSS   = (-50.0, 0.0)    # Loss is ALWAYS a penalty (≤0)
+        self.CLIP_LOSS   = (-5.0, 0.0)     # Loss is ALWAYS a penalty (≤0) (was -50.0, then -15.0)
         self.CLIP_SE     = (0.0, 2.0)     # SE is ALWAYS a bonus (≥0)
         self.CLIP_ENERGY = (-2.0, 0.0)    # Energy is ALWAYS a penalty (≤0)
         self.CLIP_LOAD   = (-2.0, 0.0)    # Load imbalance is ALWAYS a penalty (≤0)
