@@ -23,7 +23,7 @@ python3 radio_cortex_complete.py \
     --model bdh \
     --n-envs 4 \
     --total-timesteps 200000 \
-    --rollout-steps 512 \
+    --rollout-steps 256 \
     --batch-size 64 \
     --ppo-epochs 20 \
     --lr-gamma 0.98 \
