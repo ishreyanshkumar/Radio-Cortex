@@ -11,3 +11,5 @@ seaborn
 wandb
 streamlit
 tqdm
+gradio
+plotly

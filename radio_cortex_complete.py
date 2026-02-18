@@ -787,6 +787,10 @@ def main():
     # Attach model_type to config for downstream usage (eval workers, etc.)
     config.model_type = args.model
     
+    # Set a shared run timestamp so ALL parallel envs write to the SAME CSV file.
+    # Must be set before any env is spawned (datetime already imported at top).
+    config.run_timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    
     # Execute mode
     if args.mode == 'train':
         # Multi-scenario training support:

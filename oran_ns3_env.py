@@ -45,6 +45,9 @@ class NS3Config:
     scenario: str = 'flash_crowd'     # Currently active scenarion
     # Topic suffix for parallel environment isolation (e.g., "_0", "_1")
     topic_suffix: str = ""
+    # Shared run timestamp — set once at training start so all envs write to the same CSV.
+    # Leave empty to auto-generate per-env (legacy behaviour).
+    run_timestamp: str = ""
     # Verbosity control for CLI output
     verbose: bool = True
     # Testing: Randomly shuffle UE indices in the state (Order Scramble)
@@ -116,25 +119,28 @@ class RewardEngine:
         self.config = config
 
         # ── Weights ──────────────────────────────────────────────
-        # ── Weights (AGGRESSIVE MODE — fix passive safety trap) ──
-        self.W_TPUT      = 2.0      # DOUBLED: Focus on throughput
-        self.W_DELAY_LIN = 0.5      # Linear Delay Penalty
+        # ── Weights (BALANCED MODE — fix r_se dominance) ─────────
+        # r_se was dominating (0.3-0.8) because se_avg ≈ 3-5 bits/s/Hz
+        # from typical SINR values (12-25 dB), making even W_SE=0.15
+        # produce large rewards. Slashed W_SE to a tiny keep-alive only.
+        self.W_TPUT      = 8.0      # Boosted: primary learning signal
+        self.W_DELAY_LIN = 1.5      # Boosted: make delay visible in chart
         self.W_DELAY_BAR = 2.7      # Punish SLA breaches
-        self.W_LOSS      = 2.5      # Increased from 1.0: core stability penalty
-        self.W_SE        = 0.15     # Reward robust channel conditions
-        self.W_ENERGY    = 0.05     # REDUCED 10x: Let it use max power!
+        self.W_LOSS      = 2.5      # Core stability penalty
+        self.W_SE        = 0.03     # SLASHED: tiny keep-alive gradient only
+        self.W_ENERGY    = 0.05     # Reduced: let it use max power
         self.W_LOAD      = 1.0      # Load Balancing
-        self.W_QUEUE     = 0.8      # "Backpressure" signal
+        self.W_QUEUE     = 0.8      # Backpressure signal
         self.W_SMOOTH    = 0.05     # Action Smoothing
         self.BIAS        = 1.0      # Survival Bias (Ensures Level 0 is positive)
 
         # ── Thresholds / Normalizers ─────────────────────────────
-        self.T_MAX     = 50.0      # Max Throughput (Mbps)
+        self.T_MAX     = 10.0      # Lowered: actual tput ~1-3 Mbps, so 10 Mbps is reachable
         self.D_MAX     = 65.0      # Normalizing Delay (ms)
-        self.D_SLA     = 45.0       # Tightened from 60.0: earlier barrier entry
-        self.BETA_LOSS = 10.0        # Steeper from 3.0: exponential loss penalty
-        self.EPSILON   = 1e-6       # Safe log
-        self.Q_MAX     = 500.0      # Tightened from 1000.0: more sensitive queue penalization
+        self.D_SLA     = 45.0      # Earlier barrier entry
+        self.BETA_LOSS = 10.0      # Steep exponential loss penalty
+        self.EPSILON   = 1e-6      # Safe log
+        self.Q_MAX     = 500.0     # Queue penalization threshold
 
         # ── Clip bounds (Stage 1 — per component) ───────────────
         self.CLIP_TPUT   = (-0.5, 5.0)    # log(1+x) for x≥0 is ≥0, but allow small neg for numerical safety
@@ -832,7 +838,7 @@ class ORANns3Env(gym.Env):
     """
     
     metadata = {'render_modes': ['human']}
-    
+
     def __init__(self, config: Optional[NS3Config] = None):
         super().__init__()
         
@@ -848,24 +854,33 @@ class ORANns3Env(gym.Env):
         self._kpm_log_file = open(self._kpm_log_path, 'w')
         self._kpm_step_counter = 0
         
-        # Reward Component Logger — writes detailed reward breakdown to logs/reward_metrics_X.csv
+        # Reward Component Logger — one timestamped CSV per training run, shared by all envs.
+        # Each env writes its own rows with an env_id column.
+        # Process-safe concurrent writes use fcntl.flock (works with SubprocVecEnv/spawn).
+        import fcntl
+        env_id_str = (self.config.topic_suffix or '_0').lstrip('_')
+        self._env_id = int(env_id_str) if env_id_str.isdigit() else 0
         try:
-            self._reward_log_path = f'logs/reward_metrics{suffix}.csv'
-            # Check if file exists to write header only once (though with suffix per env, likely new)
-            file_exists = os.path.isfile(self._reward_log_path) and os.path.getsize(self._reward_log_path) > 0
-            self._reward_log_file = open(self._reward_log_path, 'a', newline='')
-            self._reward_csv_writer = csv.writer(self._reward_log_file)
-            
-            if not file_exists:
-                # Header based on RewardEngine breakdown keys
-                header = ['step', 'reward', 'r_tput', 'r_delay', 'r_loss', 'r_se', 'r_energy', 'r_load', 
-                          'r_queue', 'r_smooth', 'se_avg', 'jains', 'p95_delay', 'avg_throughput', 
-                          'avg_delay', 'avg_loss', 'z_level', 'z_success']
-                self._reward_csv_writer.writerow(header)
-                self._reward_log_file.flush()
+            from datetime import datetime
+            ts = self.config.run_timestamp or datetime.now().strftime('%Y%m%d_%H%M%S')
+            self._reward_log_path = f'logs/reward_metrics_{ts}.csv'
+            # Env 0 creates the file with header; others just open for append
+            if self._env_id == 0 and not os.path.exists(self._reward_log_path):
+                with open(self._reward_log_path, 'w', newline='') as hf:
+                    import csv as _csv
+                    w = _csv.writer(hf)
+                    w.writerow(['env_id', 'step', 'reward',
+                                'r_tput', 'r_delay', 'r_loss', 'r_se', 'r_energy',
+                                'r_load', 'r_queue', 'r_smooth',
+                                'se_avg', 'jains', 'p95_delay',
+                                'avg_throughput', 'avg_delay', 'avg_loss',
+                                'z_level', 'z_success'])
+                print(f"[RewardLogger] Env {self._env_id}: created {self._reward_log_path}")
+            self._reward_log_enabled = True
         except Exception as e:
             print(f"Warning: Failed to initialize reward logger: {e}")
-            self._reward_log_file = None
+            self._reward_log_enabled = False
+
         
         # ──────────────────────────────────────────────────────────
         # Cell-Centric State Space  (Enriched Cell Tokens)
@@ -1023,9 +1038,11 @@ class ORANns3Env(gym.Env):
             })
             
             # Log reward components to CSV
-            if self._reward_log_file:
+            if self._reward_log_enabled:
                 try:
+                    import fcntl, csv as _csv
                     row = [
+                        self._env_id,
                         self.current_step,
                         round(reward, 4),
                         round(breakdown.get('r_tput', 0), 4),
@@ -1045,10 +1062,10 @@ class ORANns3Env(gym.Env):
                         int(breakdown.get('z_level', 0)),
                         round(breakdown.get('z_success', 0), 4)
                     ]
-                    self._reward_csv_writer.writerow(row)
-                    # Flush periodically to ensure data is written even if crashed
-                    if self.current_step % 10 == 0:
-                        self._reward_log_file.flush()
+                    with open(self._reward_log_path, 'a', newline='') as f:
+                        fcntl.flock(f, fcntl.LOCK_EX)
+                        _csv.writer(f).writerow(row)
+                        fcntl.flock(f, fcntl.LOCK_UN)
                 except Exception:
                     pass
             
