@@ -13,9 +13,13 @@ Radio-Cortex pushes the boundary of O-RAN intelligence by solving three fundamen
     -   *Problem*: Multi-stage curriculum rewards create non-stationary MDPs that destabilize distributed training (SubprocVecEnv). Conflicting reward components (energy, queue, smoothing) introduce gradient noise and reward hacking.
     -   *Solution*: A **single-stage, flat reward function** with only 4 components: **Throughput** (log-fairness), **Delay** (strictly linear), **Packet Loss** (bounded), and **Load Balancing** (CIO-driven). A constant `+1.0` survival bias keeps rewards positive. All penalties are linearly bounded with per-component and total clipping to prevent gradient explosions.
 
-3.  **Cell-Centric Action Space (6-Dim Causal Control)**:
-    -   *Problem*: RL agents often output erratic "bang-bang" control actions. Including non-causal actions (e.g., MAC Delay, CQI Timer) breaks the cause→effect chain PPO relies on.
-    -   *Solution*: We compressed the action space to **6 dimensions** (2 per cell: TxPower, HandoverSensitivity). **HandoverSensitivity** is a physics-informed fusion of TTT and Hysteresis into a single parameter: -1=conservative (resists handovers), +1=aggressive (triggers handovers easily). This restores causality and reduces dimensionality by 60% vs. the original 5-action design. Frame stacking (3 frames) provides temporal context.
+3.  **Cell-Centric Action Space (Physics-Informed Control)**:
+    -   *Problem*: RL agents often output erratic "bang-bang" control actions if the action space is poorly defined. 
+    -   *Solution*: We utilize a **9-dimension action space** (3 per cell: TxPower, CIO, TTT). 
+        *   **TxPower**: Absolute mapping to [10, 46] dBm for direct energy-performance control. 
+        *   **CIO**: Absolute [-6, 6] dB for immediate load balancing via handover boundary adjustment.
+        *   **TTT**: Absolute [0, 1280] ms to control handover agility vs. stability.
+    All actions are absolute and physics-bounded, restoring causality and ensuring the agent learns stable policies. Frame stacking (3 frames) provides temporal context.
 
 ## 🚀 End-to-End Installation Guide
 
@@ -178,9 +182,10 @@ To achieve maximum accuracy for project displays or research, use the hypertuned
 | `--learning-rate` | 3e-4 | **3e-4** | Standard reliable LR |
 | `--batch-size` | 256 | **4096** | Massive batch for deep convergence |
 | `--rollout-steps` | 128 | **512** | Large buffer (16k steps) for stable batch |
-| `--ppo-epochs` | 10 | **20** | Squeeze max learning from rollouts |
+| `--ppo-epochs` | 20 | **20** | Squeeze max learning from rollouts |
 | `--hidden-dim` | 256 | **512** | Capture complex nuances in long suites |
-| `--sim-time` | 20.0 | **50.0** | Longer episodes to capture full congestion decay |
+| `--target-kl` | 0.05 | **0.05** | Early stopping to prevent catastrophic divergence |
+| `--sim-time` | 60.0 | **60.0** | Sufficient time to capture full congestion decay |
 
 > [!TIP]
 > All optimal hyperparameters are baked into `scripts/train_curriculum.sh`. Just run it.
@@ -198,8 +203,10 @@ To achieve maximum accuracy for project displays or research, use the hypertuned
 | `--vf-coef` | 0.5 | Value function loss weight. |
 | `--ent-coef` | 0.01 | Entropy regularization weight. |
 | `--max-grad-norm` | 0.5 | Gradient clipping threshold. |
-| `--checkpoint-interval` | 5 | Checkpoint frequency (updates). |
-| `--log-interval` | 5 | Console log frequency (updates). |
+| `--checkpoint-interval` | 10 | Checkpoint frequency (updates). |
+| `--log-interval` | 10 | Console log frequency (updates). |
+| `--ppo-epochs` | 20 | PPO update epochs per batch. |
+| `--target-kl` | 0.05 | Target KL divergence for early stopping. |
 
 ### 🌍 Simulation Scenarios
 
@@ -326,10 +333,11 @@ Radio-Cortex uses a **single-stage, stationary reward function** optimized for d
 |:---|:---:|:---|:---:|
 | **Throughput** | 12.0 | $W \cdot \log(1 + T/T_{max})$ | [-0.5, 50.0] |
 | **Delay** | 2.0 | $-W \cdot \min(D/D_{max}, 1)$ (strictly linear) | [-50.0, 0.0] |
-| **Packet Loss** | 1.0 | Bounded linear penalty, steep above 25% loss | [-20.0, 0.0] |
+| **Packet Loss** | 5.0 | Bounded penalty (now 5.0x weight) | [-25.0, 0.0] |
 | **Load Balance** | 2.0 | $-\text{std}(\text{cell\_loads})$ | [-4.0, 0.0] |
 | **Energy Eff.** | 0.1 | Tie-breaker: $-\text{mean}(\text{norm\_tx\_power})$ | [-1.0, 0.0] |
 | **SLA Bonus** | 0.5 | +0.5 per UE meeting SLA (>1Mbps, <100ms) | [0.0, +NumUEs*0.5] |
+| **CIO Regularization**| 0.4 | Centering penalty: $-W \cdot \text{mean}(|\text{CIO}|/6)$ | [-0.4, 0.0] |
 | **Survival Bias** | — | Constant `+1.0` | — |
 
 #### Dropped Components (with rationale)
@@ -340,7 +348,7 @@ Radio-Cortex uses a **single-stage, stationary reward function** optimized for d
 | `r_smooth` | Penalizes sudden CIO shifts needed for load spikes |
 | `d_barrier` | Quadratic SLA penalty causes unbounded negative spikes |
 
-$$R_{total} = \text{clip}\left( r_{tput} + r_{delay} + r_{loss} + r_{load} + r_{energy} + r_{sla} + \text{BIAS}, [-100, 50] \right)$$
+$$R_{total} = \text{clip}\left( r_{tput} + r_{delay} + r_{loss} + r_{load} + r_{energy} + r_{sla} + r_{cio} + \text{BIAS}, [-100, 50] \right)$$
 
 ---
 

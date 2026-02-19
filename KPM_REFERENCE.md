@@ -41,8 +41,8 @@ For each Cell/eNodeB, keys are formatted as `cell_{id}_{metric}`.
 | `_power` | `float` | dBm | 10.0 - 46.0 | Current Transmission Power. |
 | `_load` | `float` | count | 0 - 50 | Number of active UEs served by this cell in the last interval. |
 | `_avg_rb_req` | `float` | count | 0 - 5000 | Average total Resource Blocks requested per UE over the interval. |
-| `_rb_util` | `float` | ratio | 0.0 - 1.0 (Fixed 0.5) | Resource block utilization (Currently fixed at `0.5`). |
-| `_queue` | `int` | count | 0 | Queue length (Aggregated across bearers). |
+| `_rb_util` | `float` | ratio | 0.0 - 1.0 | Resource block utilization (Now calculated from UE allocations). |
+| `_queue` | `int` | count | 0 - 5000 | Queue length (Estimated from per-cell packet loss). |
 | `_ues` | `int` | count | 0 - 50 | Number of connected UEs in this cell. |
 
 ## Example JSON Payload
@@ -69,8 +69,8 @@ For each Cell/eNodeB, keys are formatted as `cell_{id}_{metric}`.
   "cell_0_power": 43.0,
   "cell_0_load": 4,
   "cell_0_avg_rb_req": 15.0,
-  "cell_0_rb_util": 0.5,
-  "cell_0_queue": 0,
-  "cell_0_ues": 0
+  "cell_0_rb_util": 0.75,
+  "cell_0_queue": 150,
+  "cell_0_ues": 4
 }
 ```
