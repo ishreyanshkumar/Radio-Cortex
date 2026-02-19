@@ -9,9 +9,9 @@ Radio-Cortex pushes the boundary of O-RAN intelligence by solving three fundamen
     -   *Problem*: Standard Neural Networks require fixed input sizes (breaking when UEs join/leave). Furthermore, standard Transformers use "Causal Masking," which blinds early tokens (Cells) from seeing later tokens (UEs).
     -   *Solution*: We adapted the **Dragon Hatchling (BDH)** architecture into a **Bidirectional Policy**. By removing the causal mask, we allow Base Stations to fully "attend" to all User tokens simultaneously, regardless of their position in the sequence. This creates a truly **Scale-Free Agent** that trains on 5 UEs but successfully controls 100 UEs without retraining.
 
-2.  **Curriculum Reward Engine (Multi-Objective Safety)**:
-    -   *Problem*: Network optimization is a zero-sum game (e.g., High Throughput vs. Low Energy). Naive RL agents often "reward hack" or receive persistently negative rewards, causing learning collapse.
-     -   *Solution*: We implemented a **3-Level Curriculum Reward Engine** with *Survival Bias* and **gated promotion** (minimum 50 steps per level + 50-step history window). **Level 0 (Bootstrap)**: Throughput + Packet Loss (Survival) + a constant `+1.0` bias. **Level 1 (Quality)**: Adds Delay and Fairness rewards. **Level 2 (Efficiency)**: Adds Energy, Load Balancing, and Handover optimization. This ensures stable, progressive learning.
+2.  **Stationary Reward Engine (Distributed-RL Safe)**:
+    -   *Problem*: Multi-stage curriculum rewards create non-stationary MDPs that destabilize distributed training (SubprocVecEnv). Conflicting reward components (energy, queue, smoothing) introduce gradient noise and reward hacking.
+    -   *Solution*: A **single-stage, flat reward function** with only 4 components: **Throughput** (log-fairness), **Delay** (strictly linear), **Packet Loss** (bounded), and **Load Balancing** (CIO-driven). A constant `+1.0` survival bias keeps rewards positive. All penalties are linearly bounded with per-component and total clipping to prevent gradient explosions.
 
 3.  **Cell-Centric Action Space (6-Dim Causal Control)**:
     -   *Problem*: RL agents often output erratic "bang-bang" control actions. Including non-causal actions (e.g., MAC Delay, CQI Timer) breaks the cause→effect chain PPO relies on.
@@ -312,42 +312,35 @@ python3 -m http.server 8080
 | | Congestion Intensity | % of time network utilization > 90%. |
 | | Cell Edge Throughput | 5th percentile user throughput (fairness proxy). |
 | | Jain's Fairness | Measure of resource distribution equality (0-1). |
-| | Energy Efficiency | System Throughput / Total Power (Mbps/Watt). |
 | **PHY / Wireless** | Average SINR | Signal-to-Interference-plus-Noise Ratio (dB). |
 | | Average RSRP | Reference Signal Received Power (Signal Strength, dBm). |
 | **Mobility** | Handover Count | Number of cell switches per UE. |
-| **RIC / E2 Interface** | Control Stability | AI decision consistency score (0-100). |
 
-### 🧠 Curriculum Reward Engine
+### 🧠 Stationary Reward Engine
 
-Radio-Cortex uses a **3-Level Curriculum Reward Engine** that progressively introduces penalties as the agent improves. A **Survival Bias** of `+1.0` ensures rewards are always positive during the bootstrap phase.
+Radio-Cortex uses a **single-stage, stationary reward function** optimized for distributed RL training (SubprocVecEnv). A **Survival Bias** of `+1.0` keeps rewards positive during exploration.
 
-#### 📊 Curriculum Levels
+#### Active Components
 
-| Level | Trigger | Active Components | Reward Range |
-|:---|:---|:---|:---|
-| **0 (Bootstrap)** | Start | Throughput + SE + Queue + Bias | **+0.5 to +2.0** (positive via bias) |
-| **1 (Quality)** | ≥60% UE satisfied + 100 steps | + Delay + **Loss** penalties | ~0.0 to +1.5 |
-| **2 (Reliability)** | ≥85% UE satisfied + 100 steps | + Energy + Load penalties | ~-0.5 to +1.0 |
+| Component | Weight | Formula | Range |
+|:---|:---:|:---|:---:|
+| **Throughput** | 12.0 | $W \cdot \log(1 + T/T_{max})$ | [-0.5, 50.0] |
+| **Delay** | 2.0 | $-W \cdot \min(D/D_{max}, 1)$ (strictly linear) | [-50.0, 0.0] |
+| **Packet Loss** | 1.0 | Bounded linear penalty, steep above 25% loss | [-20.0, 0.0] |
+| **Load Balance** | 2.0 | $-\text{std}(\text{cell\_loads})$ | [-4.0, 0.0] |
+| **Energy Eff.** | 0.1 | Tie-breaker: $-\text{mean}(\text{norm\_tx\_power})$ | [-1.0, 0.0] |
+| **SLA Bonus** | 0.5 | +0.5 per UE meeting SLA (>1Mbps, <100ms) | [0.0, +NumUEs*0.5] |
+| **Survival Bias** | — | Constant `+1.0` | — |
 
-#### 📐 1. UE-Level Utility (User Satisfaction)
-Computed per-UE and averaged across the network to ensure fairness.
+#### Dropped Components (with rationale)
 
-*   **Throughput ($\alpha$-fairness):** $r_{tput} = W_{tput} \cdot \log(1 + T/T_{max})$
-*   **Delay (Two-Tier, Level ≥ 1):** Linear penalty + Quadratic SLA Barrier (both gated by curriculum)
-*   **Packet Loss (Level ≥ 1):** $r_{loss} = -W_{loss} \cdot (\exp(\beta \cdot L) - 1)$
+| Dropped | Reason |
+|:---|:---|
+| `r_queue` | Redundant with `r_loss` (queue ≈ delayed loss proxy) |
+| `r_smooth` | Penalizes sudden CIO shifts needed for load spikes |
+| `d_barrier` | Quadratic SLA penalty causes unbounded negative spikes |
 
-#### 🏗️ 2. Cell-Level Utility (Network Efficiency)
-
-*   **Queue Congestion (Level ≥ 0):** Early warning signal from the start.
-*   **Energy Efficiency (Level ≥ 2):** Penalizes excessive RB usage.
-*   **Load Balancing (Level ≥ 2):** Penalizes high variance in cell loads.
-
-#### ⚖️ 3. Agent Stability + Survival Bias
-*   **Action Smoothing:** Penalizes jerky control decisions.
-*   **Survival Bias:** Constant `+1.0` added to ensure positive rewards at Level 0.
-
-$$R_{total} = \text{clip}\left( \sum r_{ue} + \sum r_{cell} + r_{smooth} + \text{BIAS}, [-10.0, 5.0] \right)$$
+$$R_{total} = \text{clip}\left( r_{tput} + r_{delay} + r_{loss} + r_{load} + r_{energy} + r_{sla} + \text{BIAS}, [-100, 50] \right)$$
 
 ---
 
@@ -383,9 +376,12 @@ converts ns-3 simulation into a standard OpenAI Gym interface (observation, acti
     *   `step(action)`: Takes an RL action (9 dims = 3 per cell), sends it to ns-3, waits for the next KPM report, and returns (state, reward, done).
     *   `reset()`: Restarts the ns-3 simulation subprocess.
     *   `_compute_reward(e2_msg)`: Delegates to `RewardEngine`.
-    *   **`RewardEngine`**: 3-Level Curriculum reward engine with Survival Bias. Combines 8 components (Throughput, Delay, Loss, SE, Energy, Load, Queue, Smoothing) gated by curriculum levels.
-    *   **State Space**: `num_cells × 48` (3-frame stacked Enriched Cell Tokens: 16 features/cell × 3 frames). 16 features = 5 native cell metrics + 7 aggregated UE stats + 3 delta features + 1 curriculum level. All strictly normalized to [-1, 1].
-    *   **Action Space**: `num_cells × 3` = 9 dimensions — TxPower (differential ±1 dBm), CIO (absolute [-6, 6] dB), and TTT (absolute [0, 1280] ms). All [-1,1]-normalized.
+    *   **`RewardEngine`**: Stationary single-stage reward engine. Combines 6 components (Throughput, Delay, Loss, Load, Energy, SLA Bonus) with Survival Bias.
+    *   **State Space**: `num_cells × 48` (3-frame stacked Enriched Cell Tokens). Features strictly normalized to [-1, 1]. Includes a stationary flag instead of curriculum level.
+    *   **Action Space**: `num_cells × 3` = 9 dimensions. All [-1,1]-normalized.
+        *   **TxPower**: Absolute mapping to [10, 46] dBm. Allows instant power switching.
+        *   **CIO**: Absolute [-6, 6] dB.
+        *   **TTT**: Absolute [0, 1280] ms.
 *   **`NS3Interface`**: Handles low-level communication.
     *   `start_simulation()`: Spawns the `./ns3 run ...` subprocess.
     *   `send_rc_control(actions)`: Serializes actions to JSON and sends via Kafka `e2_rc_control` topic.

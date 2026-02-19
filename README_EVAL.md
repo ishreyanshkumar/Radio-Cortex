@@ -56,7 +56,7 @@ Penalizes both constant loss, sudden outages (Peak/Max Loss), service downtime, 
 ### 🏗️ 3. Resource Score (Efficiency & Fairness)
 Rewards high spectrum utilization AND efficiency, while ensuring fairness.
 *   **Formula:** `10% Utilization + 30% Cell Edge + 30% Jain's Fairness + 30% Energy Efficiency`
-*   *Note:* Utilization weight reduced (Baseline often has high utilization due to congestion, not efficiency). Cell Edge and Energy boosted for RL distinction.
+*   **Note:** Energy Efficiency acts as a tie-breaker, rewarding agents that achieve similar QoS with lower power.
 
 ### 📦 4. Buffer Score (Congestion Health)
 Measures buffer occupancy and congestion spikes.

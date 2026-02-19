@@ -389,7 +389,7 @@ class EvaluationRunner:
         State layout (Cell-Centric, 16 features per cell):
           [0-11] Base Features (Queue, RB, Power, Load, Req, Tput, Delay, Loss, MaxD, MaxL, Jain, NUE)
           [12-14] Delta Features (Queue, RB, Delay)
-          [15] Curriculum Level
+          [15] Stationary Flag (constant 0.5)
         """
         state_dict = {}
         features_per_cell = 16
@@ -565,27 +565,25 @@ class EvaluationRunner:
         norm_p95 = max(0.0, 1.0 - (p95_delay / 200.0))
         qos_score = (0.25 * norm_tput + 0.25 * norm_delay + 0.15 * norm_p95 + 0.35 * satisfied_user_ratio) * 100
         
-        # 2. Reliability Score: Mix of Avg/Max Loss, Downtime, HO Stability, HO Success, and Control Stability
+        # 2. Reliability Score: Removed Control Stability. 
+        # Redistributed weight to Loss and Max Loss.
         norm_loss = max(0.0, 1.0 - (avg_packet_loss * 10))
         norm_max_loss = max(0.0, 1.0 - (max_packet_loss * 5))
         norm_downtime = max(0.0, 1.0 - (total_downtime / 10.0))
         norm_ho = max(0.0, 1.0 - (avg_handover_count / 3.0))
         norm_ho_success = handover_success_rate if handover_success_rate > 0 else 1.0
-        norm_control = control_stability / 100.0
         
-        # Weighted Sum (Total = 1.0)
-        # Reduced Control Stability (Baseline is static/perfect). Boosted Loss/Downtime (RL shines)
-        # Loss (30%), Max Loss (10%), Downtime (20%), HO (10%), HO Success (20%), Control (10%)
-        reliability_score = (0.3 * norm_loss + 0.1 * norm_max_loss + 0.2 * norm_downtime + 
-                             0.1 * norm_ho + 0.2 * norm_ho_success + 0.1 * norm_control) * 100
+        # New Weights: Loss (35%), Max Loss (15%), Downtime (20%), HO (10%), HO Success (20%)
+        reliability_score = (0.35 * norm_loss + 0.15 * norm_max_loss + 0.20 * norm_downtime + 
+                             0.10 * norm_ho + 0.20 * norm_ho_success) * 100
         
         # 3. Resource Score: Utilization, Edge Tput, Fairness, EnergyEff
         avg_util = np.mean(rb_utils) if rb_utils else 0.0
         norm_util = min(avg_util * 100, 100.0) / 100.0
         norm_edge = min(cell_edge_tput / 2.0, 1.0)
         norm_nrg = min(energy_efficiency / 150.0, 1.0)
-        # Reduced Utilization (Baseline simply fills buffers). Boosted Edge/Energy (Smart mgmt)
-        # Util (10%), Edge (30%), Fairness (30%), Energy (30%)
+        
+        # New Weights with Energy: Util (10%), Edge (30%), Fairness (30%), Energy (30%)
         resource_score = (0.10 * norm_util + 0.30 * norm_edge + 0.30 * jains_fairness + 0.30 * norm_nrg) * 100
         
         # 4. Buffer Score: Queue Health & Congestion SPIkes

@@ -144,7 +144,8 @@ def train_radio_cortex(
     n_envs: int = 12,
     model_type: str = 'bdh',
     num_epochs: int = 20,
-    lr_scheduler_gamma: float = 0.999
+    lr_scheduler_gamma: float = 0.999,
+    target_kl: float = 0.05
 ):
     """
     Train Radio-Cortex agent
@@ -200,7 +201,8 @@ def train_radio_cortex(
         device=device,
         checkpoint_interval=checkpoint_interval,
         model_type=model_type,
-        lr_scheduler_gamma=lr_scheduler_gamma
+        lr_scheduler_gamma=lr_scheduler_gamma,
+        target_kl=target_kl
     )
 
     # --- ADDED: Resumption Logic ---
@@ -755,18 +757,19 @@ def main():
     hyper = parser.add_argument_group('Advanced PPO / RL Tuning')
     hyper.add_argument('--learning-rate', type=float, default=3e-4, help='PPO Learning rate')
     hyper.add_argument('--batch-size', type=int, default=128, help='Batch size for optimization updates')
-    hyper.add_argument('--rollout-steps', type=int, default=256, help='Steps per rollout trajectory')
+    hyper.add_argument('--rollout-steps', type=int, default=128, help='Steps per rollout trajectory')
     hyper.add_argument('--gamma', type=float, default=0.99, help='Discount factor')
     hyper.add_argument('--hidden-dim', type=int, default=256, help='Network hidden dimension')
     hyper.add_argument('--gae-lambda', type=float, default=0.95, help='GAE normalization lambda')
     hyper.add_argument('--clip-epsilon', type=float, default=0.2, help='PPO clipping bound')
     hyper.add_argument('--vf-coef', type=float, default=0.5, help='Value function loss weight')
-    hyper.add_argument('--ent-coef', type=float, default=0.001, help='Entropy regularization weight')
+    hyper.add_argument('--ent-coef', type=float, default=0.01, help='Entropy regularization weight')
     hyper.add_argument('--max-grad-norm', type=float, default=0.5, help='Gradient clipping threshold')
-    hyper.add_argument('--checkpoint-interval', type=int, default=5, help='Checkpoint frequency (updates)')
-    hyper.add_argument('--log-interval', type=int, default=5, help='Console log frequency (updates)')
+    hyper.add_argument('--checkpoint-interval', type=int, default=10, help='Checkpoint frequency (updates)')
+    hyper.add_argument('--log-interval', type=int, default=10, help='Console log frequency (updates)')
     hyper.add_argument('--ppo-epochs', type=int, default=20, help='PPO update epochs per batch')
-    hyper.add_argument('--lr-gamma', type=float, default=0.999, help='Exponential LR decay gamma per update')
+    hyper.add_argument('--lr-gamma', type=float, default=0.99, help='Exponential LR decay gamma per update')
+    hyper.add_argument('--target-kl', type=float, default=0.05, help='Target KL divergence for early stopping')
 
     args = parser.parse_args()
 
@@ -861,7 +864,8 @@ def main():
             n_envs=args.n_envs,
             model_type=args.model,
             num_epochs=args.ppo_epochs,
-            lr_scheduler_gamma=args.lr_gamma
+            lr_scheduler_gamma=args.lr_gamma,
+            target_kl=args.target_kl
         )
     
     elif args.mode == 'eval':

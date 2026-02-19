@@ -49,8 +49,8 @@ FEATURE_NAMES = [
 ]
 ACTION_NAMES = ["TxPower", "Handover Sensitivity"]
 
-REWARD_COMPONENTS = ["r_tput", "r_delay", "r_loss", "r_se", "r_energy", "r_load", "r_queue", "r_smooth"]
-COMPONENT_COLORS  = ["#00d4ff", "#f87171", "#fbbf24", "#34d399", "#8b5cf6", "#f472b6", "#60a5fa", "#a78bfa"]
+REWARD_COMPONENTS = ["r_tput", "r_delay", "r_loss", "r_load", "r_energy", "r_sla", "r_cio"]
+COMPONENT_COLORS  = ["#00d4ff", "#f87171", "#fbbf24", "#f472b6", "#34d399", "#a78bfa", "#6366f1"]
 
 # ── Model loading helpers ─────────────────────────────────────────────────────
 
@@ -268,7 +268,7 @@ def build_metrics_tab():
         reward_plot   = gr.Plot(label="Total Reward Over Time")
         breakdown_plot = gr.Plot(label="Reward Component Breakdown")
         kpi_plot      = gr.Plot(label="KPI Trends (Throughput / Delay / Loss)")
-        curriculum_plot = gr.Plot(label="Curriculum Level & Success Rate")
+        success_plot  = gr.Plot(label="UE Success Rate")
 
         def _list_logs_refresh():
             return gr.Dropdown(choices=_list_log_csvs())
@@ -286,9 +286,9 @@ def build_metrics_tab():
 
         refresh_log_btn.click(_list_logs_refresh, outputs=[log_dd])
         csv_file.change(load_from_file, inputs=[csv_file],
-                        outputs=[load_status, stat_df, reward_plot, breakdown_plot, kpi_plot, curriculum_plot])
+                        outputs=[load_status, stat_df, reward_plot, breakdown_plot, kpi_plot, success_plot])
         load_log_btn.click(load_from_dropdown, inputs=[log_dd],
-                           outputs=[load_status, stat_df, reward_plot, breakdown_plot, kpi_plot, curriculum_plot])
+                           outputs=[load_status, stat_df, reward_plot, breakdown_plot, kpi_plot, success_plot])
 
 
 def _list_log_csvs():
@@ -306,8 +306,8 @@ def _process_csv(path: str):
         status = f"✅ Loaded {len(df)} rows from {os.path.basename(path)}"
 
         # ── Summary stats ──────────────────────────────────────────────────
-        numeric_cols = ["reward", "r_tput", "r_delay", "r_loss", "r_se", "r_energy",
-                        "avg_throughput", "avg_delay", "avg_loss", "z_level", "z_success"]
+        numeric_cols = ["reward", "r_tput", "r_delay", "r_loss", "r_load", "r_energy", "r_sla", "r_cio",
+                        "avg_throughput", "avg_delay", "avg_loss", "z_success"]
         available = [c for c in numeric_cols if c in df.columns]
         stats = df[available].describe().round(4).reset_index()
         stats.rename(columns={"index": "Statistic"}, inplace=True)
@@ -365,32 +365,24 @@ def _process_csv(path: str):
             fig_kpi.update_xaxes(gridcolor="#1e293b", row=i, col=1)
             fig_kpi.update_yaxes(gridcolor="#1e293b", row=i, col=1)
 
-        # ── Plot 4: Curriculum ─────────────────────────────────────────────
-        fig_curr = make_subplots(specs=[[{"secondary_y": True}]])
-        if "z_level" in df.columns:
-            fig_curr.add_trace(go.Scatter(
-                x=df.index, y=df["z_level"],
-                mode="lines+markers", name="Curriculum Level",
-                line=dict(color="#8b5cf6", width=2),
-                marker=dict(size=4),
-            ), secondary_y=False)
+        # ── Plot 4: Success Rate ───────────────────────────────────────────
+        fig_success = go.Figure()
         if "z_success" in df.columns:
-            fig_curr.add_trace(go.Scatter(
+            fig_success.add_trace(go.Scatter(
                 x=df.index, y=df["z_success"],
                 mode="lines", name="Success Rate",
-                line=dict(color="#34d399", width=1.5, dash="dot"),
-            ), secondary_y=True)
-        fig_curr.update_layout(
-            paper_bgcolor="#111827", plot_bgcolor="#1a1f35",
-            font=dict(color="#f1f5f9"),
-            title_text="Curriculum Level & Success Rate",
-            legend=dict(bgcolor="#1a1f35"),
-        )
-        fig_curr.update_xaxes(gridcolor="#1e293b", title_text="Step")
-        fig_curr.update_yaxes(gridcolor="#1e293b", title_text="Level", secondary_y=False)
-        fig_curr.update_yaxes(gridcolor="#1e293b", title_text="Success Rate", secondary_y=True)
+                line=dict(color="#34d399", width=1.5),
+            ))
+            if len(df) > 20:
+                roll_s = df["z_success"].rolling(20, min_periods=1).mean()
+                fig_success.add_trace(go.Scatter(
+                    x=df.index, y=roll_s,
+                    mode="lines", name="Rolling Mean (20)",
+                    line=dict(color="#8b5cf6", width=2, dash="dash"),
+                ))
+        _style_fig(fig_success, "UE Success Rate (Tput > 1 Mbps)", "Step", "Ratio")
 
-        return status, stats, fig_reward, fig_break, fig_kpi, fig_curr
+        return status, stats, fig_reward, fig_break, fig_kpi, fig_success
 
     except Exception as e:
         return f"❌ Error: {e}\n{traceback.format_exc()}", None, None, None, None, None

@@ -84,18 +84,19 @@ class PPOTrainer:
     def __init__(
         self,        env: gym.Env,
         hidden_dim: int = 256,
-        lr: float = 1e-4,
+        lr: float = 3e-4,
         gamma: float = 0.99,
         gae_lambda: float = 0.95,
-        clip_epsilon: float = 0.10, # Tightened: 0.15→0.1 to reduce KL divergence
+        clip_epsilon: float = 0.2, # Aligned with radio_cortex_complete
         vf_coef: float = 0.5,
-        ent_coef: float = 0.005,
+        ent_coef: float = 0.01,
         max_grad_norm: float = 0.5,
         device: Optional[str] = None,
         checkpoint_dir: str = 'models',
         checkpoint_interval: int = 5,
         model_type: str = 'bdh',
-        lr_scheduler_gamma: float = 0.999 # Default decay per update
+        lr_scheduler_gamma: float = 0.999, # Default decay per update
+        target_kl: float = 0.05 # Target KL divergence for early stopping
     ):
         self.hyperparams = {
             'hidden_dim': hidden_dim,
@@ -114,6 +115,8 @@ class PPOTrainer:
             self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
         else:
             self.device = device
+        self.model_type = model_type
+        self.target_kl = target_kl
         
         # Detect vectorized environment
         self.is_vec_env = hasattr(env, 'num_envs')
@@ -505,7 +508,9 @@ class PPOTrainer:
             
             # KL Early-Stop: if policy diverges too far, stop epoch updates
             # Healthy PPO keeps KL < 0.05. KL > 0.1 = catastrophic update.
-            if approx_kl > 0.05:
+            # KL Early-Stop: if policy diverges too far, stop epoch updates
+            # Healthy PPO keeps KL < target_kl (usually 0.05). KL > 0.1 = catastrophic update.
+            if self.target_kl is not None and approx_kl > self.target_kl:
                 break
                 
         # Update learning rate
@@ -667,7 +672,6 @@ class PPOTrainer:
                     live_env_metrics[env_i] = {
                         'tput': tput, 'delay': delay, 'loss': loss, 
                         'sinr': sinr, 'rsrp': rsrp, 'queue': queue, 'rb': rb, 'power': tx_dbm,
-                        'level': info.get('z_level', 0),
                         'success': info.get('z_success', 0.0)
                     }
             
@@ -732,7 +736,6 @@ class PPOTrainer:
         def create_env_metrics_table():
             table = Table(show_header=True, header_style="bold green", expand=True)
             table.add_column("Env ID", justify="center")
-            table.add_column("Lvl", justify="center")      # New: Level Column
             table.add_column("Succ", justify="right")      # New: Success Rate
             table.add_column("Activity", justify="center") # Heartbeat indicator
             table.add_column("Tput (Mbps)", justify="right")
@@ -750,7 +753,6 @@ class PPOTrainer:
                 m = live_env_metrics[env_id]
                 table.add_row(
                     str(env_id),
-                    f"[bold yellow]{m.get('level', 0)}[/]" if m.get('level', 0) < 2 else f"[bold green]{m.get('level', 0)}[/]", # Color code level
                     f"{m.get('success', 0)*100:.0f}%",
                     f"[bold green]{heartbeat}[/]" if m.get('tput', 0) > 0 else "[dim]idling[/]",
                     f"{m.get('tput', 0):.2f}",
@@ -887,17 +889,6 @@ class PPOTrainer:
                 # Force refresh
                 live.update(make_layout())
 
-                # --- NEW: Mastery-based Early Stopping ---
-                if live_env_metrics:
-                    current_level_avg = np.mean([m.get('level', 0) for m in live_env_metrics.values()])
-                    if current_level_avg >= 1.9: # Consistently at high quality/reliability
-                        self.consistent_level_2_counter += 1
-                    else:
-                        self.consistent_level_2_counter = 0
-                    
-                    if self.consistent_level_2_counter >= 50:
-                        print(f"\n[Mastery Detected] Level 2 maintained for 50 updates. Early stopping stage.")
-                        break
                 # -----------------------------------------
                 
                 # Periodic checkpointing

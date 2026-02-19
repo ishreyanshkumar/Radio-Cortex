@@ -15,7 +15,7 @@
 # --lr-gamma 0.98: Slower decay to accomodate more frequent updates
 
 echo "🚀 Starting Optimized Training for Flash Crowd..."
-echo "Config: PPO (Rollout=512, Batch=64, Epochs=20) | LR Gamma=0.98"
+echo "Config: PPO (Rollout=128, Batch=64, Epochs=20) | LR Gamma=0.98"
 
 python3 radio_cortex_complete.py \
     --mode train \
@@ -23,9 +23,8 @@ python3 radio_cortex_complete.py \
     --model bdh \
     --n-envs 4 \
     --total-timesteps 200000 \
-    --rollout-steps 256 \
+    --rollout-steps 128 \
     --batch-size 64 \
-    --ppo-epochs 20 \
     --lr-gamma 0.98 \
 
 echo "✅ Training Complete. Check logs/reward_metrics_*.csv for results."
