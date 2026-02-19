@@ -31,8 +31,10 @@
 #include <ns3/lte-ue-rrc.h>
 #include <ns3/pointer.h>
 
+#include <chrono>
 #include <cmath>
 #include <cstring>
+#include <ctime> // For timestamp generation
 #include <iostream>
 #include <librdkafka/rdkafka.h>
 #include <map>
@@ -398,7 +400,7 @@ private:
   std::string m_topicSuffix;
   Time m_kpmInterval;
   EventId m_kpmEvent;
-  EventId m_pollEvent;
+  // EventId m_pollEvent; // REMOVED: No more async polling
 
   // Kafka handles
   rd_kafka_t *m_producer;
@@ -407,7 +409,9 @@ private:
   rd_kafka_topic_t *m_rcTopic;
 
   void SetupKafka();
-  void PollKafka();
+  // Lock-step sync: blocks until Python sends an RC action.
+  // Returns true if action received & applied, false on timeout.
+  bool WaitForRcAction(int timeoutMs);
 
   // KPM metric collection
   struct UeMetrics {
@@ -478,9 +482,11 @@ void E2InterfaceManager::EnableE2() {
   m_kpmEvent = Simulator::Schedule(m_kpmInterval,
                                    &E2InterfaceManager::SendKpmReport, this);
 
-  // Schedule periodic polling
-  m_pollEvent = Simulator::Schedule(MilliSeconds(1),
-                                    &E2InterfaceManager::PollKafka, this);
+  // Schedule periodic polling - REMOVED for Lock-Step
+  // m_pollEvent = Simulator::Schedule(MilliSeconds(1),
+  //                                   &E2InterfaceManager::PollKafka, this);
+
+  NS_LOG_INFO("E2 lock-step mode enabled: Simulation will pause for actions.");
 }
 
 void E2InterfaceManager::SetKpmInterval(Time interval) {
@@ -515,9 +521,10 @@ void E2InterfaceManager::SetupKafka() {
     NS_LOG_ERROR("Kafka Config Error: " << errstr);
     return;
   }
-  std::string groupId = "ns3-e2-agent" + m_topicSuffix;
+  std::string groupId =
+      "ns3-e2-agent" + m_topicSuffix + "_" + std::to_string(std::time(nullptr));
   rd_kafka_conf_set(conf, "group.id", groupId.c_str(), NULL, 0);
-  rd_kafka_conf_set(conf, "auto.offset.reset", "earliest", NULL, 0);
+  rd_kafka_conf_set(conf, "auto.offset.reset", "latest", NULL, 0);
 
   m_consumer = rd_kafka_new(RD_KAFKA_CONSUMER, conf, errstr, sizeof(errstr));
   if (!m_consumer) {
@@ -544,35 +551,71 @@ void E2InterfaceManager::SetupKafka() {
   NS_LOG_INFO("Kafka E2 Interface Initialized");
 }
 
-void E2InterfaceManager::PollKafka() {
+bool E2InterfaceManager::WaitForRcAction(int timeoutMs) {
   if (!m_consumer) {
-    return;
+    return false;
   }
 
-  rd_kafka_message_t *rkm;
+  NS_LOG_INFO("Waiting for RC action from RL agent (sim_time="
+              << Simulator::Now().GetSeconds() << "s, timeout=" << timeoutMs
+              << "ms)...");
 
-  // Poll for new RC commands
-  rkm = rd_kafka_consumer_poll(m_consumer, 0);
-  if (rkm) {
+  auto deadline =
+      std::chrono::steady_clock::now() + std::chrono::milliseconds(timeoutMs);
+
+  while (std::chrono::steady_clock::now() < deadline) {
+    // Service producer delivery reports while waiting
+    if (m_producer) {
+      rd_kafka_poll(m_producer, 0);
+    }
+
+    // Block-poll with short real-time timeout
+    rd_kafka_message_t *rkm = rd_kafka_consumer_poll(m_consumer, 50);
+    if (!rkm) {
+      continue; // No message yet, keep waiting
+    }
+
     if (rkm->err) {
       if (rkm->err != RD_KAFKA_RESP_ERR__PARTITION_EOF) {
-        NS_LOG_WARN("Kafka consumer error: " << rd_kafka_message_errstr(rkm));
+        NS_LOG_WARN("Kafka consumer error while waiting for RC: "
+                    << rd_kafka_message_errstr(rkm));
       }
-    } else {
-      std::string command((const char *)rkm->payload, rkm->len);
-      NS_LOG_INFO("Received E2 RC command via Kafka");
-      ProcessRcCommand(command);
+      rd_kafka_message_destroy(rkm);
+      continue;
     }
+
+    // Got a valid message — drain any additional stale ones, keep LATEST
+    std::string latestCommand((const char *)rkm->payload, rkm->len);
     rd_kafka_message_destroy(rkm);
+
+    int drained = 1;
+    rd_kafka_message_t *extra;
+    while ((extra = rd_kafka_consumer_poll(m_consumer, 0)) != nullptr) {
+      if (!extra->err) {
+        latestCommand.assign((const char *)extra->payload, extra->len);
+        drained++;
+      }
+      rd_kafka_message_destroy(extra);
+    }
+
+    if (drained > 1) {
+      NS_LOG_INFO("WaitForRcAction: drained "
+                  << drained << " queued messages, applying latest only");
+    }
+
+    // FORCE LOGGING (visible even without NS_LOG_INFO level)
+    std::cout << "[LOCK-STEP] RC action received (sim_time="
+              << Simulator::Now().GetSeconds() << "s): " << latestCommand
+              << std::endl;
+
+    ProcessRcCommand(latestCommand);
+    return true;
   }
 
-  // Poll producer to serve delivery reports
-  if (m_producer) {
-    rd_kafka_poll(m_producer, 0);
-  }
-
-  m_pollEvent = Simulator::Schedule(MilliSeconds(10),
-                                    &E2InterfaceManager::PollKafka, this);
+  NS_LOG_WARN("WaitForRcAction: TIMED OUT after "
+              << timeoutMs
+              << "ms — no RC action received. Continuing without update.");
+  return false;
 }
 
 std::map<uint32_t, E2InterfaceManager::UeMetrics>
@@ -833,20 +876,38 @@ void E2InterfaceManager::SendKpmReport() {
 
   std::string kpmString = kpmJson.str();
 
-  // Send via Kafka
-  if (rd_kafka_produce(m_kpmTopic, RD_KAFKA_PARTITION_UA, RD_KAFKA_MSG_F_COPY,
-                       (void *)kpmString.c_str(), kpmString.length(), NULL, 0,
-                       NULL) == -1) {
-    NS_LOG_WARN("Failed to produce KPM report to Kafka");
-    if (rd_kafka_last_error() == RD_KAFKA_RESP_ERR__QUEUE_FULL) {
-      rd_kafka_poll(m_producer, 1000);
+  // Send KPM via Kafka with retry on transient failure
+  bool kpmSent = false;
+  for (int attempt = 0; attempt < 3 && !kpmSent; ++attempt) {
+    if (rd_kafka_produce(m_kpmTopic, RD_KAFKA_PARTITION_UA, RD_KAFKA_MSG_F_COPY,
+                         (void *)kpmString.c_str(), kpmString.length(), NULL, 0,
+                         NULL) == -1) {
+      NS_LOG_WARN("Failed to produce KPM report (attempt " << attempt + 1
+                                                           << ")");
+      if (rd_kafka_last_error() == RD_KAFKA_RESP_ERR__QUEUE_FULL) {
+        rd_kafka_poll(m_producer, 500); // Drain delivery reports, then retry
+      }
+    } else {
+      kpmSent = true;
     }
-  } else {
-    NS_LOG_DEBUG("Sent KPM report to Kafka");
-    rd_kafka_poll(m_producer, 0);
   }
 
-  // Reschedule next report
+  if (kpmSent) {
+    // Flush to guarantee KPM reaches broker before we block-wait
+    rd_kafka_flush(m_producer, 5000);
+    NS_LOG_DEBUG("Sent + flushed KPM report (sim_time="
+                 << Simulator::Now().GetSeconds() << "s)");
+
+    // LOCK-STEP: Pause simulation until RL agent responds with an action.
+    // Timeout 60s matches Python's max_wait_s=60.0.
+    WaitForRcAction(60000);
+  } else {
+    NS_LOG_ERROR(
+        "KPM produce failed after 3 attempts — skipping WaitForRcAction "
+        "to avoid deadlock");
+  }
+
+  // Schedule next report
   m_kpmEvent = Simulator::Schedule(m_kpmInterval,
                                    &E2InterfaceManager::SendKpmReport, this);
 }
@@ -854,129 +915,112 @@ void E2InterfaceManager::SendKpmReport() {
 void E2InterfaceManager::ProcessRcCommand(std::string command) {
   NS_LOG_INFO("Processing RC command: " << command);
 
-  // Simple JSON parsing to find TxPower for cells
-  // looking for pattern: "cell_X": { ... "TxPower": Y ... }
-  // or "cell_X": { "TxPower": Y } inside "actions"
+  // JSON format (flat keys from Python):
+  //   {"cell_0": 1, "cell_0_tx_power_dbm": 46.0, "cell_0_hysteresis_db": 1.2,
+  //   ...}
+  // We search for "cell_X" to find the cell, then look for "cell_X_<param>"
+  // keys.
 
   for (uint32_t i = 0; i < m_enbNodes.GetN(); ++i) {
     std::stringstream ss;
-    ss << "cell_" << i;
-    std::string cellKey = ss.str();
+    ss << "\"cell_" << i << "\"";
+    std::string cellKey = ss.str(); // e.g. "cell_0"
 
     size_t cellPos = command.find(cellKey);
-    if (cellPos != std::string::npos) {
-      auto parseValue = [&](const std::string &key, double &outValue) -> bool {
-        size_t keyPos = command.find(key, cellPos);
-        if (keyPos == std::string::npos) {
-          return false;
-        }
+    if (cellPos == std::string::npos) {
+      continue;
+    }
 
-        size_t valStart = keyPos + key.size();
-        while (valStart < command.length() &&
-               (command[valStart] == ' ' || command[valStart] == '\t')) {
-          valStart++;
-        }
+    // Build per-cell key prefix for flat JSON: "cell_0_tx_power_dbm" etc.
+    std::stringstream pfx;
+    pfx << "\"cell_" << i << "_";
+    std::string cellPfx = pfx.str(); // e.g. "cell_0_
 
-        size_t valEnd = valStart;
-        while (valEnd < command.length() &&
-               (isdigit(command[valEnd]) || command[valEnd] == '.')) {
-          valEnd++;
-        }
-
-        if (valEnd <= valStart) {
-          return false;
-        }
-
-        std::string valStr = command.substr(valStart, valEnd - valStart);
-        try {
-          outValue = std::stod(valStr);
-          return true;
-        } catch (...) {
-          NS_LOG_WARN("Failed to parse value for " << key << ": " << valStr);
-          return false;
-        }
-      };
-
-      Ptr<Node> enbNode = m_enbNodes.Get(i);
-      Ptr<LteEnbNetDevice> dev =
-          enbNode->GetDevice(0)->GetObject<LteEnbNetDevice>();
-      if (!dev) {
-        continue;
+    auto parseValue = [&](const std::string &paramName,
+                          double &outValue) -> bool {
+      std::string key = cellPfx + paramName + "\":";
+      size_t keyPos = command.find(key);
+      if (keyPos == std::string::npos) {
+        return false;
       }
 
-      double txPower = 0.0;
-      if (parseValue("\"tx_power_dbm\":", txPower)) {
-        dev->GetPhy()->SetTxPower(txPower);
-        NS_LOG_INFO("Set Cell " << i << " TxPower to " << txPower << " dBm");
+      size_t valStart = keyPos + key.size();
+      // Skip whitespace and possible negative sign
+      while (valStart < command.length() &&
+             (command[valStart] == ' ' || command[valStart] == '\t')) {
+        valStart++;
       }
 
-      double macChDelay = 0.0;
-      if (parseValue("\"mac_ch_delay\":", macChDelay)) {
-        dev->GetPhy()->SetMacChDelay(static_cast<uint8_t>(macChDelay));
-        NS_LOG_INFO("Set Cell " << i << " MacChDelay to " << macChDelay
-                                << " TTIs");
+      size_t valEnd = valStart;
+      if (valEnd < command.length() && command[valEnd] == '-') {
+        valEnd++; // allow negative
+      }
+      while (valEnd < command.length() &&
+             (isdigit(command[valEnd]) || command[valEnd] == '.')) {
+        valEnd++;
       }
 
-      double noiseFigure = 0.0;
-      if (parseValue("\"noise_figure_db\":", noiseFigure)) {
-        dev->GetPhy()->SetNoiseFigure(noiseFigure);
-        NS_LOG_INFO("Set Cell " << i << " NoiseFigure to " << noiseFigure
-                                << " dB");
+      if (valEnd <= valStart) {
+        return false;
       }
 
-      // Hysteresis Control (Mobility — A3RsrpHandoverAlgorithm)
-      double hysteresis = 0.0;
-      if (parseValue("\"hysteresis_db\":", hysteresis)) {
-        Ptr<LteEnbRrc> rrc = dev->GetRrc();
-        if (rrc) {
-          PointerValue hoAlgoVal;
-          rrc->GetAttribute("HandoverAlgorithm", hoAlgoVal);
-          Ptr<Object> hoAlgo = hoAlgoVal.GetObject();
-          if (hoAlgo) {
-            hoAlgo->SetAttribute("Hysteresis", DoubleValue(hysteresis));
-            NS_LOG_INFO("Set Cell " << i << " Hysteresis to " << hysteresis
-                                    << " dB");
-          }
-        }
+      std::string valStr = command.substr(valStart, valEnd - valStart);
+      try {
+        outValue = std::stod(valStr);
+        return true;
+      } catch (...) {
+        NS_LOG_WARN("Failed to parse value for " << key << ": " << valStr);
+        return false;
       }
+    };
 
-      // TimeToTrigger Control (Handover delay — A3RsrpHandoverAlgorithm)
-      // Range: 0-5120 ms. Lower = faster handover, higher = more stable.
-      double ttt = 0.0;
-      if (parseValue("\"time_to_trigger_ms\":", ttt)) {
-        Ptr<LteEnbRrc> rrc = dev->GetRrc();
-        if (rrc) {
-          PointerValue hoAlgoVal;
-          rrc->GetAttribute("HandoverAlgorithm", hoAlgoVal);
-          Ptr<Object> hoAlgo = hoAlgoVal.GetObject();
-          if (hoAlgo) {
-            hoAlgo->SetAttribute(
-                "TimeToTrigger",
-                TimeValue(MilliSeconds(static_cast<uint64_t>(ttt))));
-            NS_LOG_INFO("Set Cell " << i << " TimeToTrigger to " << ttt
-                                    << " ms");
-          }
-        }
+    Ptr<Node> enbNode = m_enbNodes.Get(i);
+    Ptr<LteEnbNetDevice> dev =
+        enbNode->GetDevice(0)->GetObject<LteEnbNetDevice>();
+    if (!dev) {
+      continue;
+    }
+
+    double txPower = 0.0;
+    if (parseValue("tx_power_dbm", txPower)) {
+      // Clamp to safe LTE range 10–46 dBm
+      txPower = std::max(10.0, std::min(46.0, txPower));
+      dev->GetPhy()->SetTxPower(txPower);
+      NS_LOG_INFO("Set Cell " << i << " TxPower to " << txPower << " dBm");
+    }
+
+    // Hysteresis Control (Mobility — A3RsrpHandoverAlgorithm)
+    double hysteresis = 0.0;
+    if (parseValue("hysteresis_db", hysteresis)) {
+      // FIX: Access HandoverAlgorithm via the Node aggregation
+      Ptr<LteHandoverAlgorithm> hoAlgo =
+          enbNode->GetObject<LteHandoverAlgorithm>();
+      if (hoAlgo) {
+        hoAlgo->SetAttribute("Hysteresis", DoubleValue(hysteresis));
+        std::cout << "Action Applied: Set Cell " << i << " Hysteresis to "
+                  << hysteresis << " dB" << std::endl;
+      } else {
+        std::cerr << "Warning: Cell " << i
+                  << ": Could not retrieve HandoverAlgorithm from Node"
+                  << std::endl;
       }
+    }
 
-      // CQI Timer Control (CQI report validity — MAC Scheduler)
-      // Range: 100-2000 ms. Lower = more responsive, higher = more stable.
-      double cqiTimer = 0.0;
-      if (parseValue("\"cqi_timer_ms\":", cqiTimer)) {
-        Ptr<LteEnbMac> mac = dev->GetMac();
-        if (mac) {
-          // The FF MAC scheduler uses CqiTimerThreshold (in subframes = ms for
-          // LTE)
-          PointerValue schedVal;
-          mac->GetAttribute("Scheduler", schedVal);
-          Ptr<Object> sched = schedVal.GetObject();
-          if (sched) {
-            sched->SetAttribute("CqiTimerThreshold",
-                                UintegerValue(static_cast<uint32_t>(cqiTimer)));
-            NS_LOG_INFO("Set Cell " << i << " CqiTimerThreshold to " << cqiTimer
-                                    << " ms");
-          }
-        }
+    // TimeToTrigger Control
+    double ttt = 0.0;
+    if (parseValue("time_to_trigger_ms", ttt)) {
+      // FIX: Access HandoverAlgorithm via the Node aggregation
+      Ptr<LteHandoverAlgorithm> hoAlgo =
+          enbNode->GetObject<LteHandoverAlgorithm>();
+      if (hoAlgo) {
+        hoAlgo->SetAttribute("TimeToTrigger", TimeValue(MilliSeconds(
+                                                  static_cast<uint64_t>(ttt))));
+        std::cout << "Action Applied: Set Cell " << i << " TimeToTrigger to "
+                  << ttt << " ms" << std::endl;
+      } else {
+        std::cerr << "Warning: Cell " << i
+                  << ": Could not retrieve HandoverAlgorithm from Node"
+                  << std::endl;
       }
     }
   }
@@ -1345,6 +1389,9 @@ int main(int argc, char *argv[]) {
         "=== Radio-Cortex O-RAN Congestion Scenario (Kafka Native) ===");
     NS_LOG_INFO("UEs: " << numUes << ", Cells: " << numCells);
     NS_LOG_INFO("Simulation time: " << simTime << "s");
+
+    // Explicitly enable logging for this scenario to fix "empty logs" issue
+    LogComponentEnable("RadioCortexOranScenario", LOG_LEVEL_ALL);
 
     // Global LTE defaults (must be set before helper creation)
     Config::SetDefault("ns3::LteHelper::UseIdealRrc", BooleanValue(true));

@@ -87,7 +87,7 @@ class PPOTrainer:
         lr: float = 1e-4,
         gamma: float = 0.99,
         gae_lambda: float = 0.95,
-        clip_epsilon: float = 0.15, # Tightened from 0.2 for stability with more epochs
+        clip_epsilon: float = 0.10, # Tightened: 0.15→0.1 to reduce KL divergence
         vf_coef: float = 0.5,
         ent_coef: float = 0.005,
         max_grad_norm: float = 0.5,
@@ -278,11 +278,11 @@ class PPOTrainer:
                     avg_tput, avg_delay, avg_loss = 0.0, 0.0, 0.0
                 
                 # Format cell-centric action summary
-                actions_per_cell = 5
+                actions_per_cell = 2
                 num_cells_log = len(action_denorm) // actions_per_cell
                 if num_cells_log > 0:
                     c0 = action_denorm[:actions_per_cell]
-                    # print(f"\n[Step {self.total_steps}] 🤖 Cell 0: TxΔ={c0[0]:.2f} | SchedΔ={c0[1]:.2f} | Hyst={c0[2]*10:.1f}dB | Delay={round(c0[3]*4)} | HARQ={1+round(c0[4]*7)}")
+                    # print(f"\n[Step {self.total_steps}] 🤖 Cell 0: TxΔ={c0[0]:.2f} | HO_Sens={c0[1]:.2f}")
                 
                 # print(f"[{self.total_steps}] Reward={reward:.3f} | Tput={avg_tput * self.env.config.num_ues:.2f} Mbps | Delay={avg_delay:.0f}ms | Loss={avg_loss*100:.1f}%", flush=True)
 
@@ -397,11 +397,7 @@ class PPOTrainer:
             if on_step:
                 on_step(infos, rewards_arr, entropy=entropy.mean().item() if entropy is not None else None)
             
-            # Log progress very occasionally to avoid terminal flood
-            if step_i % 25 == 0: 
-                avg_reward = np.mean(rewards_arr)
-                # Use a carriage return rather than a newline to keep terminal clean
-                print(f"\r  [Collecting] Step {self.total_steps:<8} | Rollout Avg Reward: {avg_reward:+.3f}  ", end="", flush=True)
+            # Progress is visible in the live LIVE row — no terminal print needed
             
             # Store batch data
             all_states.append(states)
@@ -494,7 +490,7 @@ class PPOTrainer:
                         self.ent_coef * entropy_loss
                     )
                     
-                    # Calculate approximate KL divergence for monitoring
+                    # Calculate approximate KL divergence for monitoring + early stop
                     with torch.no_grad():
                         log_ratio = log_probs - batch_old_log_probs
                         approx_kl = torch.mean((torch.exp(log_ratio) - 1) - log_ratio).item()
@@ -506,6 +502,11 @@ class PPOTrainer:
                 nn.utils.clip_grad_norm_(self.policy.parameters(), self.max_grad_norm)
                 self.scaler.step(self.optimizer)
                 self.scaler.update()
+            
+            # KL Early-Stop: if policy diverges too far, stop epoch updates
+            # Healthy PPO keeps KL < 0.05. KL > 0.1 = catastrophic update.
+            if approx_kl > 0.05:
+                break
                 
         # Update learning rate
         self.scheduler.step()
@@ -608,9 +609,8 @@ class PPOTrainer:
             elif isinstance(infos, tuple):
                  infos = list(infos)
             
-            # --- Live Reward Tracking ---
+            # --- Live Per-Step Stats (separate from frozen PPO snapshot) ---
             if rewards is not None:
-                # Should handle scalar (single env) or array (vec env)
                 if np.isscalar(rewards):
                     current_rollout_rewards.append(rewards)
                 else:
@@ -618,28 +618,12 @@ class PPOTrainer:
             
             nonlocal current_stats
             
-            # Create partial stats if they don't exist (first step of first rollout)
-            if current_stats is None:
-                current_stats = {
-                    'update': update + 1,
-                    'steps': self.total_steps,
-                    'reward': 0.0,
-                    'reward_var': 0.0,
-                    'policy_loss': 0.0, 
-                    'value_loss': 0.0,
-                    'entropy': 0.0
-                }
-            
-            # Calculate running stats for current rollout
+            # Update live step stats — shown in real-time LIVE row
             if current_rollout_rewards:
-                avg_rew = np.mean(current_rollout_rewards)
-                var_rew = np.var(current_rollout_rewards)
-                current_stats['reward'] = avg_rew
-                current_stats['reward_var'] = var_rew
-                current_stats['steps'] = self.total_steps # Approximate live step count
-            
+                live_step_stats['reward'] = float(np.mean(current_rollout_rewards))
+            live_step_stats['steps'] = self.total_steps
             if entropy is not None:
-                current_stats['entropy'] = entropy
+                live_step_stats['entropy'] = float(entropy)
 
             # ---------------------------
             # Optimization: Only perform complex UI metrics calculations at 10Hz
@@ -678,11 +662,11 @@ class PPOTrainer:
                     
                     queue = np.mean([c['queue_length'] for c in cell_kpms]) if cell_kpms else 0.0
                     rb = np.mean([c['rb_utilization'] for c in cell_kpms]) if cell_kpms else 0.0
-                    power = sum([(10**(c['tx_power']/10.0))*0.001 for c in cell_kpms]) if cell_kpms else 0.0
+                    tx_dbm = np.mean([c.get('tx_power', 23.0) for c in cell_kpms]) if cell_kpms else 23.0
                     
                     live_env_metrics[env_i] = {
                         'tput': tput, 'delay': delay, 'loss': loss, 
-                        'sinr': sinr, 'rsrp': rsrp, 'queue': queue, 'rb': rb, 'power': power,
+                        'sinr': sinr, 'rsrp': rsrp, 'queue': queue, 'rb': rb, 'power': tx_dbm,
                         'level': info.get('z_level', 0),
                         'success': info.get('z_success', 0.0)
                     }
@@ -694,40 +678,54 @@ class PPOTrainer:
         # Stats display table (Updated for Convergence Metrics)
         def create_stats_table(current_metrics=None):
             table = Table(show_header=True, header_style="bold magenta", expand=True)
-            table.add_column("Update", justify="center")
-            table.add_column("Tot Steps", justify="center")
+            table.add_column("Upd", justify="center")
+            table.add_column("Steps", justify="center")
             table.add_column("Reward", justify="center")
-            table.add_column("Trend", justify="center")      # New: Direction
-            table.add_column("Expl Var", justify="center")   # New: Convergence indicator
-            table.add_column("Policy Loss", justify="center")
-            table.add_column("Value Loss", justify="center")
-            table.add_column("KL", justify="center")         # New: KL Divergence
+            table.add_column("Trend", justify="center")
+            table.add_column("Expl Var", justify="center")
+            table.add_column("Pol Loss", justify="center")
+            table.add_column("Val Loss", justify="center")
+            table.add_column("KL", justify="center")
             table.add_column("Entropy", justify="center")
             table.add_column("LR", justify="center")
-            
+
+            # Live values (10Hz) — reward and entropy update every step
+            live_rew = live_step_stats.get('reward', 0.0)
+            live_ent = live_step_stats.get('entropy', 0.0)
+            live_steps = live_step_stats.get('steps', 0)
+
+            # PPO snapshot values — persist from last update, shown as dim until refreshed
             if current_metrics:
-                # Color code trend and expl variance
                 trend = current_metrics.get('trend', '→')
-                trend_str = f"[green]{trend}[/green]" if trend == '↗' else f"[red]{trend}[/red]" if trend == '↘' else trend
-                
+                trend_str = f"[green]{trend}[/]" if trend == '↗' else f"[red]{trend}[/]" if trend == '↘' else trend
                 expl_var = current_metrics.get('explained_variance', 0.0)
                 ev_color = "green" if expl_var > 0.8 else "yellow" if expl_var > 0.4 else "red"
-                ev_display = f"[{ev_color}]{expl_var:.3f}[/]"
-                
-                table.add_row(
-                    str(current_metrics.get('update', '-')),
-                    f"{current_metrics.get('steps', 0):,}",
-                    f"[green]{current_metrics.get('reward', 0.0):.3f}[/green]" if current_metrics.get('reward', 0.0) > 0 else f"[red]{current_metrics.get('reward', 0.0):.3f}[/red]",
-                    trend_str,
-                    ev_display,
-                    f"{current_metrics.get('policy_loss', 0.0):.4f}",
-                    f"{current_metrics.get('value_loss', 0.0):.4f}",
-                    f"{current_metrics.get('approx_kl', 0.0):.4f}",
-                    f"{current_metrics.get('entropy', 0.0):.4f}",
-                    f"{self.scheduler.get_last_lr()[0]:.2e}" # Log LR
-                )
+                kl = current_metrics.get('approx_kl', 0.0)
+                kl_color = "green" if kl < 0.05 else "yellow" if kl < 0.15 else "red"
+                pol_loss = f"{current_metrics.get('policy_loss', 0.0):.4f}"
+                val_loss = f"{current_metrics.get('value_loss', 0.0):.4f}"
+                upd_str = str(current_metrics.get('update', '-'))
+                lr_str = f"{self.scheduler.get_last_lr()[0]:.2e}"
             else:
-                table.add_row("-", "0", "0.000", "→", "0.000", "0.0000", "0.0000", "0.0000", "0.0000")
+                trend_str = "→"
+                ev_color, kl_color = "dim", "dim"
+                expl_var, kl = 0.0, 0.0
+                pol_loss, val_loss = "—", "—"
+                upd_str, lr_str = "—", "—"
+
+            # Single merged row: live Reward + Entropy, frozen PPO diagnostics
+            table.add_row(
+                upd_str,
+                f"[cyan]{live_steps:,}[/]",
+                f"[bold green]{live_rew:.3f}[/]" if live_rew > 0 else f"[bold red]{live_rew:.3f}[/]",
+                trend_str,
+                f"[{ev_color}]{expl_var:.3f}[/]",
+                pol_loss,
+                val_loss,
+                f"[{kl_color}]{kl:.4f}[/]",
+                f"[cyan]{live_ent:.4f}[/]",
+                lr_str,
+            )
             return Panel(table, title="[bold blue]RL Training Progress[/]", border_style="blue", expand=True)
 
         # Per-Env Metrics Table
@@ -743,7 +741,7 @@ class PPOTrainer:
             table.add_column("SINR (dB)", justify="right")
             table.add_column("Queue", justify="right")
             table.add_column("RB Util", justify="right")
-            table.add_column("Power (W)", justify="right")
+            table.add_column("TX (dBm)", justify="right")
             
             # Simple alternating heartbeat
             heartbeat = "●" if int(time.time() * 2) % 2 == 0 else "○"
@@ -761,7 +759,7 @@ class PPOTrainer:
                     f"{m.get('sinr', -10):.1f}",
                     f"{m.get('queue', 0):.1f}",
                     f"{m.get('rb', 0)*100:.1f}%",
-                    f"{m.get('power', 0):.2f}"
+                    f"{m.get('power', 23.0):.1f}"
                 )
             if not live_env_metrics:
                  table.add_row("-", "-", "-", "-", "-", "-", "-", "-", "-", "-", "-")
@@ -826,6 +824,7 @@ class PPOTrainer:
 
         update = 0
         current_stats = None
+        live_step_stats = {'reward': 0.0, 'entropy': 0.0, 'steps': 0}  # Per-step live tracking
         reward_history = [0.0] # For trend calculation
         self.consistent_level_2_counter = 0 # Track mastery for early stopping
         

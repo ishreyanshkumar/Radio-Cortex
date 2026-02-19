@@ -22,22 +22,22 @@ class BDHPolicy(nn.Module):
     Cell-Centric BDH Policy.
 
     State:  (B, num_cells * 12)  — Enriched Cell Tokens
-    Action: (B, num_cells * 5)   — [TxPower, SchedulerWeight, Hysteresis, MacDelay, MaxHarq] per cell
+    Action: (B, num_cells * 2)   — [TxPower, HandoverSensitivity] per cell
     """
 
     def __init__(self, state_dim: int, action_dim: int, bdh_config: Optional[object] = None, device: str = 'cpu', env_config: Optional[object] = None):
         super().__init__()
 
         # --- Layout ---
-        self.cell_features = 16   # Updated: 12 base + 3 diff + 1 curriculum
-        self.cell_actions = 5     # TxPower, SchedulerWeight, Hysteresis, MacDelay, MaxHarq
+        self.cell_features = 48   # Frame stacking: 3 frames × 16 features
+        self.cell_actions = 2     # TxPower, HandoverSensitivity
         self.num_cells = getattr(env_config, 'num_cells', 3) if env_config else 3
 
         # --- BDH Core ---
         if bdh_config is None:
             cfg = bdh_mod.BDHConfig(
                 n_layer=4,
-                n_embd=256,
+                n_embd=128,
                 n_head=4,
                 mlp_internal_dim_multiplier=4, # Reduced from 32/128 for speed (Slim BDH)
                 vocab_size=256
@@ -54,14 +54,14 @@ class BDHPolicy(nn.Module):
         self.cell_encoder = nn.Sequential(
             nn.Linear(self.cell_features, emb_dim),
             nn.LayerNorm(emb_dim),
-            nn.ReLU(),
+            nn.GELU(),
             nn.Linear(emb_dim, emb_dim)
         )
 
         # --- Cell Action Head ---
         self.cell_action_head = nn.Sequential(
             nn.Linear(emb_dim, emb_dim),
-            nn.ReLU(),
+            nn.GELU(),
             nn.Linear(emb_dim, self.cell_actions)
         )
         self.cell_logstd_head = nn.Parameter(torch.zeros(1, self.num_cells, self.cell_actions)) # Learnable LogStd
@@ -69,7 +69,7 @@ class BDHPolicy(nn.Module):
         # --- Global Value Head ---
         self.value_head = nn.Sequential(
             nn.Linear(emb_dim, emb_dim),
-            nn.ReLU(),
+            nn.GELU(),
             nn.Linear(emb_dim, 1)
         )
         

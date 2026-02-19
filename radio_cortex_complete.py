@@ -206,10 +206,20 @@ def train_radio_cortex(
     # --- ADDED: Resumption Logic ---
     if os.path.exists(save_path):
         print(f"  📦 Found existing model at {save_path}. Resuming training...")
-        trainer.load(save_path)
+        try:
+            trainer.load(save_path)
+        except (RuntimeError, ValueError) as e:
+            print(f"  ⚠️ Model checkpoint incompatible (likely stale from old state/action space). Training from scratch: {e}")
+            os.remove(save_path)
+            print(f"  🗑️ Deleted stale {save_path}")
         # Also load normalization stats if they exist
         if is_vec_env and VEC_ENV_AVAILABLE and os.path.exists(vec_normalize_path):
-            load_vec_normalize(env, vec_normalize_path)
+            try:
+                load_vec_normalize(env, vec_normalize_path)
+            except (ValueError, RuntimeError) as e:
+                print(f"  ⚠️ VecNormalize shape mismatch (likely stale from old action/state space). Skipping: {e}")
+                os.remove(vec_normalize_path)
+                print(f"  🗑️ Deleted stale {vec_normalize_path}")
     # ------------------------------
     
     # Train
@@ -504,13 +514,13 @@ def evaluate_radio_cortex(
             print("  [ERROR] Simulation crashed or failed to initialize.")
             continue
              
-        print(f"{'Controller':<15} | {'Tput':<6} | {'Loss%':<6} | {'Satisf%':<7} | {'SpecEff':<7} | {'Score':<5}")
+        print(f"{'Controller':<15} | {'Tput':<6} | {'Loss%':<6} | {'Satisf%':<7} | {'EnEff':<7} | {'Score':<5}")
         print("-" * 60)
         for controller, metrics in results.items():
             if metrics is None: continue
             avg_score = (metrics.qos_score + metrics.reliability_score + metrics.resource_score + 
-                         metrics.buffer_score + metrics.phy_score + metrics.ric_score) / 6.0
-            print(f"{controller:<15} | {metrics.avg_throughput:>6.2f} | {metrics.avg_packet_loss*100:>6.2f} | {metrics.satisfied_user_ratio*100:>7.1f} | {metrics.spectral_efficiency:>7.2f} | {avg_score:>5.1f}")
+                         metrics.buffer_score + metrics.phy_score + metrics.architecture_score) / 6.0
+            print(f"{controller:<15} | {metrics.avg_throughput:>6.2f} | {metrics.avg_packet_loss*100:>6.2f} | {metrics.satisfied_user_ratio*100:>7.1f} | {metrics.energy_efficiency:>7.2f} | {avg_score:>5.1f}")
     
     return all_results
 

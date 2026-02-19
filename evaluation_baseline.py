@@ -75,23 +75,17 @@ class BaselineController:
     
     def __init__(self, num_cells: int):
         self.num_cells = num_cells
-        # Fixed parameters (never change) — returned as [0,1]-normalized
-        self.tx_power_norm = 0.5    # 0.5 maps to no-change (differential)
-        self.sched_weight_norm = 0.5  # 0.5 maps to no-change (differential)
-        self.hysteresis_norm = 0.3  # 3.0 / 10.0 dB (default)
-        self.mac_delay_norm = 0.0   # 0 TTIs
-        self.max_harq_norm = 3.0/7.0  # 4 retx: (4-1)/7
+        # Fixed parameters (never change) — returned as [-1,1]-normalized
+        self.tx_power_norm = 0.0         # 0.0 = no power change (differential)
+        self.handover_sensitivity = 0.0  # 0.0 = neutral handover policy
     
     def get_action(self, state):
-        """Returns fixed [0,1]-normalized action array (no adaptation)"""
+        """Returns fixed [-1,1]-normalized action array (no adaptation)"""
         action = []
         for _ in range(self.num_cells):
             action.extend([
                 self.tx_power_norm,
-                self.sched_weight_norm,
-                self.hysteresis_norm,
-                self.mac_delay_norm,
-                self.max_harq_norm,
+                self.handover_sensitivity,
             ])
         return np.array(action, dtype=np.float32)
         
@@ -216,10 +210,10 @@ class EvaluationRunner:
                 step_count = step_i # step_i is current loop index
                 if not progress_queue and controller_name == "Radio-Cortex" and step_count % 10 == 0:
                     # Format cell-level action summary
-                    actions_per_cell = 5
+                    actions_per_cell = 2
                     if len(action_arr) >= actions_per_cell:
                         c0 = action_arr[:actions_per_cell]
-                        print(f"\n  Step {step_count:>3} │ 🤖 RIC Decision (Cell 0): TxΔ={c0[0]:.2f} │ SchedΔ={c0[1]:.2f} │ Hyst={c0[2]*10:.1f}dB │ Delay={round(c0[3]*4)} │ CQI={100+round(c0[4]*1900)}ms")
+                        print(f"\n  Step {step_count:>3} │ 🤖 RIC Decision (Cell 0): TxΔ={c0[0]:.2f} │ HO_Sens={c0[1]:.2f}")
             
             
                 # Track Handovers

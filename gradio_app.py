@@ -39,7 +39,7 @@ MODELS_DIR = ROOT / "models"
 LOGS_DIR   = ROOT / "logs"
 
 CELL_FEATURES = 12
-CELL_ACTIONS  = 5
+CELL_ACTIONS  = 2
 DEFAULT_CELLS = 3
 
 FEATURE_NAMES = [
@@ -47,7 +47,7 @@ FEATURE_NAMES = [
     "UE Count", "Avg Throughput (Mbps)", "Avg Delay (ms)", "Avg Loss",
     "Avg RSRP (dBm)", "Avg SINR (dB)", "Jain's Fairness",
 ]
-ACTION_NAMES = ["TxPower", "TTT (ms)", "Hysteresis (dB)", "MacDelay (TTI)", "CqiTimer (ms)"]
+ACTION_NAMES = ["TxPower", "Handover Sensitivity"]
 
 REWARD_COMPONENTS = ["r_tput", "r_delay", "r_loss", "r_se", "r_energy", "r_load", "r_queue", "r_smooth"]
 COMPONENT_COLORS  = ["#00d4ff", "#f87171", "#fbbf24", "#34d399", "#8b5cf6", "#f472b6", "#60a5fa", "#a78bfa"]

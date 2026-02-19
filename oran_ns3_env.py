@@ -19,6 +19,7 @@ import os
 import random
 import csv
 from typing import Dict, List, Tuple, Optional, Union
+from collections import deque
 from dataclasses import dataclass
 from enum import Enum
 
@@ -163,8 +164,8 @@ class RewardEngine:
         self.steps_at_current_level = 0 # Counter for minimum-steps gate
         self.MIN_TPUT_SUCCESS = 1.0 # 1 Mbps required to count as "satisfied" (Standardized)
         self.DEMOTION_THRESHOLD = 0.4 # If <40% users satisfied, consider demotion (was 0.3)
-        self.PROMOTION_THRESHOLD_L1 = 0.7 # 70% for Level 1 (was 0.6)
-        self.PROMOTION_THRESHOLD_L2 = 0.90 # 90% for Level 2 (was 0.85)
+        self.PROMOTION_THRESHOLD_L1 = 0.50 # 50% for Level 1 (flash_crowd is competitive)
+        self.PROMOTION_THRESHOLD_L2 = 0.80 # 80% for Level 2
         self.current_scenario = None
 
     def _update_curriculum(self, current_success_rate: float, jains_index: float, rb_util: float):
@@ -288,9 +289,9 @@ class RewardEngine:
         # ── 1c. Packet Loss  ──────────────────────────────────────
         # Always On (Survival Metric)
         mean_loss = float(np.mean(losses))
-        loss_penalty_raw = mean_loss * 5.0  # Linear penalty
-        if mean_loss > 0.1:                 # Quadratic kicker
-            loss_penalty_raw += (mean_loss - 0.1) ** 2 * 20.0
+        loss_penalty_raw = mean_loss * 2.0  # Softened: was 5.0 (too dominant)
+        if mean_loss > 0.25:                # Quadratic kicker only for severe loss
+            loss_penalty_raw += (mean_loss - 0.25) ** 2 * 8.0  # was 20.0
 
         r_loss = -float(loss_penalty_raw) * self.W_LOSS
         r_loss = float(np.clip(r_loss, -20.0, 0.0))
@@ -610,7 +611,7 @@ class NS3Interface:
             start_poll = time.time()
             found_partitions = False
             # Reduced from 10s to 1s as per user suggestion for "fail fast" behavior
-            while time.time() - start_poll < 1.0: 
+            while time.time() - start_poll < 10.0: 
                 self.kafka_consumer.poll(timeout_ms=100) # Faster poll
                 partitions = self.kafka_consumer.assignment()
                 if partitions:
@@ -625,9 +626,12 @@ class NS3Interface:
             
             self.kafka_producer = KafkaProducer(
                 bootstrap_servers=[os.getenv('KAFKA_BOOTSTRAP', 'localhost:9092')],
-                linger_ms=5,        # 🚀 OPTIMIZATION: Wait 5ms to batch syscalls
-                batch_size=32768,   # 🚀 OPTIMIZATION: Allow 32KB batches
-                value_serializer=lambda x: json.dumps(x).encode('utf-8')
+                linger_ms=0,        # Send immediately (no batching latency)
+                batch_size=16384,
+                # Handle both orjson (returns bytes) and stdlib json (returns str)
+                value_serializer=lambda x: (
+                    d if isinstance(d := json.dumps(x), bytes) else d.encode('utf-8')
+                )
             )
             self._rc_topic = rc_topic  # Store for send_rc_control
             if self.config.verbose:
@@ -743,10 +747,19 @@ class NS3Interface:
         
         cell_metrics = {}
         for cell_id in range(self.config.num_cells):
+            # Use Python's commanded tx_power (ns-3 GetTxPower() always echoes
+            # its own internal default — not what we sent via RC action).
+            commanded_tx = 46.0 # Default fallback
+            if hasattr(self, 'current_params') and 'cell' in self.current_params:
+                 if cell_id in self.current_params['cell']:
+                      commanded_tx = self.current_params['cell'][cell_id].get('tx_power', 46.0)
+
             cell_metrics[cell_id] = {
                 'queue_length': kpm_data.get(f'cell_{cell_id}_queue', 0),
                 'rb_utilization': kpm_data.get(f'cell_{cell_id}_rb_util', 0.0),
-                'tx_power': kpm_data.get(f'cell_{cell_id}_power', 23.0),  # dBm
+                # UNMASKED: Use actual ns-3 power, but keep commanded for debug reference
+                'tx_power': kpm_data.get(f'cell_{cell_id}_power', 46.0),
+                'commanded_tx_power': commanded_tx,
                 'num_connected_ues': kpm_data.get(f'cell_{cell_id}_ues', 0),
                 'cell_load': kpm_data.get(f'cell_{cell_id}_load', 0.0),
                 'avg_rb_request': kpm_data.get(f'cell_{cell_id}_avg_rb_req', 0.0),
@@ -760,27 +773,42 @@ class NS3Interface:
     
     def send_rc_control(self, actions: Dict):
         """
-        Send E2SM-RC control message to Kafka ('e2_rc_control')
-        Applies RL agent's actions to the RAN
+        Send E2SM-RC control message to Kafka ('e2_rc_control').
+        JSON format matches C++ ProcessRcCommand parser exactly:
+          {"cell_0": 1, "cell_0_tx_power_dbm": 46.0, "cell_1": 1, ...}
+        C++ finds "cell_X" substring then searches for specific keys after it.
         """
+        # Flatten nested cell array → flat dict the C++ parser can match
+        flat = {}
+        for cell_dict in actions.get('cell', []):
+            cid = cell_dict.get('cell_id', 0)
+            prefix = f'"cell_{cid}"'   # C++ searches for this substring
+            flat[f'cell_{cid}'] = 1   # sentinel — makes C++ find the key
+            for k, v in cell_dict.items():
+                if k == 'cell_id':
+                    continue
+                flat[f'cell_{cid}_{k}'] = v  # e.g. cell_0_tx_power_dbm
+
         rc_message = {
             'type': 'E2SM_RC',
-            'actions': actions,
-            'timestamp': time.time()
+            'timestamp': time.time(),
+            **flat,  # flat keys at top level so C++ substring search works
         }
-        
+
         try:
             rc_topic = getattr(self, '_rc_topic', 'e2_rc_control')
             self.kafka_producer.send(rc_topic, rc_message)
-            # self.kafka_producer.flush()
-            
+            # Force immediate delivery to Kafka broker.
+            # Timeout prevents infinite hang if broker is unreachable.
+            self.kafka_producer.flush(timeout=5.0)
             self.rc_msg_count += 1
             if hasattr(self, 'last_kpm_rx_time') and self.last_kpm_rx_time > 0:
-                latency = (time.time() - self.last_kpm_rx_time) * 1000.0 # ms
+                latency = (time.time() - self.last_kpm_rx_time) * 1000.0
                 self.e2_loop_latencies.append(latency)
         except Exception as e:
-            # print(f"Error sending RC control: {e}")
-            pass 
+            # OPTIMIZATION: Only log if not a standard timeout/shutdown issue, to allow clean exit
+            # BUT for debugging actions, verify we aren't silently failing
+            print(f"Error sending RC action: {e}", file=sys.stderr, flush=True)
     
     
     def stop_simulation(self, close_kafka: bool = True):
@@ -871,28 +899,26 @@ class ORANns3Env(gym.Env):
         #   12 Base Features (5 native + 7 UE agg)
         #   + 3 Delta Features (Queue, RB, Latency)
         #   + 1 Curriculum Level
+        # Frame Stacking: 3 frames × 16 features = 48 per cell
         # ──────────────────────────────────────────────────────────
         self.features_per_cell = 16
-        state_dim = self.config.num_cells * self.features_per_cell
+        self.n_stack = 3  # Frame stacking depth
+        state_dim = self.config.num_cells * self.features_per_cell * self.n_stack
         self.observation_space = spaces.Box(
-            low=-np.inf,
-            high=np.inf,
+            low=-1.0,
+            high=1.0,
             shape=(state_dim,),
             dtype=np.float32
         )
         
-        # Cell-Only Action Space: 5 Actions per cell
-        # ALL DIFFERENTIAL for stable convergence:
-        # 1. TxPower      (diff +/- 1.0 dBm)
-        # 2. TimeToTrigger(diff +/- 50 ms)
-        # 3. Hysteresis   (diff +/- 1.0 dB)
-        # 4. MacDelay     (diff +/- 1 TTI)
-        # 5. CqiTimer     (diff +/- 100 ms)
-        self.actions_per_cell = 5
+        # Cell-Only Action Space: 2 Actions per cell
+        # 1. TxPower            (differential +/- 1.0 dBm)
+        # 2. HandoverSensitivity (absolute: -1=conservative, +1=aggressive)
+        self.actions_per_cell = 2
         action_dim = self.config.num_cells * self.actions_per_cell
 
         self.action_space = spaces.Box(
-            low=np.array([-1.0] * action_dim, dtype=np.float32), # Continuous differential
+            low=np.array([-1.0] * action_dim, dtype=np.float32),
             high=np.array([1.0] * action_dim, dtype=np.float32),
             dtype=np.float32
         )
@@ -905,14 +931,20 @@ class ORANns3Env(gym.Env):
         # Tracking for Delta Features
         self._prev_obs_raw = None # Stores raw metrics for delta diffs
         
+        # Frame Stacking Buffer
+        single_frame_dim = self.config.num_cells * self.features_per_cell
+        self._obs_history = deque(
+            [np.zeros(single_frame_dim, dtype=np.float32) for _ in range(self.n_stack)],
+            maxlen=self.n_stack
+        )
+        
         # Differential Control State Tracking (Cell-only)
+        # NOTE: Must match ns-3's actual defaults since we no longer override
+        # them during reset().  The first step()'s action is the first change.
         self.current_params = {
             'cell': {c: {
-                'tx_power': 23.0,           # dBm
-                'time_to_trigger': 256.0,   # ms (A3 TTT default)
-                'cqi_timer': 1000.0,        # ms (CQI report validity)
-                'hysteresis': 2.0,          # dB
-                'mac_delay': 0.0,           # TTIs
+                'tx_power': 46.0,           # dBm (ns-3 LTE default)
+                'handover_sensitivity': 0.0, # Neutral (-1=conservative, +1=aggressive)
                 'noise_figure': 5.0,        # dB
             } for c in range(self.config.num_cells)}
         }
@@ -924,17 +956,21 @@ class ORANns3Env(gym.Env):
         
         self._prev_obs_raw = None # Reset delta tracking
         
+        # Reset Frame Stacking Buffer
+        single_frame_dim = self.config.num_cells * self.features_per_cell
+        self._obs_history = deque(
+            [np.zeros(single_frame_dim, dtype=np.float32) for _ in range(self.n_stack)],
+            maxlen=self.n_stack
+        )
+        
         if seed is not None:
             self.config.seed = seed
             
-        # Reset Differential Control State to Defaults (Cell-only)
+        # Reset Differential Control State to ns-3 defaults (Cell-only)
         self.current_params = {
             'cell': {c: {
-                'tx_power': 23.0,           # dBm
-                'time_to_trigger': 256.0,   # ms (A3 TTT default)
-                'cqi_timer': 1000.0,        # ms (CQI report validity)
-                'hysteresis': 2.0,          # dB
-                'mac_delay': 0.0,           # TTIs
+                'tx_power': 46.0,           # dBm (ns-3 LTE default)
+                'handover_sensitivity': 0.0, # Neutral
                 'noise_figure': 5.0,        # dB
             } for c in range(self.config.num_cells)}
         }
@@ -970,6 +1006,12 @@ class ORANns3Env(gym.Env):
             self.ns3.stop_simulation(close_kafka=False)
             # print(f"Calling start_simulation...")
             self.ns3.start_simulation()
+            
+            # NOTE: Do NOT send initial_actions here.
+            # In lock-step mode, ns-3 sends KPM₁ then blocks in WaitForRcAction().
+            # Python receives KPM₁, reset() returns, then step(a₁) sends the first
+            # real action. Sending actions here races with the C++ consumer startup
+            # and can cause an off-by-one desync for the entire episode.
         else:
             # First time initialization
             self.ns3 = NS3Interface(self.config)
@@ -991,6 +1033,10 @@ class ORANns3Env(gym.Env):
 
         state = self._extract_state(e2_msg)
         
+        # Push into frame stack and get stacked observation
+        self._obs_history.append(state)
+        stacked_state = np.concatenate(list(self._obs_history), axis=0)
+        
         reset_duration = time.time() - start_reset
         if self.config.verbose:
             print(f"Environment reset complete in {reset_duration:.2f}s")
@@ -1005,7 +1051,7 @@ class ORANns3Env(gym.Env):
             'scenario': self.config.scenario
         }
         
-        return state, info
+        return stacked_state, info
     
     def step(self, action: np.ndarray) -> Tuple[np.ndarray, float, bool, bool, dict]:
         try:
@@ -1017,6 +1063,10 @@ class ORANns3Env(gym.Env):
                 max_wait_s=60.0
             )
             next_state = self._extract_state(e2_msg)
+            
+            # Frame stacking
+            self._obs_history.append(next_state)
+            stacked_state = np.concatenate(list(self._obs_history), axis=0)
             
             self.current_action = action
             reward, breakdown = self._compute_reward(e2_msg)
@@ -1078,7 +1128,7 @@ class ORANns3Env(gym.Env):
                 **breakdown,
             }
             
-            return next_state, reward, terminated, truncated, info
+            return stacked_state, reward, terminated, truncated, info
         except Exception as e:
             # If anything crashes (ns-3 died, Kafka timeout, etc.), gracefully
             # end the episode rather than killing the worker process.
@@ -1168,8 +1218,9 @@ class ORANns3Env(gym.Env):
                 cell_stats[c_id]['delays'].append(m.get('delay', 0.0))
                 cell_stats[c_id]['losses'].append(m.get('packet_loss', 0.0))
         
-        # 3. Build flat state vector: 16 features per cell
-        state = np.zeros(self.observation_space.shape, dtype=np.float32)
+        # 3. Build flat state vector: 16 features per cell (single frame, before stacking)
+        single_frame_dim = self.config.num_cells * self.features_per_cell
+        state = np.zeros(single_frame_dim, dtype=np.float32)
         idx = 0
         
         # Temporary storage for current steps' raw metrics to compute deltas next step
@@ -1184,11 +1235,11 @@ class ORANns3Env(gym.Env):
             c_load  = cm.get('cell_load', 0.0)
             avg_rb  = cm.get('avg_rb_request', 0.0)
             
-            state[idx]   = q_len / 1000.0
-            state[idx+1] = cm.get('rb_utilization', 0.0)
-            state[idx+2] = (cm.get('tx_power', 23.0) - 10.0) / 36.0
-            state[idx+3] = cm.get('cell_load', 0.0) / max(1.0, self.config.num_ues)
-            state[idx+4] = cm.get('avg_rb_request', 0.0) / 100.0
+            state[idx]   = np.clip(q_len / 1000.0, -1.0, 1.0)
+            state[idx+1] = np.clip(cm.get('rb_utilization', 0.0), -1.0, 1.0)
+            state[idx+2] = np.clip((cm.get('tx_power', 23.0) - 10.0) / 36.0, -1.0, 1.0)
+            state[idx+3] = np.clip(cm.get('cell_load', 0.0) / max(1.0, self.config.num_ues), -1.0, 1.0)
+            state[idx+4] = np.clip(cm.get('avg_rb_request', 0.0) / 100.0, -1.0, 1.0)
             
             # --- B. Aggregated UE Metrics (7 features) ---
             stats = cell_stats[c]
@@ -1213,13 +1264,13 @@ class ORANns3Env(gym.Env):
                 max_delay, max_loss = 0.0, 0.0
                 jains = 1.0
             
-            state[idx+5]  = avg_tput / 20.0          # 5Mbps -> 0.25 (Better gradient)
-            state[idx+6]  = avg_delay / 100.0         # Avg delay
-            state[idx+7]  = avg_loss                  # Avg packet loss
-            state[idx+8]  = max_delay / 100.0         # Worst-case delay ("Is someone lagging?")
-            state[idx+9]  = max_loss                  # Worst-case loss  ("Is someone dropping?")
-            state[idx+10] = jains                     # Fairness index
-            state[idx+11] = n_ues / 50.0              # UE load count
+            state[idx+5]  = np.clip(avg_tput / 10.0, -1.0, 1.0)    # 5Mbps -> 0.5
+            state[idx+6]  = np.clip(avg_delay / 100.0, -1.0, 1.0)  # Avg delay
+            state[idx+7]  = np.clip(avg_loss, -1.0, 1.0)            # Avg packet loss
+            state[idx+8]  = np.clip(max_delay / 100.0, -1.0, 1.0)  # Worst-case delay
+            state[idx+9]  = np.clip(max_loss, -1.0, 1.0)            # Worst-case loss
+            state[idx+10] = np.clip(jains, -1.0, 1.0)               # Fairness index
+            state[idx+11] = np.clip(n_ues / 50.0, -1.0, 1.0)       # UE load count
             
             # --- C. Delta Features (3 features) --- NEW
             # Needs previous step's raw values. 
@@ -1251,29 +1302,13 @@ class ORANns3Env(gym.Env):
     
     def _parse_action(self, action: np.ndarray) -> Dict:
         """
-        5-Dimensional Cell Control.
-        Actions are [0, 1] normalized, mapped to physical ranges here.
-        """
-        action = np.asarray(action, dtype=np.float64).flatten()
+        2-Dimensional Cell Control.
+        Actions: [TxPower (differential), HandoverSensitivity (absolute)].
         
-        expected_size = self.config.num_cells * self.actions_per_cell
-        if action.size != expected_size:
-            if action.size < expected_size:
-                action = np.pad(action, (0, expected_size - action.size), constant_values=0.5)
-            else:
-                action = action[:expected_size]
-
-        rc_actions = {'cell': [], 'ue': []}
-        offset = 0
-        
-        for c in range(self.config.num_cells):
-            cell_act = action[offset : offset + self.actions_per_cell]
-            offset += self.actions_per_cell
-            
-    def _parse_action(self, action: np.ndarray) -> Dict:
-        """
-        5-Dimensional Cell Control - UNIFIED DIFFERENTIAL.
-        All actions are differentials to nudge the strict baseline.
+        HandoverSensitivity maps [-1, 1] to joint TTT + Hysteresis:
+          -1 = conservative (TTT=1280ms, Hyst=6dB) - resists handovers
+           0 = neutral      (TTT=256ms,  Hyst=2dB) - default
+          +1 = aggressive   (TTT=0ms,    Hyst=0dB) - eager handovers
         """
         action = np.asarray(action, dtype=np.float64).flatten()
         
@@ -1293,72 +1328,35 @@ class ORANns3Env(gym.Env):
             offset += self.actions_per_cell
             
             # 1. TxPower: Differential +/- 1.0 dBm
-            # LOCKED at Level 0/1 to Focus on Service (Max Power)
-            if self.reward_engine.level < 2:
-                delta_p = 0.0
-                self.current_params['cell'][c]['tx_power'] = 46.0 # Force Max
-            else:
+            # UNLOCKED: Agent controls power at all levels (user request)
+            if True: 
                 delta_p = float(cell_act[0]) * 1.0 # act is -1..1
                 self.current_params['cell'][c]['tx_power'] = np.clip(
                     self.current_params['cell'][c]['tx_power'] + delta_p, 10.0, 46.0
                 )
 
-            # 2. TimeToTrigger: Differential +/- 50 ms
-            delta_ttt = float(cell_act[1]) * 50.0
-            self.current_params['cell'][c]['time_to_trigger'] = np.clip(
-                self.current_params['cell'][c]['time_to_trigger'] + delta_ttt, 0.0, 5120.0
-            )
-
-            # 3. Hysteresis: Differential +/- 1.0 dB (WAS ABSOLUTE)
-            delta_hyst = float(cell_act[2]) * 1.0
-            self.current_params['cell'][c]['hysteresis'] = np.clip(
-                 self.current_params['cell'][c]['hysteresis'] + delta_hyst, 0.0, 10.0
-            )
-
-            # 4. MAC Delay: Differential +/- 1.0 TTI (WAS ABSOLUTE, discrete)
-            # Accumulate as float, round for usage
-            delta_mac = float(cell_act[3]) * 1.0
-            self.current_params['cell'][c]['mac_delay'] = np.clip(
-                 self.current_params['cell'][c]['mac_delay'] + delta_mac, 0.0, 30.0 # Cap max delay reasonable
-            )
-            used_mac_delay = int(round(self.current_params['cell'][c]['mac_delay']))
-
-            # 5. CQI Timer: Differential +/- 100 ms (WAS ABSOLUTE)
-            delta_cqi = float(cell_act[4]) * 100.0
-            self.current_params['cell'][c]['cqi_timer'] = np.clip(
-                 self.current_params['cell'][c]['cqi_timer'] + delta_cqi, 10.0, 2000.0
-            )
+            # 2. Handover Sensitivity: Absolute [-1, 1]
+            # Physics-informed joint mapping to TTT and Hysteresis.
+            # UNLOCKED: Agent controls handover at all levels (user request)
+            sensitivity = float(np.clip(cell_act[1], -1.0, 1.0))
+            self.current_params['cell'][c]['handover_sensitivity'] = sensitivity
+            
+            # Map sensitivity → TTT: [-1,1] → [1280, 0] ms (inverse: more sensitive = lower TTT)
+            ttt_ms = 640.0 * (1.0 - sensitivity)  # -1→1280, 0→640, +1→0
+            # Map sensitivity → Hysteresis: [-1,1] → [6, 0] dB (inverse: more sensitive = lower hyst)
+            hyst_db = 3.0 * (1.0 - sensitivity)   # -1→6, 0→3, +1→0
 
             # --- Soft Action Masking (Constraint Awareness) ---
-            # Calculate penalty for pushing against boundaries (wasted action magnitude)
-            # If delta was +1 but value was already max, clip makes no change.
-            # Penalty proportional to |desired_change - actual_change|
-            # We approximate this by checking if we hit the bounds.
-            
-            # Simple heuristic: If action magnitude > 0.1 and we are at bounds, penalize.
             # TxPower (10-46)
             tx = self.current_params['cell'][c]['tx_power']
             if (tx >= 46.0 and delta_p > 0) or (tx <= 10.0 and delta_p < 0):
                 self.boundary_penalty += 0.05 * abs(float(cell_act[0]))
 
-            # TTT (0-5120)
-            ttt = self.current_params['cell'][c]['time_to_trigger']
-            if (ttt >= 5120.0 and delta_ttt > 0) or (ttt <= 0.0 and delta_ttt < 0):
-                self.boundary_penalty += 0.05 * abs(float(cell_act[1]))
-            
-            # Hysteresis (0-10)
-            hyst = self.current_params['cell'][c]['hysteresis']
-            if (hyst >= 10.0 and delta_hyst > 0) or (hyst <= 0.0 and delta_hyst < 0):
-                self.boundary_penalty += 0.05 * abs(float(cell_act[2]))
-
             rc_actions['cell'].append({
                 'cell_id': c,
                 'tx_power_dbm': float(self.current_params['cell'][c]['tx_power']),
-                'time_to_trigger_ms': float(self.current_params['cell'][c]['time_to_trigger']),
-                'hysteresis_db': float(self.current_params['cell'][c]['hysteresis']),
-                'mac_ch_delay': used_mac_delay,
-                'cqi_timer_ms': int(self.current_params['cell'][c]['cqi_timer']),
-                'noise_figure_db': 5.0,  # Fixed (environment parameter)
+                'time_to_trigger_ms': float(ttt_ms),
+                'hysteresis_db': float(hyst_db),
             })
             
         return rc_actions

@@ -1,6 +1,6 @@
 # Radio-Cortex: O-RAN RL Congestion Control
 
-Radio-Cortex is a closed-loop control system that uses Reinforcement Learning (RL) to optimize network parameters (Tx Power, TimeToTrigger, Hysteresis, MAC Delay, CQI Timer) in an O-RAN compliant ns-3 simulation. It features a real-time feedback loop where an RL agent (PPO) receives KPM (Key Performance Metrics) from ns-3 via Kafka and sends back RC (RAN Control) actions, with a live Rich TUI dashboard and per-step KPM verification logging.
+Radio-Cortex is a closed-loop control system that uses Reinforcement Learning (RL) to optimize network parameters (Tx Power, Handover Sensitivity) in an O-RAN compliant ns-3 simulation. It features a real-time feedback loop where an RL agent (PPO) receives KPM (Key Performance Metrics) from ns-3 via Kafka and sends back RC (RAN Control) actions, with a live Rich TUI dashboard and per-step KPM verification logging.
 
 ### 🏆 Key Innovations & Solved Challenges
 Radio-Cortex pushes the boundary of O-RAN intelligence by solving three fundamental problems in applying RL to wireless networks:
@@ -13,9 +13,9 @@ Radio-Cortex pushes the boundary of O-RAN intelligence by solving three fundamen
     -   *Problem*: Network optimization is a zero-sum game (e.g., High Throughput vs. Low Energy). Naive RL agents often "reward hack" or receive persistently negative rewards, causing learning collapse.
      -   *Solution*: We implemented a **3-Level Curriculum Reward Engine** with *Survival Bias* and **gated promotion** (minimum 50 steps per level + 50-step history window). **Level 0 (Bootstrap)**: Throughput + Packet Loss (Survival) + a constant `+1.0` bias. **Level 1 (Quality)**: Adds Delay and Fairness rewards. **Level 2 (Efficiency)**: Adds Energy, Load Balancing, and Handover optimization. This ensures stable, progressive learning.
 
-3.  **Cell-Centric Action Space (15-Dim Differential + Absolute Control)**:
-    -   *Problem*: RL agents often output erratic "bang-bang" control actions and large per-UE action spaces cause slow convergence.
-    -   *Solution*: We compressed the action space to **15 dimensions** (5 per cell: TxPower, TimeToTrigger, Hysteresis, MAC Delay, CQI Timer) and use a mix of **Differential** (TxPower, TimeToTrigger) and **Absolute** (Hysteresis, Delay, CqiTimer) control. Each action maps to a real ns-3 attribute (e.g., `A3Rsrp::TimeToTrigger`, `FfMacScheduler::CqiTimerThreshold`). This is scale-invariant — the action space stays fixed regardless of UE count.
+3.  **Cell-Centric Action Space (6-Dim Causal Control)**:
+    -   *Problem*: RL agents often output erratic "bang-bang" control actions. Including non-causal actions (e.g., MAC Delay, CQI Timer) breaks the cause→effect chain PPO relies on.
+    -   *Solution*: We compressed the action space to **6 dimensions** (2 per cell: TxPower, HandoverSensitivity). **HandoverSensitivity** is a physics-informed fusion of TTT and Hysteresis into a single parameter: -1=conservative (resists handovers), +1=aggressive (triggers handovers easily). This restores causality and reduces dimensionality by 60% vs. the original 5-action design. Frame stacking (3 frames) provides temporal context.
 
 ## 🚀 End-to-End Installation Guide
 
@@ -380,12 +380,12 @@ This script manages the lifecycle of the training process, initializes the agent
 converts ns-3 simulation into a standard OpenAI Gym interface (observation, action, reward).
 
 *   **`ORANns3Env`**: The Gym Environment class.
-    *   `step(action)`: Takes an RL action (15 dims = 5 per cell), sends it to ns-3, waits for the next KPM report, and returns (state, reward, done).
+    *   `step(action)`: Takes an RL action (6 dims = 2 per cell), sends it to ns-3, waits for the next KPM report, and returns (state, reward, done).
     *   `reset()`: Restarts the ns-3 simulation subprocess.
     *   `_compute_reward(e2_msg)`: Delegates to `RewardEngine`.
     *   **`RewardEngine`**: 3-Level Curriculum reward engine with Survival Bias. Combines 8 components (Throughput, Delay, Loss, SE, Energy, Load, Queue, Smoothing) gated by curriculum levels.
-    *   **State Space**: `num_cells × 12` Enriched Cell Tokens (5 native cell metrics + 7 aggregated UE stats including avg/max delay, loss, Jain's fairness). Scale-invariant — works for any number of UEs.
-    *   **Action Space**: `num_cells × 5` = 15 dimensions — TxPower (differential), TimeToTrigger (differential, A3 handover TTT), Hysteresis (absolute), MAC Delay (absolute), CQI Timer (absolute, CqiTimerThreshold). All [0,1]-normalized.
+    *   **State Space**: `num_cells × 48` (3-frame stacked Enriched Cell Tokens: 16 features/cell × 3 frames). 16 features = 5 native cell metrics + 7 aggregated UE stats + 3 delta features + 1 curriculum level. All strictly normalized to [-1, 1].
+    *   **Action Space**: `num_cells × 2` = 6 dimensions — TxPower (differential ±1 dBm) and HandoverSensitivity (absolute, maps to joint TTT+Hysteresis: -1=conservative, +1=aggressive). All [-1,1]-normalized.
 *   **`NS3Interface`**: Handles low-level communication.
     *   `start_simulation()`: Spawns the `./ns3 run ...` subprocess.
     *   `send_rc_control(actions)`: Serializes actions to JSON and sends via Kafka `e2_rc_control` topic.
