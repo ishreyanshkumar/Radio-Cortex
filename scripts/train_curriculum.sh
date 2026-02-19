@@ -35,17 +35,18 @@ DRY_RUN=false
 # Buffer: 40 envs × 256 steps = 10,240 samples/update
 # Mini-batches: 10,240 / 2,048 = 5 per epoch
 # Grad steps/update: 10 epochs × 5 = 50 (fast but thorough)
-LR="5e-5"                        # Sweet spot for large-batch PPO
-BATCH_SIZE=2048                  # 5 mini-batches/epoch, fast GPU throughput
-ROLLOUT_STEPS=256                # 40×256 = 10,240 buffer. Fast collection.
+LR="1e-4"                        # Safe stable LR for sensitive rewards
+BATCH_SIZE=4096                  # High throughput for 48-core system
+ROLLOUT_STEPS=512                # 40×512 = 20,480 buffer. Deeper trajectories.
 GAMMA=0.99                       # Standard discount for 50s episodes
 GAE_LAMBDA=0.95
-CLIP_EPSILON=0.15                # Balanced: allows exploration, prevents KL blowup
+CLIP_EPSILON=0.2                 # Slightly higher clippling for faster adaptation
 VF_COEF=0.5
-ENT_COEF=0.005                   # Moderate exploration for diverse scenarios
+ENT_COEF=0.01                    # Increased entropy to prevent early convergence
 MAX_GRAD_NORM=0.5
 HIDDEN_DIM=512                   # Wider network for better GPU utilization
-PPO_EPOCHS=15                    # 75 grad steps/update (15 × 5 mini-batches)
+PPO_EPOCHS=20                    # Squeeze more out of each batch
+TARGET_KL=0.05                   # Early stopping threshold
 LR_GAMMA=0.995                   # Gentle decay across curriculum
 
 # ── Parse CLI args ──
@@ -128,6 +129,7 @@ run_stage() {
         --max-grad-norm "$MAX_GRAD_NORM" \
         --hidden-dim "$HIDDEN_DIM" \
         --ppo-epochs "$PPO_EPOCHS" \
+        --target-kl "$TARGET_KL" \
         --lr-gamma "$LR_GAMMA" \
         --log-interval "$LOG_INTERVAL" \
         --checkpoint-interval "$CHECKPOINT_INTERVAL" \

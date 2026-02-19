@@ -755,7 +755,7 @@ def main():
 
     # --- Hyperparameters Group ---
     hyper = parser.add_argument_group('Advanced PPO / RL Tuning')
-    hyper.add_argument('--learning-rate', type=float, default=3e-4, help='PPO Learning rate')
+    hyper.add_argument('--learning-rate', type=float, default=1e-4, help='PPO Learning rate')
     hyper.add_argument('--batch-size', type=int, default=128, help='Batch size for optimization updates')
     hyper.add_argument('--rollout-steps', type=int, default=128, help='Steps per rollout trajectory')
     hyper.add_argument('--gamma', type=float, default=0.99, help='Discount factor')
