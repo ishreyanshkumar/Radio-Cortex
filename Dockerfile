@@ -26,13 +26,12 @@ RUN git clone https://gitlab.com/nsnam/ns-3-allinone.git && \
     ./download.py ns-3.46.1
 
 # 3. Copy Scenario Files & Link them
-# We copy the entire repo first to get the scenario files
-COPY . /app/Radio-Cortex
+COPY . /app
 
 RUN cd ns-3-allinone/ns-3.46.1/scratch && \
     rm -rf * && \
-    ln -sf /app/Radio-Cortex/oran-congestion-scenario.cc . && \
-    ln -sf /app/Radio-Cortex/CMakeLists.txt .
+    ln -sf /app/oran-congestion-scenario.cc . && \
+    ln -sf /app/CMakeLists.txt .
 
 # 4. Configure and Build ns-3
 # Warning: This takes a significant amount of time
@@ -75,8 +74,11 @@ COPY . /app
 # Ensure ns-3 libraries are found
 ENV LD_LIBRARY_PATH="${NS3_PATH}/build/lib:${LD_LIBRARY_PATH}"
 
-# 7. Default Command
+# 7. Expose Gradio UI Port
+EXPOSE 7860
+
+# 8. Default Command
 # Uses the environment variable KAFKA_BOOTSTRAP which corresponds to the service name in docker-compose
 ENV KAFKA_BOOTSTRAP="kafka:9092"
 
-CMD ["python3", "radio_cortex_complete.py", "--mode", "train", "--scenario", "flash_crowd", "--total-timesteps", "100000"]
+CMD ["python3", "radio_cortex_complete.py", "--mode", "train", "--scenario", "all", "--n-envs", "4", "--total-timesteps", "100000"]

@@ -115,7 +115,17 @@ source .venv/bin/activate
 4. **Debug Scale**: `python3 debug_scalability.py` (Verify 5 UE -> 100 UE generalization)
 5. **Clean Workspace**: `bash scripts/cleanup.sh`
 
-#### 2. Storage Safety (Automated)
+#### 2. Containerized Training (Docker)
+Radio-Cortex is fully Dockerized for consistent deployment.
+```bash
+# 1. Build and Start everything (Kafka + Agent)
+docker-compose up --build
+
+# 2. Access the Gradio UI
+# Open http://localhost:7860 in your browser
+```
+
+#### 3. Storage Safety (Automated)
 Radio-Cortex is designed for multi-million step training without disk exhaustion.
 *   **Log Purge**: The curriculum script automatically deletes `logs/*.log` (potentially 10GB+) between stages.
 *   **CSV Archival**: Raw per-step CSVs are purged post-stage to save room (~3GB).

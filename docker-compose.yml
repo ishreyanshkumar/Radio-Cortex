@@ -39,6 +39,8 @@ services:
     environment:
       - KAFKA_BOOTSTRAP=kafka:9092
       - PYTHONUNBUFFERED=1
+    ports:
+      - "7860:7860"
     # Interactive mode for potential debugging or TUI
     stdin_open: true
     tty: true
