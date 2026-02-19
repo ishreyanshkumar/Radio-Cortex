@@ -26,5 +26,8 @@ python3 radio_cortex_complete.py \
     --rollout-steps 128 \
     --batch-size 64 \
     --lr-gamma 0.98 \
+    --learning-rate 5e-5 \
+    --clip-epsilon 0.1 \
+    --ent-coef 0.02
 
 echo "✅ Training Complete. Check logs/reward_metrics_*.csv for results."

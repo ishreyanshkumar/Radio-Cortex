@@ -23,19 +23,20 @@ WORKDIR /app
 # We use the same version as the setup script
 RUN git clone https://gitlab.com/nsnam/ns-3-allinone.git && \
     cd ns-3-allinone && \
-    ./download.py ns-3.46.1
+    ./download.py && \
+    ln -s ns-3.* ns-3-dev
 
 # 3. Copy Scenario Files & Link them
 COPY . /app
 
-RUN cd ns-3-allinone/ns-3.46.1/scratch && \
+RUN cd ns-3-allinone/ns-3-dev/scratch && \
     rm -rf * && \
     ln -sf /app/oran-congestion-scenario.cc . && \
     ln -sf /app/CMakeLists.txt .
 
 # 4. Configure and Build ns-3
 # Warning: This takes a significant amount of time
-WORKDIR /app/ns-3-allinone/ns-3.46.1
+WORKDIR /app/ns-3-allinone/ns-3-dev
 RUN ./ns3 configure -d optimized --enable-examples --enable-tests && \
     ./ns3 build
 
@@ -44,7 +45,7 @@ FROM ubuntu:24.04 AS runtime
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV PATH="/app/venv/bin:$PATH"
-ENV NS3_PATH="/app/ns-3-allinone/ns-3.46.1"
+ENV NS3_PATH="/app/ns-3-allinone/ns-3-dev"
 
 # 1. Install Runtime Dependencies
 # Note: librdkafka1 is the runtime library, librdkafka-dev is headers

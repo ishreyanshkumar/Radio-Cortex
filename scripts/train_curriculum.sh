@@ -35,14 +35,14 @@ DRY_RUN=false
 # Buffer: 40 envs × 256 steps = 10,240 samples/update
 # Mini-batches: 10,240 / 2,048 = 5 per epoch
 # Grad steps/update: 10 epochs × 5 = 50 (fast but thorough)
-LR="1e-4"                        # Safe stable LR for sensitive rewards
+LR="5e-5"                        # Safe stable LR for sensitive rewards
 BATCH_SIZE=4096                  # High throughput for 48-core system
 ROLLOUT_STEPS=512                # 40×512 = 20,480 buffer. Deeper trajectories.
 GAMMA=0.99                       # Standard discount for 50s episodes
 GAE_LAMBDA=0.95
-CLIP_EPSILON=0.2                 # Slightly higher clippling for faster adaptation
+CLIP_EPSILON=0.1                 # Tighter clipping for stability
 VF_COEF=0.5
-ENT_COEF=0.01                    # Increased entropy to prevent early convergence
+ENT_COEF=0.02                    # Increased entropy to prevent early convergence
 MAX_GRAD_NORM=0.5
 HIDDEN_DIM=512                   # Wider network for better GPU utilization
 PPO_EPOCHS=20                    # Squeeze more out of each batch
