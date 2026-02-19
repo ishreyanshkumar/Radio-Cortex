@@ -21,8 +21,8 @@ class BDHPolicy(nn.Module):
     """
     Cell-Centric BDH Policy.
 
-    State:  (B, num_cells * 12)  — Enriched Cell Tokens
-    Action: (B, num_cells * 2)   — [TxPower, HandoverSensitivity] per cell
+    State:  (B, num_cells * 48)  — Enriched Cell Tokens (Stacked)
+    Action: (B, num_cells * 3)   — [TxPower, CIO, TTT] per cell
     """
 
     def __init__(self, state_dim: int, action_dim: int, bdh_config: Optional[object] = None, device: str = 'cpu', env_config: Optional[object] = None):
@@ -30,7 +30,7 @@ class BDHPolicy(nn.Module):
 
         # --- Layout ---
         self.cell_features = 48   # Frame stacking: 3 frames × 16 features
-        self.cell_actions = 2     # TxPower, HandoverSensitivity
+        self.cell_actions = 3     # TxPower, CIO, TTT
         self.num_cells = getattr(env_config, 'num_cells', 3) if env_config else 3
 
         # --- BDH Core ---
@@ -152,13 +152,13 @@ class BDHPolicy(nn.Module):
         context = self._bdh_layer_stack(cell_tokens)  # (B, M, D)
 
         # 3. Decode cell actions
-        action_mean = self.cell_action_head(context)   # (B, M, 5)
+        action_mean = self.cell_action_head(context)   # (B, M, 3)
         
-        # LogStd is now a learned parameter (1, M, 5), not a function of context
+        # LogStd is now a learned parameter (1, M, 3), not a function of context
         # This is standard PPO practice for continuous control (state-independent std)
-        logstd = self.cell_logstd_head.expand(B, -1, -1) # (B, M, 5)
+        logstd = self.cell_logstd_head.expand(B, -1, -1) # (B, M, 3)
 
-        flat_mean = action_mean.reshape(B, -1)         # (B, M*5)
+        flat_mean = action_mean.reshape(B, -1)         # (B, M*3)
         flat_logstd = logstd.reshape(B, -1)
         flat_logstd = torch.clamp(flat_logstd, -2, 1)
 

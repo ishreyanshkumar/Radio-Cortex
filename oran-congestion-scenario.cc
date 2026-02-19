@@ -47,6 +47,30 @@ using namespace ns3;
 
 NS_LOG_COMPONENT_DEFINE("RadioCortexOranScenario");
 
+template <typename Tag, typename Tag::type P> struct PrivateMember {
+  friend typename Tag::type get(Tag) { return P; }
+};
+
+struct LteEnbRrcMeasConfigTag {
+  typedef LteRrcSap::MeasConfig LteEnbRrc::*type;
+};
+template struct PrivateMember<LteEnbRrcMeasConfigTag,
+                              &LteEnbRrc::m_ueMeasConfig>;
+LteRrcSap::MeasConfig LteEnbRrc::*get(LteEnbRrcMeasConfigTag);
+
+struct LteEnbRrcUeMapTag {
+  typedef std::map<uint16_t, Ptr<UeManager>> LteEnbRrc::*type;
+};
+template struct PrivateMember<LteEnbRrcUeMapTag, &LteEnbRrc::m_ueMap>;
+std::map<uint16_t, Ptr<UeManager>> LteEnbRrc::*get(LteEnbRrcUeMapTag);
+
+struct UeManagerReconfigTag {
+  typedef void (UeManager::*type)();
+};
+template struct PrivateMember<UeManagerReconfigTag,
+                              &UeManager::ScheduleRrcConnectionReconfiguration>;
+void (UeManager::*get(UeManagerReconfigTag))();
+
 // ============================================================================
 // E2 Interface Manager - Handles KPM reporting and RC commands via Kafka
 // ============================================================================
@@ -932,19 +956,24 @@ void E2InterfaceManager::ProcessRcCommand(std::string command) {
     }
 
     // Build per-cell key prefix for flat JSON: "cell_0_tx_power_dbm" etc.
-    std::stringstream pfx;
-    pfx << "\"cell_" << i << "_";
-    std::string cellPfx = pfx.str(); // e.g. "cell_0_
+    std::string cellPfx = "cell_" + std::to_string(i) + "_";
 
     auto parseValue = [&](const std::string &paramName,
                           double &outValue) -> bool {
-      std::string key = cellPfx + paramName + "\":";
+      std::string key = cellPfx + paramName;
       size_t keyPos = command.find(key);
       if (keyPos == std::string::npos) {
         return false;
       }
 
-      size_t valStart = keyPos + key.size();
+      // Found the key part (e.g. cell_0_tx_power_dbm)
+      // Now find the colon after it
+      size_t colonPos = command.find(":", keyPos + key.length());
+      if (colonPos == std::string::npos) {
+        return false;
+      }
+
+      size_t valStart = colonPos + 1;
       // Skip whitespace and possible negative sign
       while (valStart < command.length() &&
              (command[valStart] == ' ' || command[valStart] == '\t')) {
@@ -986,41 +1015,118 @@ void E2InterfaceManager::ProcessRcCommand(std::string command) {
       // Clamp to safe LTE range 10–46 dBm
       txPower = std::max(10.0, std::min(46.0, txPower));
       dev->GetPhy()->SetTxPower(txPower);
-      NS_LOG_INFO("Set Cell " << i << " TxPower to " << txPower << " dBm");
+      std::cout << "Set Cell " << i << " TxPower to " << txPower << " dBm"
+                << std::endl;
     }
 
-    // Hysteresis Control (Mobility — A3RsrpHandoverAlgorithm)
-    double hysteresis = 0.0;
-    if (parseValue("hysteresis_db", hysteresis)) {
-      // FIX: Access HandoverAlgorithm via the Node aggregation
-      Ptr<LteHandoverAlgorithm> hoAlgo =
-          enbNode->GetObject<LteHandoverAlgorithm>();
-      if (hoAlgo) {
-        hoAlgo->SetAttribute("Hysteresis", DoubleValue(hysteresis));
-        std::cout << "Action Applied: Set Cell " << i << " Hysteresis to "
-                  << hysteresis << " dB" << std::endl;
+    // 2. CIO: Neighbor Cell Offset (how this cell is seen by others)
+    // Positive value -> Pulls UEs to this cell from neighbors.
+    double cio = 0.0;
+    if (parseValue("cell_individual_offset_db", cio)) {
+      std::cout << "Cell " << i << " RC command: Received CIO = " << cio
+                << std::endl;
+      // 3GPP Q-OffsetRange is even numbers [-24..24]
+      int8_t cio_int = static_cast<int8_t>(std::round(cio / 2.0) * 2.0);
+      cio_int = std::max((int8_t)-24, std::min((int8_t)24, cio_int));
+
+      uint16_t thisPhysCellId = dev->GetCellId();
+      bool applied = false;
+      uint32_t neighborsFoundCount = 0;
+
+      // CIO logic: Update this cell's offset in ALL OTHER cells' neighbor lists
+      for (uint32_t j = 0; j < m_enbNodes.GetN(); ++j) {
+        if (i == j)
+          continue; // Don't set self-offset
+
+        Ptr<LteEnbRrc> otherRrc = m_enbNodes.Get(j)
+                                      ->GetDevice(0)
+                                      ->GetObject<LteEnbNetDevice>()
+                                      ->GetRrc();
+        LteRrcSap::MeasConfig &otherMeasConfig =
+            PeekPointer(otherRrc)->*get(LteEnbRrcMeasConfigTag());
+
+        bool foundNeighbor = false;
+        if (!otherMeasConfig.measObjectToAddModList.empty()) {
+          // Add to the first EUTRA meas object found
+          auto &measObj =
+              otherMeasConfig.measObjectToAddModList.front().measObjectEutra;
+
+          for (auto &cellMod : measObj.cellsToAddModList) {
+            if (cellMod.physCellId == thisPhysCellId) {
+              cellMod.cellIndividualOffset = cio_int;
+              foundNeighbor = true;
+              neighborsFoundCount++;
+            }
+          }
+
+          if (!foundNeighbor) {
+            // Add as new entry in existing meas object
+            LteRrcSap::CellsToAddMod newCell;
+            newCell.physCellId = thisPhysCellId;
+            newCell.cellIndividualOffset = cio_int;
+            measObj.cellsToAddModList.push_back(newCell);
+            foundNeighbor = true;
+            neighborsFoundCount++;
+          }
+        }
+
+        if (foundNeighbor) {
+          applied = true;
+          // Trigger reconfiguration for all UEs in this neighbor cell
+          std::map<uint16_t, Ptr<UeManager>> &ueMap =
+              PeekPointer(otherRrc)->*get(LteEnbRrcUeMapTag());
+          for (auto const &[rnti, ueMgr] : ueMap) {
+            (PeekPointer(ueMgr)->*get(UeManagerReconfigTag()))();
+          }
+        }
+      }
+
+      if (applied) {
+        std::cout << "Action Applied: Set Cell " << i << " CIO to "
+                  << (int)cio_int << " dB (in " << neighborsFoundCount
+                  << " neighbor lists)" << std::endl;
       } else {
-        std::cerr << "Warning: Cell " << i
-                  << ": Could not retrieve HandoverAlgorithm from Node"
+        std::cout << "Cell " << i
+                  << " RC command: CIO not applied (this cell not found in Any "
+                     "neighbor lists)."
                   << std::endl;
       }
     }
 
-    // TimeToTrigger Control
+    // 3. TimeToTrigger Control (Serving Cell Parameter)
     double ttt = 0.0;
     if (parseValue("time_to_trigger_ms", ttt)) {
-      // FIX: Access HandoverAlgorithm via the Node aggregation
+      uint16_t ttt_uint = static_cast<uint16_t>(ttt);
+      Ptr<LteEnbRrc> rrc = dev->GetRrc();
+      LteRrcSap::MeasConfig &measConfig =
+          PeekPointer(rrc)->*get(LteEnbRrcMeasConfigTag());
+
+      bool updated = false;
+      for (auto &reportCfgMod : measConfig.reportConfigToAddModList) {
+        if (reportCfgMod.reportConfigEutra.eventId ==
+            LteRrcSap::ReportConfigEutra::EVENT_A3) {
+          reportCfgMod.reportConfigEutra.timeToTrigger = ttt_uint;
+          updated = true;
+        }
+      }
+
+      if (updated) {
+        // Trigger reconfiguration for all UEs in this cell
+        std::map<uint16_t, Ptr<UeManager>> &ueMap =
+            PeekPointer(rrc)->*get(LteEnbRrcUeMapTag());
+        for (auto const &[rnti, ueMgr] : ueMap) {
+          (PeekPointer(ueMgr)->*get(UeManagerReconfigTag()))();
+        }
+        std::cout << "Action Applied: Set Cell " << i << " TTT to " << ttt_uint
+                  << " ms" << std::endl;
+      }
+
+      // Also update HandoverAlgorithm attribute for consistency (if it exists)
       Ptr<LteHandoverAlgorithm> hoAlgo =
           enbNode->GetObject<LteHandoverAlgorithm>();
       if (hoAlgo) {
-        hoAlgo->SetAttribute("TimeToTrigger", TimeValue(MilliSeconds(
-                                                  static_cast<uint64_t>(ttt))));
-        std::cout << "Action Applied: Set Cell " << i << " TimeToTrigger to "
-                  << ttt << " ms" << std::endl;
-      } else {
-        std::cerr << "Warning: Cell " << i
-                  << ": Could not retrieve HandoverAlgorithm from Node"
-                  << std::endl;
+        hoAlgo->SetAttribute("TimeToTrigger",
+                             TimeValue(MilliSeconds(ttt_uint)));
       }
     }
   }

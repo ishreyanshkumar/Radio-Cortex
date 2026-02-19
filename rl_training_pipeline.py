@@ -278,7 +278,7 @@ class PPOTrainer:
                     avg_tput, avg_delay, avg_loss = 0.0, 0.0, 0.0
                 
                 # Format cell-centric action summary
-                actions_per_cell = 2
+                actions_per_cell = 3 # TxPower, CIO, TTT
                 num_cells_log = len(action_denorm) // actions_per_cell
                 if num_cells_log > 0:
                     c0 = action_denorm[:actions_per_cell]

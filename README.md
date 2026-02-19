@@ -1,6 +1,6 @@
 # Radio-Cortex: O-RAN RL Congestion Control
 
-Radio-Cortex is a closed-loop control system that uses Reinforcement Learning (RL) to optimize network parameters (Tx Power, Handover Sensitivity) in an O-RAN compliant ns-3 simulation. It features a real-time feedback loop where an RL agent (PPO) receives KPM (Key Performance Metrics) from ns-3 via Kafka and sends back RC (RAN Control) actions, with a live Rich TUI dashboard and per-step KPM verification logging.
+Radio-Cortex is a closed-loop control system that uses Reinforcement Learning (RL) to optimize network parameters (Tx Power, CIO, TTT) in an O-RAN compliant ns-3 simulation. It features a real-time feedback loop where an RL agent (PPO) receives KPM (Key Performance Metrics) from ns-3 via Kafka and sends back RC (RAN Control) actions, with a live Rich TUI dashboard and per-step KPM verification logging.
 
 ### 🏆 Key Innovations & Solved Challenges
 Radio-Cortex pushes the boundary of O-RAN intelligence by solving three fundamental problems in applying RL to wireless networks:
@@ -141,7 +141,7 @@ You can customize the training hyperparameters and environment settings via comm
 | `--scenario` | `flash_crowd` | ns-3 Scenario (12 available). Use `all` for random rotation. |
 | `--total-timesteps` | 100000 | Total training or evaluation steps. |
 | `--n-envs` | 12 | Number of parallel environments (vectorized). 12-16 recommended for BDH. |
-| `--model` | `bdh` | Policy architecture: `bdh` (Recommended), `nn` (MLP), `gpt2`, `trxl`, `base`. |
+| `--model` | `bdh` | Policy architecture: `bdh` (Transformer), `nn` (MLP), `t1` (Transformer-1), `t2` (Transformer-2). |
 | `--model-path` | `models/radiocortex_{model}.pt` | Path to save/load model checkpoint. |
 | `--device` | `None` | Compute device (`cpu` or `cuda`). |
 | `--config` | `None` | Path to JSON config file to override any argument. |
@@ -380,12 +380,12 @@ This script manages the lifecycle of the training process, initializes the agent
 converts ns-3 simulation into a standard OpenAI Gym interface (observation, action, reward).
 
 *   **`ORANns3Env`**: The Gym Environment class.
-    *   `step(action)`: Takes an RL action (6 dims = 2 per cell), sends it to ns-3, waits for the next KPM report, and returns (state, reward, done).
+    *   `step(action)`: Takes an RL action (9 dims = 3 per cell), sends it to ns-3, waits for the next KPM report, and returns (state, reward, done).
     *   `reset()`: Restarts the ns-3 simulation subprocess.
     *   `_compute_reward(e2_msg)`: Delegates to `RewardEngine`.
     *   **`RewardEngine`**: 3-Level Curriculum reward engine with Survival Bias. Combines 8 components (Throughput, Delay, Loss, SE, Energy, Load, Queue, Smoothing) gated by curriculum levels.
     *   **State Space**: `num_cells × 48` (3-frame stacked Enriched Cell Tokens: 16 features/cell × 3 frames). 16 features = 5 native cell metrics + 7 aggregated UE stats + 3 delta features + 1 curriculum level. All strictly normalized to [-1, 1].
-    *   **Action Space**: `num_cells × 2` = 6 dimensions — TxPower (differential ±1 dBm) and HandoverSensitivity (absolute, maps to joint TTT+Hysteresis: -1=conservative, +1=aggressive). All [-1,1]-normalized.
+    *   **Action Space**: `num_cells × 3` = 9 dimensions — TxPower (differential ±1 dBm), CIO (absolute [-6, 6] dB), and TTT (absolute [0, 1280] ms). All [-1,1]-normalized.
 *   **`NS3Interface`**: Handles low-level communication.
     *   `start_simulation()`: Spawns the `./ns3 run ...` subprocess.
     *   `send_rc_control(actions)`: Serializes actions to JSON and sends via Kafka `e2_rc_control` topic.
@@ -486,7 +486,7 @@ graph LR
     AGENT -- "Action Vector" --> GYM
     GYM -- "E2SM-RC<br/>(JSON)" --> TOPIC_RC
     TOPIC_RC --> PROC
-    PROC -- "SetTxPower / Sched" --> RAN
+    PROC -- "SetTxPower / CIO / TTT" --> RAN
 
     %% Styling
     classDef simNode fill:#f8f9fa,stroke:#343a40,stroke-width:2px,color:#212529;

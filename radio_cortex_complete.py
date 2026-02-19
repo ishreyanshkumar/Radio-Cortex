@@ -613,9 +613,8 @@ def evaluate_single_scenario(
                 pass
             
             # Verify if it matches current config
-            # Verify if it matches current config
-            expected_state_dim = config.num_cells * 16   # Cell-centric: 16 features per cell (Updated)
-            expected_action_dim = config.num_cells * 5    # 5 actions per cell
+            expected_state_dim = config.num_cells * 16 * 3   # Cell-centric: 16 features * 3 frames (Stacked)
+            expected_action_dim = config.num_cells * 3       # 3 actions per cell: [TxPower, CIO, TTT]
             
             # Determine device: Default to CPU for evaluation to stay within 16GB limit.
             # BDH is particularly heavy and evaluation is bottlenecked by the simulation, not AI.

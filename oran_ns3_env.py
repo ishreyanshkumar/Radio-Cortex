@@ -903,23 +903,18 @@ class ORANns3Env(gym.Env):
         # ──────────────────────────────────────────────────────────
         self.features_per_cell = 16
         self.n_stack = 3  # Frame stacking depth
-        state_dim = self.config.num_cells * self.features_per_cell * self.n_stack
+        # Observation space: Stacked frames of cell features
         self.observation_space = spaces.Box(
-            low=-1.0,
-            high=1.0,
-            shape=(state_dim,),
+            low=-np.inf, high=np.inf,
+            shape=(self.config.num_cells * self.features_per_cell * self.n_stack,),
             dtype=np.float32
         )
         
-        # Cell-Only Action Space: 2 Actions per cell
-        # 1. TxPower            (differential +/- 1.0 dBm)
-        # 2. HandoverSensitivity (absolute: -1=conservative, +1=aggressive)
-        self.actions_per_cell = 2
-        action_dim = self.config.num_cells * self.actions_per_cell
-
+        # Action space: [TxPower, CIO, TTT] per cell
+        self.actions_per_cell = 3
         self.action_space = spaces.Box(
-            low=np.array([-1.0] * action_dim, dtype=np.float32),
-            high=np.array([1.0] * action_dim, dtype=np.float32),
+            low=-1.0, high=1.0,
+            shape=(self.config.num_cells * self.actions_per_cell,),
             dtype=np.float32
         )
         
@@ -943,9 +938,9 @@ class ORANns3Env(gym.Env):
         # them during reset().  The first step()'s action is the first change.
         self.current_params = {
             'cell': {c: {
-                'tx_power': 46.0,           # dBm (ns-3 LTE default)
-                'handover_sensitivity': 0.0, # Neutral (-1=conservative, +1=aggressive)
-                'noise_figure': 5.0,        # dB
+                'tx_power': 46.0,          # Default max power
+                'cell_individual_offset': 0.0, # Default 0dB
+                'time_to_trigger': 192.0   # Default aggressive
             } for c in range(self.config.num_cells)}
         }
         
@@ -969,9 +964,9 @@ class ORANns3Env(gym.Env):
         # Reset Differential Control State to ns-3 defaults (Cell-only)
         self.current_params = {
             'cell': {c: {
-                'tx_power': 46.0,           # dBm (ns-3 LTE default)
-                'handover_sensitivity': 0.0, # Neutral
-                'noise_figure': 5.0,        # dB
+                'tx_power': 46.0,          # Default max power
+                'cell_individual_offset': 0.0, # Default 0dB
+                'time_to_trigger': 192.0   # Default aggressive
             } for c in range(self.config.num_cells)}
         }
         
@@ -1335,19 +1330,18 @@ class ORANns3Env(gym.Env):
                     self.current_params['cell'][c]['tx_power'] + delta_p, 10.0, 46.0
                 )
 
-            # 2. Handover Sensitivity: Absolute [-1, 1]
-            # Physics-informed joint mapping to TTT and Hysteresis.
-            # UNLOCKED: Agent controls handover at all levels (user request)
-            sensitivity = float(np.clip(cell_act[1], -1.0, 1.0))
-            self.current_params['cell'][c]['handover_sensitivity'] = sensitivity
+            # 2. Cell Individual Offset (CIO): Absolute [-6, 6] dB
+            # Direct load balancing lever.
+            cio = float(cell_act[1]) * 6.0  # -1 -> -6dB, +1 -> +6dB
+            self.current_params['cell'][c]['cell_individual_offset'] = cio
             
-            # Map sensitivity → TTT: [-1,1] → [1280, 0] ms (inverse: more sensitive = lower TTT)
-            ttt_ms = 640.0 * (1.0 - sensitivity)  # -1→1280, 0→640, +1→0
-            # Map sensitivity → Hysteresis: [-1,1] → [6, 0] dB (inverse: more sensitive = lower hyst)
-            hyst_db = 3.0 * (1.0 - sensitivity)   # -1→6, 0→3, +1→0
+            # 3. Time-to-Trigger (TTT): Absolute [0, 1280] ms
+            # Map [-1, 1] -> [1280, 0] ms (inverse: -1=lazy, +1=agile)
+            ttt_act = float(cell_act[2])
+            ttt_ms = 640.0 * (1.0 - ttt_act)  # -1→1280, 0→640, +1→0
+            self.current_params['cell'][c]['time_to_trigger'] = ttt_ms
 
-            # --- Soft Action Masking (Constraint Awareness) ---
-            # TxPower (10-46)
+            # Masking for Power Only (CIO/TTT are absolute and always valid)
             tx = self.current_params['cell'][c]['tx_power']
             if (tx >= 46.0 and delta_p > 0) or (tx <= 10.0 and delta_p < 0):
                 self.boundary_penalty += 0.05 * abs(float(cell_act[0]))
@@ -1355,8 +1349,8 @@ class ORANns3Env(gym.Env):
             rc_actions['cell'].append({
                 'cell_id': c,
                 'tx_power_dbm': float(self.current_params['cell'][c]['tx_power']),
+                'cell_individual_offset_db': float(cio),
                 'time_to_trigger_ms': float(ttt_ms),
-                'hysteresis_db': float(hyst_db),
             })
             
         return rc_actions
