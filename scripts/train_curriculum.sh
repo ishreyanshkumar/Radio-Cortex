@@ -35,7 +35,7 @@ DRY_RUN=false
 # Buffer: 40 envs × 256 steps = 10,240 samples/update
 # Mini-batches: 10,240 / 2,048 = 5 per epoch
 # Grad steps/update: 10 epochs × 5 = 50 (fast but thorough)
-LR="1e-4"                        # Sweet spot for large-batch PPO
+LR="5e-5"                        # Sweet spot for large-batch PPO
 BATCH_SIZE=2048                  # 5 mini-batches/epoch, fast GPU throughput
 ROLLOUT_STEPS=256                # 40×256 = 10,240 buffer. Fast collection.
 GAMMA=0.99                       # Standard discount for 50s episodes
@@ -160,8 +160,8 @@ run_stage() {
 
 declare -A STAGES
 
-# Stage 1: Foundation - Flash Crowd Mastery (~20 updates)
-STAGES[1]="--scenario flash_crowd --total-timesteps 200000"
+# Stage 1: Foundation - Flash Crowd Mastery (~29 updates)
+STAGES[1]="--scenario flash_crowd --total-timesteps 300000"
 
 # Stage 2: Green RAN - Sleepy Campus (~29 updates)
 STAGES[2]="--scenario flash_crowd:0.2,sleepy_campus:0.8 --total-timesteps 300000"
