@@ -407,11 +407,7 @@ def evaluate_radio_cortex(
             
             # For heavy models like BDH, parallel evaluation can easily OOM a 16GB GPU.
             # Default to sequential or low-parallelism if requested environment count is high.
-            is_heavy = config.model_type == 'bdh' or 'bdh' in str(model_path).lower()
             effective_envs = n_envs
-            if is_heavy and n_envs > 2:
-                print(f"\n      [RECAP] BDH model detected. Capping evaluation parallelism to 2 to prevent OOM.")
-                effective_envs = 2
 
             with ProcessPoolExecutor(max_workers=effective_envs) as executor:
                 futures = {}

@@ -10,7 +10,7 @@ if [ ! -d "ns-3-allinone" ]; then
     echo "[1/4] Cloning ns-3-allinone..."
     git clone https://gitlab.com/nsnam/ns-3-allinone.git
     cd ns-3-allinone
-    ./download.py ns-3.46.1
+    ./download.py
     cd ..
 else
     echo "[1/4] ns-3-allinone already exists."
@@ -34,7 +34,13 @@ if command -v apt-get &> /dev/null; then
     sudo apt-get update && sudo apt-get install -y librdkafka-dev || echo "Skipping apt install (permission denied or unnecessary)"
 fi
 
-cd ns-3-allinone/ns-3.46.1
+NS3_DIR=$(ls -d ns-3-allinone/ns-3.* 2>/dev/null | head -1)
+if [ -z "$NS3_DIR" ]; then
+    echo "ERROR: No ns-3 directory found in ns-3-allinone/"
+    exit 1
+fi
+echo "Detected ns-3 directory: $NS3_DIR"
+cd "$NS3_DIR"
 
 echo "Linking scenario..."
 cd scratch

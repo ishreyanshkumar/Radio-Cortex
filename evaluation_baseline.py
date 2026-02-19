@@ -136,6 +136,7 @@ class EvaluationRunner:
         prev_cells = {}
         total_handovers = 0
         inference_times = []
+        actions_history = []
         
         # Get model parameters if available
         model_params = 0
@@ -357,8 +358,16 @@ class EvaluationRunner:
         avg_power_w = total_power_w_accum / step_count_power if step_count_power > 0 else 0.001
         avg_inference = np.mean(inference_times) if inference_times else 0.0
         
-        metrics = self._calculate_metrics(throughputs, delays, losses, queue_lengths, rb_utils, per_ue_stats, sinrs, rsrps, total_handovers,
-                                          ho_attempts, ho_successes, control_stability, avg_power_w, avg_inference, model_params)
+        metrics = self._calculate_metrics(
+            throughputs, delays, losses, queue_lengths, rb_utils, per_ue_stats, sinrs, rsrps,
+            total_handovers,
+            ho_attempts=ho_attempts,
+            ho_successes=ho_successes,
+            control_stability=control_stability,
+            total_power_watts=avg_power_w,
+            avg_inference_time=avg_inference,
+            model_params=model_params
+        )
         
         # Print formatted results
         print(f"  {'─'*50}")

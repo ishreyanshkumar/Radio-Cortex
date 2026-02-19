@@ -433,10 +433,11 @@ class NS3Interface:
         # Resolve ns3 script path
         ns3_path = 'ns3'
         if not os.path.exists(ns3_path):
-            # Check for standard nested structure
-            nested_path = os.path.join('ns-3-allinone', 'ns-3.46.1', 'ns3')
-            if os.path.exists(nested_path):
-                ns3_path = nested_path
+            # Check for standard nested structure (version-agnostic)
+            import glob as _glob
+            candidates = sorted(_glob.glob('ns-3-allinone/ns-3.*/ns3'), reverse=True)
+            if candidates:
+                ns3_path = candidates[0]
             elif os.path.exists(os.path.join('..', 'ns3')):
                 ns3_path = os.path.join('..', 'ns3')
             elif os.path.exists(os.path.join('..', '..', 'ns3')): # Handle scratch/Radio-Cortex case
@@ -1027,8 +1028,8 @@ class ORANns3Env(gym.Env):
                 **breakdown,
             })
             
-            # Log reward components to CSV
-            if self._reward_log_enabled:
+            # Log reward components to CSV (every 5th step to reduce I/O)
+            if self._reward_log_enabled and self.current_step % 5 == 0:
                 try:
                     import fcntl, csv as _csv
                     row = [

@@ -1485,6 +1485,11 @@ int main(int argc, char *argv[]) {
       lteHelper->Attach(ueLteDevs.Get(i), enbLteDevs.Get(i % numCells));
     }
 
+    // Enable X2 interface between all eNBs (required for handover)
+    // Without this, the ANR table is empty and handover crashes with
+    // "Cell ID X cannot be found in NRT"
+    lteHelper->AddX2Interface(enbNodes);
+
     for (uint32_t i = 0; i < ueNodes.GetN(); ++i) {
       Ptr<Node> ueNode = ueNodes.Get(i);
       Ptr<Ipv4StaticRouting> ueStaticRouting =

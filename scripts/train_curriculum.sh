@@ -20,30 +20,33 @@ set -euo pipefail
 # Optimization: Prevent CUDA fragmentation
 export PYTORCH_ALLOC_CONF="expandable_segments:True"
 
-# ── Configuration (Optimized for 40-Core / 32GB VRAM Hardware) ──
+# ── Configuration (Optimized for 48-Core / 32GB VRAM Hardware) ──
 MODEL="bdh"
-N_ENVS=32                     # Optimized for 40+ core CPU (Leave 8 cores for OS/Kafka)
+N_ENVS=40                     # 48 cores - 8 (OS/Kafka/Python) = 40 workers
 SIM_TIME=50.0                 # Longer episodes for meaningful congestion dynamics
 DEVICE=""                     # auto-detect
 MODEL_DIR="models/curriculum"
-LOG_INTERVAL=10                
-CHECKPOINT_INTERVAL=10        
+LOG_INTERVAL=15
+CHECKPOINT_INTERVAL=10
 START_STAGE=1
 DRY_RUN=false
 
-# ── Turbo-Charged Hyperparameters (Deep & Wide Training) ──
-LR="3e-4"                        # Standard reliable LR
-BATCH_SIZE=4096                  # Massive batch size for stable gradients (Requires >24GB VRAM)
-ROLLOUT_STEPS=512                # 32 envs * 512 steps = 16,384 step buffer per update
-GAMMA=0.995                      # Longer horizon for complex congestion
+# ── Optimized Hyperparameters (Speed + Accuracy on 48-core) ──
+# Buffer: 40 envs × 256 steps = 10,240 samples/update
+# Mini-batches: 10,240 / 2,048 = 5 per epoch
+# Grad steps/update: 10 epochs × 5 = 50 (fast but thorough)
+LR="1e-4"                        # Sweet spot for large-batch PPO
+BATCH_SIZE=2048                  # 5 mini-batches/epoch, fast GPU throughput
+ROLLOUT_STEPS=256                # 40×256 = 10,240 buffer. Fast collection.
+GAMMA=0.99                       # Standard discount for 50s episodes
 GAE_LAMBDA=0.95
-CLIP_EPSILON=0.2
+CLIP_EPSILON=0.15                # Balanced: allows exploration, prevents KL blowup
 VF_COEF=0.5
-ENT_COEF=0.01                    # Restored to 0.01 for better exploration in large batch
+ENT_COEF=0.005                   # Moderate exploration for diverse scenarios
 MAX_GRAD_NORM=0.5
-HIDDEN_DIM=512                   # Wider network for higher capacity
-PPO_EPOCHS=20                    # Deep updates per batch (extract max value from expensive rollouts)
-LR_GAMMA=0.99                    # Slow decay for long curriculum
+HIDDEN_DIM=512                   # Wider network for better GPU utilization
+PPO_EPOCHS=15                    # 75 grad steps/update (15 × 5 mini-batches)
+LR_GAMMA=0.995                   # Gentle decay across curriculum
 
 # ── Parse CLI args ──
 while [[ $# -gt 0 ]]; do
@@ -157,29 +160,29 @@ run_stage() {
 
 declare -A STAGES
 
-# Stage 1: Foundation - Flash Crowd Mastery (Bootstrap: ~48 updates)
-STAGES[1]="--scenario flash_crowd --total-timesteps 800000"
+# Stage 1: Foundation - Flash Crowd Mastery (~20 updates)
+STAGES[1]="--scenario flash_crowd --total-timesteps 200000"
 
-# Stage 2: Green RAN - Sleepy Campus (Energy: ~90 updates)
-STAGES[2]="--scenario flash_crowd:0.2,sleepy_campus:0.8 --total-timesteps 1500000"
+# Stage 2: Green RAN - Sleepy Campus (~29 updates)
+STAGES[2]="--scenario flash_crowd:0.2,sleepy_campus:0.8 --total-timesteps 300000"
 
-# Stage 3: PHY Robustness - Urban Canyon (~120 updates)
-STAGES[3]="--scenario flash_crowd:0.15,sleepy_campus:0.15,urban_canyon:0.7 --total-timesteps 2000000"
+# Stage 3: PHY Robustness - Urban Canyon (~39 updates)
+STAGES[3]="--scenario flash_crowd:0.15,sleepy_campus:0.15,urban_canyon:0.7 --total-timesteps 400000"
 
-# Stage 4: Mobility - Mobility Storm (~150 updates)
-STAGES[4]="--scenario flash_crowd:0.1,sleepy_campus:0.1,urban_canyon:0.1,mobility_storm:0.7 --total-timesteps 2500000"
+# Stage 4: Mobility - Mobility Storm (~49 updates)
+STAGES[4]="--scenario flash_crowd:0.1,sleepy_campus:0.1,urban_canyon:0.1,mobility_storm:0.7 --total-timesteps 500000"
 
-# Stage 5: Congestion - Traffic Burst (~180 updates)
-STAGES[5]="--scenario flash_crowd:0.08,sleepy_campus:0.08,urban_canyon:0.08,mobility_storm:0.08,traffic_burst:0.68 --total-timesteps 3000000"
+# Stage 5: Congestion - Traffic Burst (~49 updates)
+STAGES[5]="--scenario flash_crowd:0.08,sleepy_campus:0.08,urban_canyon:0.08,mobility_storm:0.08,traffic_burst:0.68 --total-timesteps 500000"
 
-# Stage 6: URLLC - Ambulance Priority (~180 updates)
-STAGES[6]="--scenario flash_crowd:0.07,sleepy_campus:0.07,urban_canyon:0.07,mobility_storm:0.07,traffic_burst:0.07,ambulance:0.65 --total-timesteps 3000000"
+# Stage 6: URLLC - Ambulance Priority (~49 updates)
+STAGES[6]="--scenario flash_crowd:0.07,sleepy_campus:0.07,urban_canyon:0.07,mobility_storm:0.07,traffic_burst:0.07,ambulance:0.65 --total-timesteps 500000"
 
-# Stage 7: Capacity - Spectrum Crunch (~180 updates)
-STAGES[7]="--scenario flash_crowd:0.06,sleepy_campus:0.06,urban_canyon:0.06,mobility_storm:0.06,traffic_burst:0.06,ambulance:0.06,spectrum_crunch:0.64 --total-timesteps 3000000"
+# Stage 7: Capacity - Spectrum Crunch (~49 updates)
+STAGES[7]="--scenario flash_crowd:0.06,sleepy_campus:0.06,urban_canyon:0.06,mobility_storm:0.06,traffic_burst:0.06,ambulance:0.06,spectrum_crunch:0.64 --total-timesteps 500000"
 
-# Stage 8: Consolidation - Multi-Mix Generalization (~240 updates)
-STAGES[8]="--scenario flash_crowd:0.12,sleepy_campus:0.12,urban_canyon:0.12,mobility_storm:0.12,traffic_burst:0.12,ambulance:0.12,spectrum_crunch:0.12 --total-timesteps 4000000"
+# Stage 8: Consolidation - Multi-Mix Generalization (~78 updates)
+STAGES[8]="--scenario flash_crowd:0.12,sleepy_campus:0.12,urban_canyon:0.12,mobility_storm:0.12,traffic_burst:0.12,ambulance:0.12,spectrum_crunch:0.12 --total-timesteps 800000"
 
 echo ""
 echo "╔══════════════════════════════════════════════════════════════╗"
