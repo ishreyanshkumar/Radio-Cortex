@@ -14,7 +14,6 @@
 # --ppo-epochs 10: Standard PPO epochs
 
 echo "🚀 Starting Training for Flash Crowd (Stable Low-End)..."
-echo "Config: PPO (Rollout=256, Batch=256, Envs=4) | LR Gamma=0.99"
 
 python3 radio_cortex_complete.py \
     --mode train \
