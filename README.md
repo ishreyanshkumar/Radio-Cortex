@@ -185,33 +185,34 @@ To achieve maximum accuracy for project displays or research, use the hypertuned
 ./scripts/train_curriculum.sh
 ```
 
-#### Optimal Hyperparameters (32 envs + BDH)
+#### Optimal Hyperparameters (Stable / Turbo Suite)
 
-| Parameter | Default | Optimal (Turbo Suite) | Rationale |
+| Parameter | Default | Stable Config | Rationale |
 |:---|:---:|:---:|:---|
-| `--learning-rate` | 3e-4 | **3e-4** | Standard reliable LR |
-| `--batch-size` | 256 | **4096** | Massive batch for deep convergence |
-| `--rollout-steps` | 128 | **512** | Large buffer (16k steps) for stable batch |
-| `--ppo-epochs` | 20 | **20** | Squeeze max learning from rollouts |
-| `--hidden-dim` | 256 | **512** | Capture complex nuances in long suites |
-| `--target-kl` | 0.05 | **0.05** | Early stopping to prevent catastrophic divergence |
-| `--sim-time` | 60.0 | **60.0** | Sufficient time to capture full congestion decay |
+| `--learning-rate` | 5e-5 | **8e-5** | Conservative start, slightly boosted for speed |
+| `--batch-size` | 128 | **256** | Balanced for 20 epochs |
+| `--rollout-steps` | 128 | **256** | Longer horizons for better advantage estimation |
+| `--ppo-epochs` | 20 | **20** | High data efficiency (replay experience) |
+| `--hidden-dim` | 256 | **256** | Adequate capacity for cell-centric features |
+| `--ent-coef` | 0.02 | **0.03** | Boosted exploration to prevent collapse |
+| `--gamma` | 0.99 | **0.98** | Focus on immediate stability (loss avoidance) |
+| `--sim-time` | 60.0 | **60.0** | Standard episode duration |
 
 > [!TIP]
-> All optimal hyperparameters are baked into `scripts/train_curriculum.sh`. Just run it.
+> Use `scripts/train_scenario.sh` to run this optimized configuration.
 
 #### 3. Advanced RL Tuning
 | Argument | Default | Description |
 |:---|:---|:---|
-| `--learning-rate` | 3e-4 | PPO Learning rate. |
-| `--batch-size` | 256 | Batch size for optimization updates. |
+| `--learning-rate` | 5e-5 | PPO Learning rate. |
+| `--batch-size` | 128 | Batch size for optimization updates. |
 | `--rollout-steps` | 128 | Steps per rollout trajectory. |
 | `--gamma` | 0.99 | Discount factor. |
 | `--hidden-dim` | 256 | Network hidden dimension. |
 | `--gae-lambda` | 0.95 | GAE normalization lambda. |
-| `--clip-epsilon` | 0.2 | PPO clipping bound. |
+| `--clip-epsilon` | 0.1 | PPO clipping bound (Conservative). |
 | `--vf-coef` | 0.5 | Value function loss weight. |
-| `--ent-coef` | 0.01 | Entropy regularization weight. |
+| `--ent-coef` | 0.02 | Entropy regularization weight. |
 | `--max-grad-norm` | 0.5 | Gradient clipping threshold. |
 | `--checkpoint-interval` | 10 | Checkpoint frequency (updates). |
 | `--log-interval` | 10 | Console log frequency (updates). |

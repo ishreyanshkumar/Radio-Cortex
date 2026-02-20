@@ -275,17 +275,8 @@ class EvaluationRunner:
                             'rb': avg_rb
                         }
                         
-                        # Add detailed UE metrics every 10 steps to reduce IPC load
-                        if step_i % 10 == 0:
-                             metrics_payload['ue_metrics'] = {
-                                 ue_id: {
-                                     'tput': m['throughput'],
-                                     'delay': m['delay'],
-                                     'loss': m['packet_loss'],
-                                     'sinr': m['sinr'],
-                                     'cell': m.get('serving_cell', -1)
-                                 } for ue_id, m in e2_msg.ue_metrics.items()
-                             }
+                        # Per-UE metrics removed for performance
+                        pass
 
                         progress_queue.put(('update', task_id, 1, metrics_payload))
                     elif pbar:
@@ -344,7 +335,14 @@ class EvaluationRunner:
         ho_attempts = 0
         ho_successes = 0
         if 'e2_metrics' in info:
-             for m in info['e2_metrics'].ue_metrics.values():
+             e2_data = info['e2_metrics']
+             # Handle both dict (serialized) and object (direct) access
+             if isinstance(e2_data, dict):
+                 ue_metrics = e2_data.get('ue_metrics', {})
+             else:
+                 ue_metrics = getattr(e2_data, 'ue_metrics', {})
+
+             for m in ue_metrics.values():
                  ho_attempts += m.get('handover_attempts', 0)
                  ho_successes += m.get('handover_successes', 0)
 

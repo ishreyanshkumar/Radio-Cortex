@@ -170,11 +170,14 @@ class RewardEngine:
         r_delay = float(np.clip(r_delay, *self.CLIP_DELAY))
 
         # Packet Loss (Bounded Exponential)
+        # INSTABILITY NOTE: This function has a sharp "kink" at loss=0.25 where slope increases 
+        # from 2.0 to 10.0. This can cause gradient spikes if loss oscillates around 0.25.
+        # Packet Loss (Strictly Linear)
+        # STABILITY FIX: Removed kink (2.0->10.0 slope jump). Now constant slope.
+        # 100% loss = -20.0 reward (with W_LOSS=5.0)
         mean_loss = float(np.mean(losses))
-        loss_penalty_raw = mean_loss * 2.0
-        if mean_loss > 0.25:
-            loss_penalty_raw += (mean_loss - 0.25) * 8.0 # Changed from quadratic to linear scaling
-        r_loss = float(np.clip(-loss_penalty_raw * self.W_LOSS, -20.0, 0.0))
+        loss_penalty_raw = mean_loss * 4.0 
+        r_loss = float(np.clip(-loss_penalty_raw * self.W_LOSS, -25.0, 0.0))
 
         # 2. NETWORK UTILITY (Load Balancing via CIO)
         r_load = 0.0
@@ -1133,12 +1136,16 @@ class ORANns3Env(gym.Env):
     def _parse_action(self, action: np.ndarray) -> Dict:
         """
         2-Dimensional Cell Control.
-        Actions: [TxPower (differential), HandoverSensitivity (absolute)].
+        Actions: [TxPower (ABSOLUTE), CIO (ABSOLUTE), TTT (ABSOLUTE)].
         
-        HandoverSensitivity maps [-1, 1] to joint TTT + Hysteresis:
-          -1 = conservative (TTT=1280ms, Hyst=6dB) - resists handovers
-           0 = neutral      (TTT=256ms,  Hyst=2dB) - default
-          +1 = aggressive   (TTT=0ms,    Hyst=0dB) - eager handovers
+        1. TxPower: Maps [-1, 1] -> [10, 46] dBm.
+           - Allows instant power switching for energy saving or boost.
+        
+        2. CIO: Maps [-1, 1] -> [-6, 6] dB.
+           - Load balancing lever.
+        
+        3. TTT: Maps [-1, 1] -> [1280, 0] ms.
+           - Handover agility.
         """
         action = np.asarray(action, dtype=np.float64).flatten()
         

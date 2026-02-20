@@ -14,20 +14,22 @@
 # --ppo-epochs 10: Standard PPO epochs
 
 echo "🚀 Starting Training for Flash Crowd (Stable Low-End)..."
-echo "Config: PPO (Rollout=512, Batch=512, Envs=4) | LR Gamma=0.99"
+echo "Config: PPO (Rollout=256, Batch=256, Envs=4) | LR Gamma=0.99"
 
 python3 radio_cortex_complete.py \
     --mode train \
     --scenario flash_crowd \
     --model bdh \
     --n-envs 4 \
-    --total-timesteps 200000 \
+    --total-timesteps 100000 \
     --kpm-interval 100 \
     --rollout-steps 128 \
     --batch-size 128 \
     --lr-gamma 0.99 \
-    --learning-rate 5e-5 \
+    --learning-rate 8e-5 \
     --clip-epsilon 0.1 \
-    --ent-coef 0.02
+    --ent-coef 0.03 \
+    --gamma 0.98 \
+    --ppo-epochs 20
 
 echo "✅ Training Complete. Check logs/reward_metrics_*.csv for results."

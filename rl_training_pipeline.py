@@ -84,12 +84,12 @@ class PPOTrainer:
     def __init__(
         self,        env: gym.Env,
         hidden_dim: int = 256,
-        lr: float = 3e-4,
-        gamma: float = 0.99,
+        lr: float = 8e-5, # Updated for Stability/Speed balance
+        gamma: float = 0.98, # Short-term focus for stability
         gae_lambda: float = 0.95,
-        clip_epsilon: float = 0.2, # Aligned with radio_cortex_complete
+        clip_epsilon: float = 0.1, # Aligned with radio_cortex_complete (Conservative)
         vf_coef: float = 0.5,
-        ent_coef: float = 0.01,
+        ent_coef: float = 0.03, # Boosted exploration
         max_grad_norm: float = 0.5,
         device: Optional[str] = None,
         checkpoint_dir: str = 'models',

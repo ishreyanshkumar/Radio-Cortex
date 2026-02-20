@@ -34,12 +34,15 @@ class BDHPolicy(nn.Module):
         self.num_cells = getattr(env_config, 'num_cells', 3) if env_config else 3
 
         # --- BDH Core ---
+        # ARCHITECTURE NOTE: BDH uses Post-LN (LayerNorm after residual). 
+        # This is standard for original BERT/GPT but can be less stable than Pre-LN for deep networks.
+        # However, with n_layer=4, it is generally safe.
         if bdh_config is None:
             cfg = bdh_mod.BDHConfig(
                 n_layer=4,
                 n_embd=128,
                 n_head=4,
-                dropout=0.0, # Disable dropout for PPO stability
+                dropout=0.0, # Disable dropout for PPO stability (Crucial fix)
                 mlp_internal_dim_multiplier=4, # Multiplier 
                 vocab_size=256
             )
@@ -161,7 +164,9 @@ class BDHPolicy(nn.Module):
 
         flat_mean = action_mean.reshape(B, -1)         # (B, M*3)
         flat_logstd = logstd.reshape(B, -1)
-        flat_logstd = torch.clamp(flat_logstd, -2, 1)
+        # INSTABILITY NOTE: Clamped to 0.0 (std=1.0) to match action space [-1, 1].
+        # Previous value of 1.0 (std=2.7) caused excessive random exploration.
+        flat_logstd = torch.clamp(flat_logstd, -5, 0.0)
 
         # 4. Global value from mean-pooled context
         global_pool = context.mean(dim=1)              # (B, D)
