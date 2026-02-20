@@ -240,6 +240,7 @@ class PPOTrainer:
     
     def collect_rollout(self, num_steps: int, progress: Optional[Progress] = None, task_id = None, on_step=None):
         """Collect experience from environment"""
+        self.policy.eval() # Ensure deterministic behavior (disable dropout/batchnorm updates)
         # Dispatch to VecEnv-specific method if using vectorized environment
         if self.is_vec_env:
             return self.collect_rollout_vec(num_steps, progress, task_id, on_step)
@@ -358,6 +359,7 @@ class PPOTrainer:
     
     def collect_rollout_vec(self, num_steps: int, progress: Optional[Progress] = None, task_id = None, on_step=None):
         """Collect experience from vectorized environment (parallel envs)"""
+        self.policy.eval() # Ensure deterministic behavior
         n_envs = self.n_envs
         
         # Storage: [num_steps, n_envs, ...]
@@ -448,6 +450,7 @@ class PPOTrainer:
     
     def update_policy(self, rollout: Dict, num_epochs: int = 20, batch_size: int = 64):
         """Update policy using PPO objective - Optimized for sample efficiency"""
+        self.policy.train() # Enable gradient updates and dropout (if any)
         states = rollout['states'].to(self.device)
         actions = rollout['actions'].to(self.device)
         old_log_probs = rollout['log_probs'].to(self.device)

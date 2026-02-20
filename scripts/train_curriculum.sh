@@ -36,8 +36,8 @@ DRY_RUN=false
 # Mini-batches: 10,240 / 2,048 = 5 per epoch
 # Grad steps/update: 10 epochs × 5 = 50 (fast but thorough)
 LR="5e-5"                        # Safe stable LR for sensitive rewards
-BATCH_SIZE=4096                  # High throughput for 48-core system
-ROLLOUT_STEPS=512                # 40×512 = 20,480 buffer. Deeper trajectories.
+BATCH_SIZE=2048                  # High throughput (Standard)
+ROLLOUT_STEPS=256                # 40×512 = 20,480 buffer (Standard)
 GAMMA=0.99                       # Standard discount for 50s episodes
 GAE_LAMBDA=0.95
 CLIP_EPSILON=0.1                 # Tighter clipping for stability
@@ -162,28 +162,28 @@ run_stage() {
 
 declare -A STAGES
 
-# Stage 1: Foundation - Flash Crowd Mastery (~29 updates)
+# Stage 1: Foundation - Flash Crowd Mastery (~15 updates)
 STAGES[1]="--scenario flash_crowd --total-timesteps 300000"
 
-# Stage 2: Green RAN - Sleepy Campus (~29 updates)
+# Stage 2: Green RAN - Sleepy Campus (~15 updates)
 STAGES[2]="--scenario flash_crowd:0.2,sleepy_campus:0.8 --total-timesteps 300000"
 
-# Stage 3: PHY Robustness - Urban Canyon (~39 updates)
+# Stage 3: PHY Robustness - Urban Canyon (~20 updates)
 STAGES[3]="--scenario flash_crowd:0.15,sleepy_campus:0.15,urban_canyon:0.7 --total-timesteps 400000"
 
-# Stage 4: Mobility - Mobility Storm (~49 updates)
+# Stage 4: Mobility - Mobility Storm (~25 updates)
 STAGES[4]="--scenario flash_crowd:0.1,sleepy_campus:0.1,urban_canyon:0.1,mobility_storm:0.7 --total-timesteps 500000"
 
-# Stage 5: Congestion - Traffic Burst (~49 updates)
+# Stage 5: Congestion - Traffic Burst (~25 updates)
 STAGES[5]="--scenario flash_crowd:0.08,sleepy_campus:0.08,urban_canyon:0.08,mobility_storm:0.08,traffic_burst:0.68 --total-timesteps 500000"
 
-# Stage 6: URLLC - Ambulance Priority (~49 updates)
+# Stage 6: URLLC - Ambulance Priority (~25 updates)
 STAGES[6]="--scenario flash_crowd:0.07,sleepy_campus:0.07,urban_canyon:0.07,mobility_storm:0.07,traffic_burst:0.07,ambulance:0.65 --total-timesteps 500000"
 
-# Stage 7: Capacity - Spectrum Crunch (~49 updates)
+# Stage 7: Capacity - Spectrum Crunch (~25 updates)
 STAGES[7]="--scenario flash_crowd:0.06,sleepy_campus:0.06,urban_canyon:0.06,mobility_storm:0.06,traffic_burst:0.06,ambulance:0.06,spectrum_crunch:0.64 --total-timesteps 500000"
 
-# Stage 8: Consolidation - Multi-Mix Generalization (~78 updates)
+# Stage 8: Consolidation - Multi-Mix Generalization (~40 updates)
 STAGES[8]="--scenario flash_crowd:0.12,sleepy_campus:0.12,urban_canyon:0.12,mobility_storm:0.12,traffic_burst:0.12,ambulance:0.12,spectrum_crunch:0.12 --total-timesteps 800000"
 
 echo ""

@@ -39,7 +39,8 @@ class BDHPolicy(nn.Module):
                 n_layer=4,
                 n_embd=128,
                 n_head=4,
-                mlp_internal_dim_multiplier=4, # Reduced from 32/128 for speed (Slim BDH)
+                dropout=0.0, # Disable dropout for PPO stability
+                mlp_internal_dim_multiplier=4, # Multiplier 
                 vocab_size=256
             )
         else:

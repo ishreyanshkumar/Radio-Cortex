@@ -4,18 +4,17 @@
 # 
 
 
-# Run Training with Optimized Hyperparameters
+# Run Training (Stable Low-End Config)
 # --scenario flash_crowd: Target specific scenario
-# --n-envs 4: Balance between throughput and stability
-# --steps 200000: Total training timesteps
-# --model bdh: Uses the new Slim BDH architecture
-# --rollout-steps 512: Compact rollout for faster feedback (approx 3.4 episodes/update)
-# --batch-size 64: Stable batch size
-# --ppo-epochs 20: Deep updates per batch
-# --lr-gamma 0.98: Slower decay to accomodate more frequent updates
+# --n-envs 4: Low resource usage (Consumer Laptop/VM)
+# --steps 200000: Sufficient for single scenario convergence
+# --model bdh: Uses the Balanced BDH architecture (Dim 256)
+# --rollout-steps 512: Larger rollout to compensate for few envs (Buffer=2048)
+# --batch-size 512: Stable updates with smaller buffer
+# --ppo-epochs 10: Standard PPO epochs
 
-echo "🚀 Starting Optimized Training for Flash Crowd..."
-echo "Config: PPO (Rollout=128, Batch=64, Epochs=20) | LR Gamma=0.98"
+echo "🚀 Starting Training for Flash Crowd (Stable Low-End)..."
+echo "Config: PPO (Rollout=512, Batch=512, Envs=4) | LR Gamma=0.99"
 
 python3 radio_cortex_complete.py \
     --mode train \
@@ -23,9 +22,10 @@ python3 radio_cortex_complete.py \
     --model bdh \
     --n-envs 4 \
     --total-timesteps 200000 \
+    --kpm-interval 100 \
     --rollout-steps 128 \
-    --batch-size 64 \
-    --lr-gamma 0.98 \
+    --batch-size 128 \
+    --lr-gamma 0.99 \
     --learning-rate 5e-5 \
     --clip-epsilon 0.1 \
     --ent-coef 0.02
