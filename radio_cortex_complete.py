@@ -135,7 +135,7 @@ def train_radio_cortex(
     gae_lambda: float = 0.95,
     clip_epsilon: float = 0.2,
     vf_coef: float = 0.5,
-    ent_coef: float = 0.001,
+    ent_coef: float = 0.03,
     max_grad_norm: float = 0.5,
     rollout_steps: int = 256,
     log_interval: int = 5,
@@ -202,7 +202,8 @@ def train_radio_cortex(
         checkpoint_interval=checkpoint_interval,
         model_type=model_type,
         lr_scheduler_gamma=lr_scheduler_gamma,
-        target_kl=target_kl
+        target_kl=target_kl,
+        ns3_config=config  # explicit config passing
     )
 
     # --- ADDED: Resumption Logic ---
@@ -628,7 +629,7 @@ def evaluate_single_scenario(
             
             if model_type == 'bdh':
                 from policies.bdh_policy import BDHPolicy
-                policy = BDHPolicy(expected_state_dim, expected_action_dim, device=eval_device).to(eval_device)
+                policy = BDHPolicy(expected_state_dim, expected_action_dim, device=eval_device, env_config=config).to(eval_device)
             elif model_type == 'gpt2':
                 from policies.policy_gpt2 import GPT2Policy
                 policy = GPT2Policy(expected_state_dim, expected_action_dim, device=eval_device).to(eval_device)

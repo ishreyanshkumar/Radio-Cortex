@@ -96,7 +96,12 @@ class PPOTrainer:
         checkpoint_interval: int = 5,
         model_type: str = 'bdh',
         lr_scheduler_gamma: float = 0.999, # Default decay per update
-        target_kl: float = 0.05 # Target KL divergence for early stopping
+        target_kl: float = 0.05,
+        ns3_config: Optional[object] = None,
+        # Entropy Annealing
+        ent_coef_start: float = 0.03,
+        ent_coef_end: float = 0.005,
+        ent_decay_fraction: float = 0.8
     ):
         self.hyperparams = {
             'hidden_dim': hidden_dim,
@@ -105,10 +110,13 @@ class PPOTrainer:
             'gae_lambda': gae_lambda,
             'clip_epsilon': clip_epsilon,
             'vf_coef': vf_coef,
-            'ent_coef': ent_coef,
+            'ent_coef': ent_coef_start, # Start with initial value
             'max_grad_norm': max_grad_norm,
             'model_type': model_type,
-            'lr_scheduler_gamma': lr_scheduler_gamma
+            'lr_scheduler_gamma': lr_scheduler_gamma,
+            'ent_coef_start': ent_coef_start,
+            'ent_coef_end': ent_coef_end,
+            'ent_decay_fraction': ent_decay_fraction
         }
         self.env = env
         if device is None:
@@ -117,6 +125,13 @@ class PPOTrainer:
             self.device = device
         self.model_type = model_type
         self.target_kl = target_kl
+        
+        # Entropy Annealing State
+        self.ent_coef = ent_coef_start
+        self.ent_coef_start = ent_coef_start
+        self.ent_coef_end = ent_coef_end
+        self.ent_decay_fraction = ent_decay_fraction
+        self.ns3_config = ns3_config
         
         # Detect vectorized environment
         self.is_vec_env = hasattr(env, 'num_envs')
@@ -132,8 +147,12 @@ class PPOTrainer:
         
         if model_type == 'bdh':
             from policies.bdh_policy import BDHPolicy
-            # Extract config if available (DummyVecEnv usually wraps envs)
-            env_config = getattr(env.envs[0], 'config', None) if hasattr(env, 'envs') and len(env.envs) > 0 else getattr(env, 'config', None)
+            # Priority: Explicit config > Env config > None
+            env_config = self.ns3_config
+            if env_config is None:
+                 # Try to extract from env wrapper (fallback)
+                 env_config = getattr(env.envs[0], 'config', None) if hasattr(env, 'envs') and len(env.envs) > 0 else getattr(env, 'config', None)
+            
             self.policy = BDHPolicy(state_dim, action_dim, device=device, env_config=env_config).to(device)
         elif model_type == 'gpt2':
             from policies.policy_gpt2 import GPT2Policy
@@ -599,6 +618,8 @@ class PPOTrainer:
         
         # Live metrics storage: {env_id: {'tput': x, 'loss': y, 'ue_metrics': {...}}}
         live_env_metrics = {}
+        live_step_stats = {'reward': 0.0, 'entropy': 0.0, 'steps': 0}
+        current_rollout_rewards = []
         
         # We need a reference to the live object for the callback
         live_display = None
@@ -624,7 +645,7 @@ class PPOTrainer:
                 else:
                     current_rollout_rewards.extend(rewards)
             
-            nonlocal current_stats
+            # nonlocal current_stats  <-- Removed undefined reference
             
             # Update live step stats — shown in real-time LIVE row
             if current_rollout_rewards:

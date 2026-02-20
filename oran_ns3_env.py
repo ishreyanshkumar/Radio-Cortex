@@ -128,10 +128,10 @@ class RewardEngine:
         self.config = config
 
         # ── Weights ──────────────────────────────────────────────
-        self.W_TPUT      = 12.0     # Primary learning signal
-        self.W_DELAY_LIN = 2.0      # Strictly linear delay penalty
-        self.W_LOSS      = 5.0     # Core stability penalty (Boosted to prevent power-saving induced drops)
-        self.W_LOAD      = 2.0      # Load Balancing (Boosted for aggressive CIO)
+        self.W_TPUT      = 8.0      # Reduced to prioritize QoS
+        self.W_DELAY_LIN = 4.0      # Increased to penalize latency harder
+        self.W_LOSS      = 8.0      # Increased to kill packet loss
+        self.W_LOAD      = 4.0      # Load Balancing (Boosted for aggressive CIO)
         self.W_ENERGY    = 0.1      # Energy Efficiency (Tx Power Regularization)
         self.W_CIO       = 0.4      # CIO Regularization (Center at 0dB)
         self.BIAS        = 1.0      # Positive bias for survival

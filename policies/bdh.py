@@ -36,9 +36,8 @@ class Attention(torch.nn.Module):
         nh = config.n_head
         D = config.n_embd
         N = config.mlp_internal_dim_multiplier * D // nh
-        self.register_buffer(
-            "freqs",
-            get_freqs(N, theta=2**16, dtype=torch.float32).view(1, 1, 1, N),
+        self.freqs = torch.nn.Buffer(
+            get_freqs(N, theta=2**16, dtype=torch.float32).view(1, 1, 1, N)
         )
 
     @staticmethod
@@ -54,10 +53,10 @@ class Attention(torch.nn.Module):
         phases_cos, phases_sin = Attention.phases_cos_sin(phases)
         return (v * phases_cos).to(v.dtype) + (v_rot * phases_sin).to(v.dtype)
 
-    def forward(self, Q, K, V, causal=True):
+    def forward(self, Q, K, V):
         assert self.freqs.dtype == torch.float32
         assert K is Q
-        B, nh, T, _ = Q.size()
+        _, _, T, _ = Q.size()
 
         r_phases = (
             torch.arange(
@@ -70,16 +69,10 @@ class Attention(torch.nn.Module):
         QR = self.rope(r_phases, Q)
         KR = QR
 
-        # Use efficient scaled_dot_product_attention (FlashAttention)
-        # It handles scaling and masking internally. 
-        # is_causal=causal will apply the .tril mask if True.
-        # This is BOTH faster and takes O(T) memory instead of O(T^2).
-        
-        return F.scaled_dot_product_attention(
-            QR, KR, V, 
-            is_causal=causal,
-            dropout_p=self.config.dropout if self.training else 0.0
-        )
+        # Current attention
+        scores = (QR @ KR.mT).tril(diagonal=-1)
+        return scores @ V
+
 
 class BDH(nn.Module):
     def __init__(self, config: BDHConfig):
@@ -94,7 +87,7 @@ class BDH(nn.Module):
 
         self.attn = Attention(config)
 
-        self.ln = nn.LayerNorm(D, elementwise_affine=False)
+        self.ln = nn.LayerNorm(D, elementwise_affine=False, bias=False)
         self.embed = nn.Embedding(config.vocab_size, D)
         self.drop = nn.Dropout(config.dropout)
         self.encoder_v = nn.Parameter(torch.zeros((nh, D, N)).normal_(std=0.02))
@@ -114,10 +107,6 @@ class BDH(nn.Module):
             nn.init.normal_(module.weight, mean=0.0, std=0.02)
 
     def forward(self, idx, targets=None):
-
-        # encoder is D_x
-        # 
-
         C = self.config
 
         B, T = idx.size()

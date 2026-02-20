@@ -13,7 +13,7 @@
 # --batch-size 512: Stable updates with smaller buffer
 # --ppo-epochs 10: Standard PPO epochs
 
-echo "🚀 Starting Training for Flash Crowd (Stable Low-End)..."
+echo "🚀 Starting Training for Flash Crowd..."
 
 python3 radio_cortex_complete.py \
     --mode train \

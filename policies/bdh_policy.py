@@ -1,49 +1,37 @@
 """
-BDH Policy Adapter for Radio-Cortex — Cell-Centric Architecture
-
-Processes a sequence of 'Enriched Cell Tokens' (12 features each).
-Produces cell-level actions only (TxPower, SchedulerWeight).
-State and action spaces are SCALE-INVARIANT: the model sees only cells,
-regardless of whether there are 20 or 2,000 UEs in the simulation.
+BDH Policy Adapter for Radio-Cortex
+Wraps the official immutable bdh.py
+Maps temporal frame-stacking to the BDH sequence dimension (T).
 """
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import torch.utils.checkpoint as checkpoint
 import numpy as np
 from typing import Optional
 
 from . import bdh as bdh_mod
 
-
 class BDHPolicy(nn.Module):
-    """
-    Cell-Centric BDH Policy.
-
-    State:  (B, num_cells * 48)  — Enriched Cell Tokens (Stacked)
-    Action: (B, num_cells * 3)   — [TxPower, CIO, TTT] per cell
-    """
-
     def __init__(self, state_dim: int, action_dim: int, bdh_config: Optional[object] = None, device: str = 'cpu', env_config: Optional[object] = None):
         super().__init__()
 
         # --- Layout ---
-        self.cell_features = 48   # Frame stacking: 3 frames × 16 features
-        self.cell_actions = 3     # TxPower, CIO, TTT
         self.num_cells = getattr(env_config, 'num_cells', 3) if env_config else 3
+        self.cell_features = 16   # Base features per cell
+        self.n_stack = 3          # Temporal frames from env
+        self.cell_actions = 3     # TxPower, CIO, TTT
 
-        # --- BDH Core ---
-        # ARCHITECTURE NOTE: BDH uses Post-LN (LayerNorm after residual). 
-        # This is standard for original BERT/GPT but can be less stable than Pre-LN for deep networks.
-        # However, with n_layer=4, it is generally safe.
+        # The full network state per frame
+        self.frame_dim = self.num_cells * self.cell_features 
+
         if bdh_config is None:
             cfg = bdh_mod.BDHConfig(
                 n_layer=4,
                 n_embd=128,
                 n_head=4,
-                dropout=0.0, # Disable dropout for PPO stability (Crucial fix)
-                mlp_internal_dim_multiplier=4, # Multiplier 
+                dropout=0.0, # Disable dropout for PPO
+                mlp_internal_dim_multiplier=128, # Match official BDH width
                 vocab_size=256
             )
         else:
@@ -51,26 +39,25 @@ class BDHPolicy(nn.Module):
 
         self.device = device
         self.bdh = bdh_mod.BDH(cfg).to(device)
-        self.state = None
         emb_dim = cfg.n_embd
 
-        # --- Cell Encoder ---
-        self.cell_encoder = nn.Sequential(
-            nn.Linear(self.cell_features, emb_dim),
+        # --- Temporal Frame Encoder ---
+        # Encodes the entire network state of ONE timestep into the BDH dimension
+        self.frame_encoder = nn.Sequential(
+            nn.Linear(self.frame_dim, emb_dim),
             nn.LayerNorm(emb_dim),
             nn.GELU(),
             nn.Linear(emb_dim, emb_dim)
         )
 
-        # --- Cell Action Head ---
-        self.cell_action_head = nn.Sequential(
+        # --- Action & Value Heads ---
+        self.action_head = nn.Sequential(
             nn.Linear(emb_dim, emb_dim),
             nn.GELU(),
-            nn.Linear(emb_dim, self.cell_actions)
+            nn.Linear(emb_dim, self.num_cells * self.cell_actions)
         )
-        self.cell_logstd_head = nn.Parameter(torch.zeros(1, self.num_cells, self.cell_actions)) # Learnable LogStd
+        self.logstd_head = nn.Parameter(torch.full((1, self.num_cells * self.cell_actions), -0.5))
 
-        # --- Global Value Head ---
         self.value_head = nn.Sequential(
             nn.Linear(emb_dim, emb_dim),
             nn.GELU(),
@@ -80,97 +67,81 @@ class BDHPolicy(nn.Module):
         self.apply(self._init_weights)
 
     def _init_weights(self, module):
-        # Orthogonal Initialization for better PPO convergence
         if isinstance(module, (nn.Linear, nn.Conv2d)):
             if module.weight is not None:
                 nn.init.orthogonal_(module.weight, gain=np.sqrt(2))
             if module.bias is not None:
                 nn.init.constant_(module.bias, 0)
-        elif isinstance(module, nn.LayerNorm):
-            if module.weight is not None:
-                nn.init.constant_(module.weight, 1)
-            if module.bias is not None:
-                nn.init.constant_(module.bias, 0)
 
     # ── Tokenization ──────────────────────────────────────────────
-
     def _process_state(self, state: torch.Tensor) -> torch.Tensor:
-        """Reshape flat state → (B, num_cells, cell_features) and encode."""
+        """Reshape stacked state → (B, T, frame_dim) and encode."""
         B = state.size(0)
-        M = self.num_cells
-        # Reshape: [B, M*12] → [B, M, 12]
-        x = state.view(B, M, self.cell_features)
-        return self.cell_encoder(x)  # (B, M, emb_dim)
+        T = self.n_stack
+        
+        # Reshape [B, T * frame_dim] -> [B, T, frame_dim]
+        x = state.view(B, T, self.frame_dim)
+        return self.frame_encoder(x)  # (B, T, emb_dim)
 
     # ── BDH Transformer Stack ─────────────────────────────────────
-
-    def _bdh_block(self, x: torch.Tensor) -> torch.Tensor:
-        """Single BDH layer block (checkpointing-compatible)."""
+    def _bdh_layer_stack(self, x_input: torch.Tensor) -> torch.Tensor:
+        """
+        Runs the BDH logic using the official layers.
+        x_input is (B, T, D) where T is time.
+        """
         C = self.bdh.config
-        B, _, T, D = x.size()
+        B, T, D = x_input.size()
         nh = C.n_head
         N = D * C.mlp_internal_dim_multiplier // nh
 
-        x_latent = x @ self.bdh.encoder
-        x_sparse = F.relu(x_latent)
-
-        # Scale-Free Bidirectional Attention (cells talk to cells)
-        yKV = self.bdh.attn(Q=x_sparse, K=x_sparse, V=x, causal=False)
-        yKV = self.bdh.ln(yKV)
-
-        y_latent = yKV @ self.bdh.encoder_v
-        y_sparse = F.relu(y_latent)
-
-        xy_sparse = x_sparse * y_sparse
-        xy_sparse = self.bdh.drop(xy_sparse)
-
-        yMLP = torch.einsum('bhtn,hnd->btd', xy_sparse, self.bdh.decoder.view(nh, N, D)).unsqueeze(1)
-
-        y = self.bdh.ln(yMLP)
-        return self.bdh.ln(x + y)
-
-    def _bdh_layer_stack(self, x_input: torch.Tensor) -> torch.Tensor:
-        """Run the BDH layer stack. x_input: (B, T, D)"""
-        C = self.bdh.config
         x = x_input.unsqueeze(1)  # (B, 1, T, D)
         x = self.bdh.ln(x)
 
-        for _level in range(C.n_layer):
-            if self.training and x.requires_grad:
-                x = checkpoint.checkpoint(self._bdh_block, x, use_reentrant=False)
-            else:
-                x = self._bdh_block(x)
+        for level in range(C.n_layer):
+            x_latent = x @ self.bdh.encoder
+            x_sparse = F.relu(x_latent)
+
+            # Uses official causal attention over T!
+            yKV = self.bdh.attn(
+                Q=x_sparse,
+                K=x_sparse,
+                V=x
+            )
+            yKV = self.bdh.ln(yKV)
+
+            y_latent = yKV @ self.bdh.encoder_v
+            y_sparse = F.relu(y_latent)
+            
+            xy_sparse = x_sparse * y_sparse
+            xy_sparse = self.bdh.drop(xy_sparse)
+
+            yMLP = xy_sparse.transpose(1, 2).reshape(B, 1, T, N * nh) @ self.bdh.decoder
+            
+            y = self.bdh.ln(yMLP)
+            x = self.bdh.ln(x + y)
 
         return x.squeeze(1)  # (B, T, D)
 
     # ── Forward ───────────────────────────────────────────────────
-
     def _forward_common(self, state: torch.Tensor):
         B = state.size(0)
 
-        # 1. Tokenize cells
-        cell_tokens = self._process_state(state)  # (B, M, D)
+        # 1. Tokenize temporal frames: T=3
+        frame_tokens = self._process_state(state)  # (B, T, D)
 
-        # 2. Contextualize (cells attend to each other)
-        # Note: Reduced MLP dimension inside BDHConfig makes this step faster
-        context = self._bdh_layer_stack(cell_tokens)  # (B, M, D)
-
-        # 3. Decode cell actions
-        action_mean = self.cell_action_head(context)   # (B, M, 3)
+        # 2. BDH Processing over Time
+        context = self._bdh_layer_stack(frame_tokens)  # (B, T, D)
         
-        # LogStd is now a learned parameter (1, M, 3), not a function of context
-        # This is standard PPO practice for continuous control (state-independent std)
-        logstd = self.cell_logstd_head.expand(B, -1, -1) # (B, M, 3)
+        # 3. We only care about the LATEST timestep to make our current action
+        latest_context = context[:, -1, :]  # (B, D)
+        
+        # 4. Decode cell actions
+        flat_mean = self.action_head(latest_context)   # (B, M*3)
+        flat_logstd = self.logstd_head.expand(B, -1)   # (B, M*3)
+        flat_logstd = torch.clamp(flat_logstd, -5, 2.0)
 
-        flat_mean = action_mean.reshape(B, -1)         # (B, M*3)
-        flat_logstd = logstd.reshape(B, -1)
-        # INSTABILITY NOTE: Clamped to 0.0 (std=1.0) to match action space [-1, 1].
-        # Previous value of 1.0 (std=2.7) caused excessive random exploration.
-        flat_logstd = torch.clamp(flat_logstd, -5, 0.0)
-
-        # 4. Global value from mean-pooled context
-        global_pool = context.mean(dim=1)              # (B, D)
-        value = self.value_head(global_pool)            # (B, 1)
+        # 5. Global value
+        value = self.value_head(latest_context)        # (B, 1)
 
         return flat_mean, flat_logstd, value
 
@@ -209,4 +180,4 @@ class BDHPolicy(nn.Module):
         return action, log_prob, entropy
 
     def reset_memory(self):
-        self.state = None
+        pass
