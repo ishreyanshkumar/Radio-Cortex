@@ -14,9 +14,9 @@ KAFKA_PATH="$PROJECT_ROOT/$KAFKA_DIR"
 URL="https://archive.apache.org/dist/kafka/${KAFKA_VER}/${KAFKA_TGZ}"
 
 # 1. Install dependencies
-if ! dpkg-query -W -f='${Status}' librdkafka-dev 2>/dev/null | grep -q "ok installed"; then
-    echo "Installing librdkafka-dev..."
-    sudo apt-get update && sudo apt-get install -y librdkafka-dev
+if ! command -v java >/dev/null 2>&1 || ! dpkg-query -W -f='${Status}' librdkafka-dev 2>/dev/null | grep -q "ok installed"; then
+    echo "Installing dependencies (Java, librdkafka-dev)..."
+    sudo apt-get update && sudo apt-get install -y default-jre librdkafka-dev
 fi
 
 # 2. Download and Extract Kafka if not valid
@@ -68,8 +68,5 @@ echo "Project Root:  $PROJECT_ROOT"
 echo "Zookeeper PID: $ZOOKEEPER_PID"
 echo "Kafka     PID: $KAFKA_PID"
 echo "==================================================="
-echo "Press Ctrl+C to stop"
 
-trap "kill $KAFKA_PID $ZOOKEEPER_PID; exit" INT TERM
-
-wait
+# Background processes are already running, exit cleanly.

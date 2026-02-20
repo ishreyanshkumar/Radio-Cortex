@@ -49,8 +49,8 @@ ln -sf ../../../oran-congestion-scenario.cc .
 ln -sf ../../../CMakeLists.txt .
 cd ..
 
-./ns3 configure -d optimized --enable-examples --enable-tests
-./ns3 build
+USER=ns3 ./ns3 configure -d optimized --enable-examples --enable-tests
+USER=ns3 ./ns3 build -j 64
 
 cd ../..
 

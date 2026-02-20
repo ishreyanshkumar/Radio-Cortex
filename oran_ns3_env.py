@@ -127,20 +127,21 @@ class RewardEngine:
     def __init__(self, config: NS3Config):
         self.config = config
 
-        # ── Weights ──────────────────────────────────────────────
-        self.W_TPUT      = 8.0      # Reduced to prioritize QoS
-        self.W_DELAY_LIN = 4.0      # Increased to penalize latency harder
-        self.W_LOSS      = 8.0      # Increased to kill packet loss
-        self.W_LOAD      = 4.0      # Load Balancing (Boosted for aggressive CIO)
-        self.W_ENERGY    = 0.1      # Energy Efficiency (Tx Power Regularization)
-        self.W_CIO       = 0.4      # CIO Regularization (Center at 0dB)
-        self.BIAS        = 1.0      # Positive bias for survival
+        # ── Weights (Positive-Centric) ───────────────────────────
+        self.W_TPUT      = 12.0     # Boosted: Strongest incentive is delivering bytes
+        self.W_DELAY     = 3.0      # Smoothed out
+        self.W_LOSS      = 8.0      # RESTORED: Must be high to stop cheating with max TxPower
+        self.W_LOAD      = 2.0      # Reduced: Load balancing is a means to an end, not priority
+        self.W_ENERGY    = 0.5      # Quadratic Energy
+        self.W_CIO       = 0.1      # Very soft regularization
+        self.BIAS        = 5.0      # High positive bias: "Existing without crashing is good"
 
         # ── Thresholds / Normalizers ─────────────────────────────
         self.T_MAX     = 10.0      # Throughput normalizer (Mbps)
         self.D_MAX     = 65.0      # Delay normalizer (ms)
         self.EPSILON   = 1e-6      # Safe log
         self.MIN_TPUT_SUCCESS = 1.0 # 1 Mbps = "satisfied" UE
+        self.MAX_LOSS_SUCCESS = 0.05 # 5% packet loss max for "satisfied" UE
 
         # ── Clip bounds (Stage 1 — per component) ───────────────
         self.CLIP_TPUT   = (-0.5, 50.0)
@@ -164,20 +165,16 @@ class RewardEngine:
         r_tput = float(np.mean(np.log(1.0 + tputs / self.T_MAX + self.EPSILON))) * self.W_TPUT
         r_tput = float(np.clip(r_tput, *self.CLIP_TPUT))
 
-        # Delay (Strictly Linear to prevent gradient explosions)
+        # Delay (Quadratic penalty: forgives small delays, punishes spikes)
         d_norm = np.minimum(delays / self.D_MAX, 1.0)
-        r_delay = float(-np.mean(self.W_DELAY_LIN * d_norm))
+        r_delay = float(-np.mean(d_norm ** 2)) * self.W_DELAY
         r_delay = float(np.clip(r_delay, *self.CLIP_DELAY))
 
-        # Packet Loss (Bounded Exponential)
-        # INSTABILITY NOTE: This function has a sharp "kink" at loss=0.25 where slope increases 
-        # from 2.0 to 10.0. This can cause gradient spikes if loss oscillates around 0.25.
-        # Packet Loss (Strictly Linear)
-        # STABILITY FIX: Removed kink (2.0->10.0 slope jump). Now constant slope.
-        # 100% loss = -20.0 reward (with W_LOSS=5.0)
+        # Packet Loss (Uncapped Penalty: Cheating is strictly forbidden)
         mean_loss = float(np.mean(losses))
-        loss_penalty_raw = mean_loss * 4.0 
-        r_loss = float(np.clip(-loss_penalty_raw * self.W_LOSS, -25.0, 0.0))
+        # Remove the max(0, loss - 0.05) threshold. Loss must be punished linearly.
+        loss_penalty = mean_loss * 10.0 
+        r_loss = float(-loss_penalty * self.W_LOSS)
 
         # 2. NETWORK UTILITY (Load Balancing via CIO)
         r_load = 0.0
@@ -187,18 +184,18 @@ class RewardEngine:
             r_load = float(np.clip(r_load, *self.CLIP_LOAD))
 
             # Energy Efficiency (Tx Power Regularization)
-            # Normalize tx_power (10-46 dBm) to [0, 1]
+            # Normalize tx_power (10-46 dBm) to [0, 1], quadratic penalty only punishes high power
             tx_powers = np.array([m['tx_power'] for m in e2_msg.cell_metrics.values()])
             norm_power = (tx_powers - 10.0) / 36.0
-            r_energy = float(-np.mean(norm_power)) * self.W_ENERGY
+            r_energy = float(-np.mean(norm_power ** 2)) * self.W_ENERGY
             r_energy = float(np.clip(r_energy, -1.0, 0.0))
         else:
             r_energy = 0.0
 
 
         # SLA Bonus (Pass/Fail Cliff)
-        # Reward +0.5 for every user meeting strict Eval SLA (>1Mbps, <100ms)
-        satisfied_mask = (tputs >= 1.0) & (delays <= 100.0)
+        # Reward +0.5 ONLY if user meets EVERY strict Eval SLA (>1Mbps, <100ms, AND <5% loss)
+        satisfied_mask = (tputs >= self.MIN_TPUT_SUCCESS) & (delays <= 100.0) & (losses <= self.MAX_LOSS_SUCCESS)
         r_sla = float(np.sum(satisfied_mask)) * 0.5
 
         # CIO Regularization (Center at 0dB)

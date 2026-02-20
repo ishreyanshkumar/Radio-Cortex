@@ -61,8 +61,6 @@ else
   echo "Zookeeper PID: $ZOOKEEPER_PID"
   echo "Kafka     PID: $KAFKA_PID"
   echo "==================================================="
-  echo "Press Ctrl+C to stop"
-  
-  trap "kill $KAFKA_PID $ZOOKEEPER_PID; exit" INT TERM
-  wait
+
+  # Background processes are already running, exit cleanly.
 fi
