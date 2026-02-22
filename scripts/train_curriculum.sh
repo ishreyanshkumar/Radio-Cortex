@@ -36,13 +36,13 @@ DRY_RUN=false
 # Mini-batches: 24,576 / 512 = 48 per epoch
 # Grad steps/update: 8 epochs × 48 = 384
 LR="3e-5"                        # Lower LR for stability with smaller batch size
-BATCH_SIZE=256                   # Fast, frequent updates
-ROLLOUT_STEPS=256                # 48×256 = 12,288 buffer (Fast batch)
+BATCH_SIZE=512                   # Fast, frequent updates
+ROLLOUT_STEPS=512                # 48×256 = 12,288 buffer (Fast batch)
 GAMMA=0.99                       # Standard discount for 50s episodes
 GAE_LAMBDA=0.95
 CLIP_EPSILON=0.1                 # Tighter clipping for stability with small batches
 VF_COEF=1.0                      # Increased to help value head keep up with sparse BDH policy
-ENT_COEF=0.005                   # Decayed initial entropy to prevent randomness loops
+ENT_COEF=0.03                    # Decayed initial entropy to prevent randomness loops
 MAX_GRAD_NORM=0.5
 HIDDEN_DIM=512                   # Standard network for optimal GPU VRAM utilization
 PPO_EPOCHS=10                    # More epochs over cleaner data
@@ -188,8 +188,8 @@ STAGES[6]="--scenario flash_crowd:0.07,sleepy_campus:0.07,urban_canyon:0.07,mobi
 # Stage 7: Capacity - Spectrum Crunch (+50k = 700k)
 STAGES[7]="--scenario flash_crowd:0.06,sleepy_campus:0.06,urban_canyon:0.06,mobility_storm:0.06,traffic_burst:0.06,ambulance:0.06,spectrum_crunch:0.64 --total-timesteps 700000"
 
-# Stage 8: Consolidation - Multi-Mix Generalization (+100k = 800k)
-STAGES[8]="--scenario flash_crowd:0.12,sleepy_campus:0.12,urban_canyon:0.12,mobility_storm:0.12,traffic_burst:0.12,ambulance:0.12,spectrum_crunch:0.12 --total-timesteps 800000"
+# Stage 8: Consolidation - Multi-Mix Generalization (+300k = 1000k)
+STAGES[8]="--scenario flash_crowd:0.12,sleepy_campus:0.12,urban_canyon:0.12,mobility_storm:0.12,traffic_burst:0.12,ambulance:0.12,spectrum_crunch:0.12 --total-timesteps 1000000"
 
 echo ""
 echo "╔══════════════════════════════════════════════════════════════╗"
