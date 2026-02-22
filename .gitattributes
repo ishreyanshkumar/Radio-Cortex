@@ -1,4 +1,3 @@
-# Exclude massive binary noise (O-RAN models, etc.) from counting in stats
 *.pt linguist-generated
 *.pkl linguist-generated
 *.pyc linguist-generated
@@ -6,13 +5,10 @@
 models/** linguist-generated
 results/*.db linguist-generated
 
-# Exclude large vendored dependencies
 ns-3-allinone/** linguist-vendored
 kafka_** linguist-vendored
 java-17/** linguist-vendored
 
-# Explicitly mark variety types as detectable to boost visibility
-# (Removing 'linguist-documentation' from these so they show up as colors)
 *.md linguist-detectable
 *.csv linguist-detectable
 *.yaml linguist-detectable
@@ -22,6 +18,5 @@ java-17/** linguist-vendored
 Dockerfile linguist-detectable
 requirements.txt linguist-detectable
 
-# Ensure specific data files don't drown out the code
 results/experiment_results.csv linguist-generated
 telemetry/*.jsonl linguist-generated
