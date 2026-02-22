@@ -315,41 +315,7 @@ class EvaluationRunner:
                         per_ue_stats[ue_id]['tput'].append(m['throughput'])
                         per_ue_stats[ue_id]['delay'].append(m['delay'])
 
-                    # --- New: Step-wise Evaluation CSV Logging for Mock Demo ---
-                    try:
-                        step_log_dir = "results/eval_traces"
-                        os.makedirs(step_log_dir, exist_ok=True)
-                        trace_file = os.path.join(step_log_dir, f"{controller_name}_trace.csv")
-                        
-                        file_exists = os.path.exists(trace_file)
-                        
-                        with open(trace_file, 'a', newline='') as f:
-                            import csv
-                            writer = csv.writer(f)
-                            if not file_exists:
-                                writer.writerow([
-                                    'Step', 'Controller', 'Tput_Mbps', 'Delay_ms', 
-                                    'Loss_Ratio', 'Queue_Len', 'RB_Util', 'Tx_Power',
-                                    'Action_Array'
-                                ])
-                            
-                            act_str = np.array2string(action_arr, separator=',', max_line_width=np.inf)
-                            
-                            writer.writerow([
-                                step_i,
-                                controller_name,
-                                f"{step_tput:.2f}",
-                                f"{step_delay:.2f}",
-                                f"{step_loss:.4f}",
-                                f"{avg_queue:.2f}",
-                                f"{avg_rb:.2f}",
-                                f"{step_power_w:.4f}", # mapped back from W to approximate dBm log?
-                                act_str
-                            ])
-                    except Exception as e:
-                        pass # Non-critical failure for demo trace
-                    # -------------------------------------------------------------
-                
+
                 state = next_state
         
         if pbar:
@@ -435,6 +401,17 @@ class EvaluationRunner:
         print(f"  │ {'Control Stability':<25} │ {metrics.control_stability:>17.1f}% │")
         print(f"  {'─'*50}")
         
+        # 📊 Log to Unified Simulation Database if available
+        if hasattr(env, '_sim_db') and env._sim_db:
+            try:
+                # Convert metrics object to dict
+                results_dict = vars(metrics)
+                env._sim_db.log_evaluation(results_dict)
+                env._sim_db.log_metadata('controller', controller_name)
+                print(f"  💾 Evaluation metrics synced to {env._sim_db_path}")
+            except Exception as e:
+                print(f"  [WARN] Failed to sync to SimDB: {e}")
+
         return metrics
 
     def _parse_state(self, state_arr, config) -> Dict:

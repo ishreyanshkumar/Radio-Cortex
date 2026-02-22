@@ -5,21 +5,22 @@ Radio-Cortex is a closed-loop control system that uses Reinforcement Learning (R
 ### 🏆 Key Innovations & Solved Challenges
 Radio-Cortex pushes the boundary of O-RAN intelligence by solving three fundamental problems in applying RL to wireless networks:
 
-1.  **Scale-Free "Dragon" Architecture (Bidirectional BDH)**:
+1.  **Baby Dragon Hatchling (Scale-Free Transformer)**:
     -   *Problem*: Standard Neural Networks require fixed input sizes (breaking when UEs join/leave). Furthermore, standard Transformers use "Causal Masking," which blinds early tokens (Cells) from seeing later tokens (UEs).
-    -   *Solution*: We adapted the **Dragon Hatchling (BDH)** architecture into a **Bidirectional Policy**. By removing the causal mask, we allow Base Stations to fully "attend" to all User tokens simultaneously, regardless of their position in the sequence. This creates a truly **Scale-Free Agent** that trains on 5 UEs but successfully controls 100 UEs without retraining.
+    -   *Solution*: We adapted the **Baby Dragon Hatchling (BDH)** architecture into a **Scale-Free Transformer** policy. By removing the causal mask, we allow Base Stations to fully "attend" to all User tokens simultaneously, regardless of their position in the sequence. This creates a truly **Scale-Free Agent** that trains on 5 UEs but successfully controls 100 UEs without retraining.
 
 2.  **Stationary Reward Engine (Distributed-RL Safe)**:
     -   *Problem*: Multi-stage curriculum rewards create non-stationary MDPs that destabilize distributed training (SubprocVecEnv). Conflicting reward components (energy, queue, smoothing) introduce gradient noise and reward hacking.
-    -   *Solution*: A **single-stage, flat reward function** with only 4 components: **Throughput** (log-fairness), **Delay** (strictly linear), **Packet Loss** (bounded), and **Load Balancing** (CIO-driven). A constant `+1.0` survival bias keeps rewards positive. All penalties are linearly bounded with per-component and total clipping to prevent gradient explosions.
+    -   *Solution*: A **single-stage, flat reward function** with 7 components: **Throughput** (log-fairness), **Delay** (linear), **Packet Loss** (linear penalty), **Load Balancing** (CIO-driven), **Energy Efficiency** (Tx Power Regularization), **SLA Bonus**, and **CIO Regularization**. A constant `+1.0` survival bias keeps rewards positive. All penalties are linearly bounded with per-component and total clipping to prevent gradient explosions.
 
 3.  **Cell-Centric Action Space (Physics-Informed Control)**:
     -   *Problem*: RL agents often output erratic "bang-bang" control actions if the action space is poorly defined. 
     -   *Solution*: We utilize a **9-dimension action space** (3 per cell: TxPower, CIO, TTT). 
-        *   **TxPower**: Absolute mapping to [10, 46] dBm for direct energy-performance control. 
-        *   **CIO**: Absolute [-6, 6] dB for immediate load balancing via handover boundary adjustment.
-        *   **TTT**: Absolute [0, 1280] ms to control handover agility vs. stability.
-    All actions are absolute and physics-bounded, restoring causality and ensuring the agent learns stable policies. Frame stacking (3 frames) provides temporal context.
+        *   **TxPower**: Absolute mapping from [-1, 1] to [10, 46] dBm for direct energy-performance control. 
+        *   **CIO**: Absolute mapping from [-1, 1] to [-6, 6] dB for immediate load balancing via handover boundary adjustment.
+        *   **TTT**: Inverse mapping from [-1, 1] to [1280, 0] ms to control handover agility vs. stability.
+    All actions are absolute and physics-bounded, restoring causality and ensuring the agent learns stable policies. 
+    The **State Space** utilizes 48 features per cell (12 base + 3 delta + 1 stationary flag, frame stacked × 3) yielding 144 inputs per cell.
 
 ## 🚀 End-to-End Installation Guide
 
@@ -108,37 +109,12 @@ For subsequent starts, you can use:
 source .venv/bin/activate
 ```
 
-#### 1. Turbo-Charged Curriculum Training
-1. **Curriculum Training**: `bash scripts/train_curriculum.sh` (8-stage "Grandmaster" suite for High-End Hardware)
-2. **Benchmarking**: `python3 scripts/benchmark_power_suite.py` (BDH vs Baseline vs MLP)
-3. **Single Scenario**: `python3 radio_cortex_complete.py --mode train --scenario flash_crowd --total-timesteps 200000`
-4. **Debug Scale**: `python3 debug_scalability.py` (Verify 5 UE -> 100 UE generalization)
-5. **Clean Workspace**: `bash scripts/cleanup.sh`
-
-#### 2. Containerized Training (Docker)
-Radio-Cortex is fully Dockerized for consistent deployment.
-```bash
-# 1. Build and Start everything (Kafka + Agent)
-docker-compose up --build
-
-# 2. Access the Gradio UI
-# Open http://localhost:7860 in your browser
-```
-
-#### 3. Storage Safety (Automated)
-Radio-Cortex is designed for multi-million step training without disk exhaustion.
-*   **Log Purge**: The curriculum script automatically deletes `logs/*.log` (potentially 10GB+) between stages.
-*   **CSV Archival**: Raw per-step CSVs are purged post-stage to save room (~3GB).
-*   **Preserved**: Only final stage models and summary results are kept.
-
 ## 🛠️ Utilities
 
 The `scripts/` directory contains multi-language utilities to assist with development:
 
 - **Cleanup**: `bash scripts/cleanup.sh` - Removes logs, residuals, and caches.
 - **Curriculum Training**: `bash scripts/train_curriculum.sh` - 8-stage progressive "Lean Power Suite".
-- **Benchmark Suite**: `python3 scripts/benchmark_power_suite.py` - Compares architectures across scenarios.
-- **Scalability Test**: `python3 debug_scalability.py` - Tests zero-shot generalization to 100 UEs.
 - **Log Analyzer (Go)**: `go run scripts/log_analyzer.go`
 
 ---
@@ -165,41 +141,11 @@ You can customize the training hyperparameters and environment settings via comm
 |:---|:---|:---|
 | `--num-ues` | 20 | Number of User Equipments (UEs). |
 | `--num-cells` | 3 | Number of cells (eNodeBs). |
-| `--sim-time` | 20.0 | Simulation duration per episode (seconds). **(See Speed Tips below)** |
+| `--sim-time` | 20.0 | Simulation duration per episode (seconds). |
 | `--kpm-interval` | 100 | KPM Reporting Interval in ms. |
 | `--system-bandwidth-mhz` | 10.0 | System Bandwidth (5.0, 10.0, 20.0). |
 
 ---
-
-### ⚡ High-Performance Training Guide
-
-#### How to Train at "Grandmaster" Levels
-To achieve maximum accuracy for project displays or research, use the hypertuned curriculum:
-
-1. **Max out Parallelism**: Set `--n-envs 32`.
-2. **Batch for Stability**: Set `--batch-size 4096`. 
-3. **Deep Learning**: Set `--ppo-epochs 20`. This allows the agent to extract maximum value from every expensive simulation step.
-
-**Recommended "Grandmaster" Suite:**
-```bash
-./scripts/train_curriculum.sh
-```
-
-#### Optimal Hyperparameters (Stable / Turbo Suite)
-
-| Parameter | Default | Turbo Config | Rationale |
-|:---|:---:|:---:|:---|
-| `--learning-rate` | 3e-5 | **3e-5** | Safe stable LR for sensitive rewards |
-| `--batch-size` | 512 | **512** | High throughput for modern hardware |
-| `--rollout-steps` | 512 | **512** | Longer horizons for better advantage estimation |
-| `--ppo-epochs` | 10 | **10** | High data efficiency (cleaner batches) |
-| `--hidden-dim` | 256 | **512** | Wider network for better GPU utilization |
-| `--ent-coef` | 0.03 | **0.03** | Boosted exploration to prevent collapse |
-| `--gamma` | 0.99 | **0.99** | Standard discount for 50s episodes |
-| `--sim-time` | 60.0 | **50.0** | Meaningful congestion dynamics |
-
-> [!TIP]
-> Use `scripts/train_scenario.sh` to run this optimized configuration.
 
 #### 3. Advanced RL Tuning
 | Argument | Default | Description |
@@ -219,7 +165,7 @@ To achieve maximum accuracy for project displays or research, use the hypertuned
 | `--ppo-epochs` | 20 | PPO update epochs per batch. |
 | `--target-kl` | 0.05 | Target KL divergence for early stopping. |
 
-### 🌍 Simulation Scenarios
+## 🌍 Simulation Scenarios
 
 Radio-Cortex supports 12 diverse scenarios that stress-test different aspects of RAN intelligence.
 
@@ -239,14 +185,17 @@ Radio-Cortex supports 12 diverse scenarios that stress-test different aspects of
 | `spectrum_crunch` | Resources | Multi-band management (Carrier Aggregation). | Aggregate Throughput |
 
 
-### 🚀 CLI Training Reference
+## 🚀 CLI Training Reference
 
 Train the O-RAN Intelligent Controller using PPO (Proximal Policy Optimization).
 
-# 8-stage "Lean Power Suite" curriculum (Optimized for Speed)
+#### 1. 8-stage "Lean Power Suite" curriculum (Optimized for Speed)
+```
 bash scripts/train_curriculum.sh
+```
 
-# Preview the plan without executing
+Preview the plan without executing
+```
 bash scripts/train_curriculum.sh --dry-run
 ```
 
@@ -313,28 +262,95 @@ python3 -m http.server 8080
 ```
 
 
+## 📊 Detailed Evaluation Metrics
 
-**Metrics Tracked:**
-(For detailed formulas and definitions, see the Evaluation Metrics section below)
-(For the full technical breakdown of the KPM JSON Report structure, see the KPM Report Reference below)
+We categorize metrics based on the network layer they analyze, ensuring a holistic view of performance across the O-RAN stack.
 
-| Category | Metric | Description |
-|:---|:---|:---|
-| **QoS (User Experience)** | Throughput | Average downlink data rate (Mbps). |
-| | End-to-End Delay | Average time for packet delivery (ms). |
-| | Jitter | Standard deviation of delay (variability). |
-| | Satisfied User Ratio | % of users meeting SLA (Tput > 1Mbps, Delay < 100ms). |
-| **Reliability** | Packet Loss Ratio | Ratio of lost packets to total sent. |
-| | Handover Success Rate | Ratio of successful vs attempted handovers. |
-| **Resource Efficiency** | Spectrum Utilization | Average usage of Resource Blocks (RBs). |
-| | Congestion Intensity | % of time network utilization > 90%. |
-| | Cell Edge Throughput | 5th percentile user throughput (fairness proxy). |
-| | Jain's Fairness | Measure of resource distribution equality (0-1). |
-| **PHY / Wireless** | Average SINR | Signal-to-Interference-plus-Noise Ratio (dB). |
-| | Average RSRP | Reference Signal Received Power (Signal Strength, dBm). |
-| **Mobility** | Handover Count | Number of cell switches per UE. |
+### 🌐 Quality of Service (QoS / Application Layer)
+* **Throughput (Mbps):** Average successful data delivery rate to UEs.
+* **End-to-End Delay (ms):** Average time for a packet to travel from source to destination.
+* **Satisfied User Ratio (%):** Percentage of users meeting the SLA:
+    *   *SLA Criteria:* Throughput > 1 Mbps AND Delay < 100 ms.
 
-### 🧠 Stationary Reward Engine
+### 🛡️ Reliability & Stability
+*   **Packet Loss Ratio (%):** Ratio of lost packets to total sent.
+*   **Handover Success Rate (%):** Successful / Attempted handovers.
+
+### ⚡ Resource Efficiency (Spectrum & Network)
+*   **Spectrum Utilization (%):** Average usage of Resource Blocks (RBs) across all cells.
+*   **Congestion Intensity (%):** Percentage of time where network utilization > 90%.
+*   **Cell Edge Throughput (Mbps):** 5th Percentile throughput. Indicates how well the network serves users with poor coverage (fairness).
+*   **Jain's Fairness Index (0-1):** Measures how equally resources are shared. 1.0 = perfect equality.
+    *   *Formula:* $(\sum x_i)^2 / (n \cdot \sum x_i^2)$ where $x_i$ is UE throughput.
+*   **Energy Efficiency (Mbps/Watt):** System Throughput / Total Power Consumption. Measures the "cost" of transmitting data.
+
+
+### 📶 PHY / Wireless Layer
+*   **Average SINR (dB):** Signal-to-Interference-plus-Noise Ratio.
+*   **Average RSRP (dBm):** Reference Signal Received Power (Signal Strength).
+
+### 🚀 Mobility Metrics
+*   **Handover Count:** Number of cell switches per UE.
+
+### 🖧 RIC / E2 Interface Metrics
+*   **Control Stability (%):** 0-100 score measuring AI "jitter". High score means stable decisions; low score means frequent, large action changes.
+
+### 🧠 Architecture & Compute Metrics
+*   **Inference Time (ms):** Average time taken by the agent to compute an action. Critical for comparing model architectures (e.g., Transformer vs MLP) against O-RAN real-time constraints.
+
+---
+
+#### 2. Composite Health Scores (Radar Chart)
+
+To provide a quick "Health Check" of the network, we aggregate metrics into **6 composite scores** (0-100).
+
+### 🏆 1. QoS Score (User Experience)
+Combines how fast, responsive, and consistent the network felt to users. Includes tail-latency (p95) to capture stuttering.
+*   **Formula:** `25% Throughput + 25% Delay + 15% p95 Delay + 35% Satisfied Users`
+
+### 🛡️ 2. Reliability Score (Stability)
+Penalizes both constant loss, sudden outages (Peak/Max Loss), service downtime, unstable mobility, and handover failures. Rewards fast recovery and stable control.
+*   **Formula:** `35% Avg Loss + 15% Max Loss + 20% Downtime + 10% Avg HO Count/UE + 20% HO Success`
+*   *Note:* Control Stability and HO Stability were removed from the composite formula to focus on physical metrics.
+
+### 🏗️ 3. Resource Score (Efficiency & Fairness)
+Rewards high spectrum utilization AND efficiency, while ensuring fairness.
+*   **Formula:** `10% Utilization + 30% Cell Edge + 30% Jain's Fairness + 30% Energy Efficiency`
+*   **Note:** Energy Efficiency acts as a tie-breaker, rewarding agents that achieve similar QoS with lower power.
+
+### 📦 4. Buffer Score (Congestion Health)
+Measures buffer occupancy and congestion spikes.
+*   **Formula:** `60% Norm. Queue Length + 40% Congestion Intensity`
+
+### 📡 5. PHY Score (Signal Quality)
+Combined physical layer conditions.
+*   **Formula:** `60% SINR + 40% RSRP`
+
+
+
+### 🧠 6. Architecture Score (Model Efficiency)
+Measures the "cost of intelligence" - how heavy the model is in terms of latency and sizing.
+*   **Formula:** `50% Normalized Params + 50% Normalized Inference Speed`
+*   **Penalties:** 
+    *   0 score if Params > 1,000,000 (1M)
+    *   0 score if Inference > 10ms (O-RAN SLA boundary)
+    *   Baseline (Static) naturally scores 100 as it has 0 inference cost.
+
+
+---
+
+#### 3. Excluded Metrics & Limitations
+
+The following metrics were considered but **not implemented** due to simulator constraints:
+
+| Metric | Category | Reason for Exclusion |
+| :--- | :--- | :--- |
+| **Collision Rate** | Reliability | Requires MAC layer tracing with significant I/O overhead. |
+| **Control Overhead** | Resource | Requires deep packet inspection, not feasible in real-time RL. |
+
+---
+
+## 🧠 Stationary Reward Engine
 
 Radio-Cortex uses a **single-stage, stationary reward function** optimized for distributed RL training (SubprocVecEnv). A **Survival Bias** of `+1.0` keeps rewards positive during exploration.
 
@@ -343,27 +359,19 @@ Radio-Cortex uses a **single-stage, stationary reward function** optimized for d
 | Component | Weight | Formula | Range |
 |:---|:---:|:---|:---:|
 | **Throughput** | 8.0 | $W \cdot \log(1 + T/T_{max})$ | [-0.5, 50.0] |
-| **Delay** | 4.0 | $-W \cdot \min(D/D_{max}, 1)$ (strictly linear) | [-50.0, 0.0] |
-| **Packet Loss** | 8.0 | Bounded penalty (now 8.0x weight) | [-25.0, 0.0] |
-| **Load Balance** | 4.0 | $-\text{std}(\text{cell\_loads})$ | [-4.0, 0.0] |
-| **Energy Eff.** | 0.1 | Tie-breaker: $-\text{mean}(\text{norm\_tx\_power})$ | [-1.0, 0.0] |
+| **Delay** | 4.0 | $-W \cdot \min(D/D_{max}, 1)$ (linear) | [-50.0, 0.0] |
+| **Packet Loss** | 8.0 | $-W \cdot (\text{mean\_loss} \cdot 4)$ | [-25.0, 0.0] |
+| **Load Balance** | 4.0 | $-\text{std}(\text{cell\_loads}) \cdot W$ | [-2.0, 0.0] |
+| **Energy Eff.** | 0.1 | $-\text{mean}(\text{norm\_tx\_power}) \cdot W$ | [-1.0, 0.0] |
 | **SLA Bonus** | 0.5 | +0.5 per UE meeting SLA (>1Mbps, <100ms) | [0.0, +NumUEs*0.5] |
-| **CIO Regularization**| 0.4 | Centering penalty: $-W \cdot \text{mean}(|\text{CIO}|/6)$ | [-0.4, 0.0] |
+| **CIO Regularization**| 0.4 | $-W \cdot \text{mean}(\|\text{CIO}\|/6)$ | [-0.4, 0.0] |
 | **Survival Bias** | — | Constant `+1.0` | — |
-
-#### Dropped Components (with rationale)
-
-| Dropped | Reason |
-|:---|:---|
-| `r_queue` | Redundant with `r_loss` (queue ≈ delayed loss proxy) |
-| `r_smooth` | Penalizes sudden CIO shifts needed for load spikes |
-| `d_barrier` | Quadratic SLA penalty causes unbounded negative spikes |
 
 $$R_{total} = \text{clip}\left( r_{tput} + r_{delay} + r_{loss} + r_{load} + r_{energy} + r_{sla} + r_{cio} + \text{BIAS}, [-100, 50] \right)$$
 
 ---
 
-### Interpretability
+## Interpretability
 Understand which input features (e.g., Queue Length vs Throughput) drove the agent's decisions.
 ```bash
 python3 interpret_policy.py --checkpoint models/radio_cortex.pt
@@ -450,6 +458,19 @@ The "Digital Twin" of the RAN. Implements the LTE/5G network, traffic generation
     *   `ReportAppRx()`: Callback for packet reception (calculates Delay).
     *   `GetAndResetUeMetrics()`: Returns accumulated stats and resets counters.
 
+### 8. `evaluation_baseline.py`
+**Role:** High-Fidelity Evaluation Framework.
+Extracts metrics and evaluates trained models against the static baseline, computing the Composite Health Scores and Advanced Metrics.
+
+### 9. `scripts/train_curriculum.sh`
+**Role:** 8-Stage "Lean Power Suite" Curriculum.
+Automates the progressive training of the RL agent from simple to complex congestion scenarios, managing storage and preventing catastrophic forgetting.
+
+### 10. Visualization & Deployment (`ui/`, Docker)
+**Role:** Interaction and Containerization.
+*   **`ui/dashboard.html`** & **`ui/gradio_app.py`**: Rich visual dashboards for viewing metrics securely.
+*   **`Dockerfile`** & **`docker-compose.yml`**: Full containerized deployment for Kafka, Zookeeper, and the compiled ns-3 Agent environment.
+
 ---
 
 ## 🔄 System Architecture
@@ -517,46 +538,31 @@ graph LR
 
 ---
 
-### 🖥️ Convergence Dashboard (Rich UI)
-
-Radio-Cortex features a high-fidelity convergence dashboard that replaces standard text logs with mission-critical training metrics.
-
-#### Key Metrics to Observe:
-- **Reward**: The primary optimization goal. Should show an **Upward Trend (↗)** over the first 50-100 updates.
-- **Explained Variance (Expl Var)**: Measures the Accuracy of the RIC's internal reward predictions.
-    - **Value range**: `1.0` (Perfect), `0.0` (Guessing Mean), `< 0.0` (Still exploring/Worse than mean).
-    - **Coloring**: `Green` (>0.8) indicates a "Converged" critic; `Red` (<0.4 or negative) is normal for the first ~50 updates.
-- **Entropy**: Measures the agent's confidence. Should gradually decrease as the agent becomes more specialized at handling specific congestion scenarios.
-- **Activity Heartbeat**: A pulsing `●` / `○` light showing real-time data influx from ns-3.
-- **Live Environment Metrics**: Per-environment throughput, delay, loss, SINR, queue, RB utilization, and power — updated at 10Hz.
-
----
-
-### 📋 Logs & KPM Verification
+## 📋 Logs & KPM Verification
 
 All debug and verification logs are stored in the `logs/` directory:
 
 | File Pattern | Description |
 |:---|:---|
-| `logs/ns3_out_X.log` | ns-3 stdout for environment X |
-| `logs/ns3_err_X.log` | ns-3 stderr for environment X |
-| `logs/kpm_verification_X.jsonl` | KPM verification audit trail for environment X |
-| `logs/action_logs.jsonl` | Per-step actions, rewards, and full metrics |
+| `logs/ns3_out_X.log` | Standard output from ns-3 simulation instance X. Includes E2 interface heartbeats. |
+| `logs/ns3_err_X.log` | Standard error (debug logs) from ns-3 simulation instance X. Critical for debugging C++ crashes. |
+| `logs/kpm_verification_X.jsonl` | Audit trail of raw vs reported KPM values for environment X, used to verify MetricCollector fidelity. |
+| `results/simulation_data_*.db` | **Unified SQLite Database** containing all step traces (state/action/reward) and final evaluation results. Ideal for interactive visual playback and query-based analysis. |
+| `logs/worker_failure_X.log` | Error tracebacks specifically for environment worker X if it fails to initialize. |
 
-**KPM Verification** logs every received KPM report with:
-- `is_real: true/false` — whether data came from ns-3 or a fallback
-- `sample_ues` — throughput, SINR, RSRP, delay, loss for first 3 UEs
-- `sample_cells` — RB utilization, queue, power, connected UEs
-- `reason` — error message when `is_real: false` (fallback)
+---
 
-Use this to verify that all training data is authentic:
-```bash
-# Check if any fallback data was used during training
-grep '"is_real": false' logs/kpm_verification_*.jsonl | wc -l
+## 📺 Simulation Visualizer
 
-# View sample real KPM data
-head -3 logs/kpm_verification_0.jsonl | python3 -m json.tool
-```
+Radio-Cortex includes a high-fidelity, web-based playback tool for analyzing agent behavior in simulation.
+
+1.  **Locate Database**: Find the latest `simulation_data_*.db` in your `results/` directory.
+2.  **Open Visualizer**: Open `ui/visualizer.html` in any modern web browser.
+3.  **Load Data**: Drag and drop the `.db` file into the window (or use the "Load" button).
+4.  **Analyze**: Use playback controls to step through the simulation, view real-time charts, and inspect per-cell control actions.
+
+> [!TIP]
+> This tool is entirely client-side (using **SQL.js**). No backend server is required — just open the HTML file and load your data.
 
 ---
 
@@ -569,248 +575,6 @@ head -3 logs/kpm_verification_0.jsonl | python3 -m json.tool
 | **Expl Var** | → 0.9 | High values mean the agent correctly predicts the "cost" of its actions. |
 | **Entropy** | ↘ Decreasing | The agent is narrowing down its optimal control strategy (good). |
 | **Policy Loss** | ⇄ Oscillating | Normal in PPO; indicates the agent is exploring different tradeoffs. |
-
-> [!TIP]
-> **When to Stop?** Stop training when **Explained Variance > 0.8** and the **Reward Trend** stabilizes (→) for 10 consecutive updates. This indicates a "Converged" model.
-
----
-
-## 📊 Monitoring & Analysis
-
-### 1. View Training & Evaluation Dashboard
-The primary way to analyze results is via the interactive HTML dashboard.
-
-```bash
-# Start a simple HTTP server
-python3 -m http.server 8080
-
-# Open in Browser
-# http://localhost:8080/dashboard.html
-```
-
-The dashboard automatically loads `results/experiment_results.csv` and provides:
-- **Comparison Table**: Sort and filter runs.
-- **Radar Charts**: Visual health profile of the network (QoS, Reliability, etc.).
-- **Bar Charts**: Side-by-side metric comparison.
-
-### 2. Quick CLI Summary
-Quickly check the average metrics from the logs:
-```bash
-python3 -c "import json; import numpy as np; 
-data = [json.loads(l) for l in open('logs/action_logs.jsonl')]; 
-print(f'Mean Reward: {np.mean([d[\"reward\"] for d in data]):.4f}')"
-```
-
----
-
-## 🔬 Advanced Workflows
-
-### Scenario Curriculum (8-Stage "Grandmaster" Suite)
-The curriculum script trains on progressively harder scenarios with automated inter-stage storage cleanup.
-
-```bash
-# Run the full 8-stage "Grandmaster" curriculum
-bash scripts/train_curriculum.sh
-```
-
-| Stage | Focus | Timesteps | updates | Skill Description |
-|:---:|:---:|:---:|:---:|:---|
-| 1 | Flash Crowd | 400k | ~16 | Basic load balancing (Bootstrap) |
-| 2 | Sleepy Campus | 450k | ~18 | Energy efficiency (Green RAN) |
-| 3 | Urban Canyon | 500k | ~20 | Signal recovery & Robustness |
-| 4 | Mobility Storm | 550k | ~22 | Handover Optimization |
-| 5 | Traffic Burst | 600k | ~24 | Congestion Management |
-| 6 | Ambulance | 650k | ~26 | QoS Priority & Slicing |
-| 7 | Spectrum Crunch | 700k | ~28 | Spectral Efficiency |
-| 8 | Generalization Mix | 1000k | ~40 | Multi-goal Mastery |
-
-**Total: ~4.85M timesteps** to full multi-domain mastery.
-
-### Network Size Curriculum (Manual)
-```bash
-# Stage 1: Small Network (5 UEs)
-python3 radio_cortex_complete.py --mode train --num-ues 5 --num-cells 2 --total-timesteps 50000 --model-path models/stage1.pt
-
-# Stage 2: Medium Network (20 UEs)
-python3 radio_cortex_complete.py --mode train --num-ues 20 --num-cells 3 --total-timesteps 100000 --model-path models/stage2.pt
-
-# Stage 3: Large Network (40 UEs)
-python3 radio_cortex_complete.py --mode train --num-ues 40 --num-cells 5 --total-timesteps 200000 --model-path models/stage3.pt
-```
-
-### Batch Experiments (Bash Loop)
-Run multiple experiments with different learning rates.
-```bash
-for lr in 0.0001 0.0003 0.001; do
-    echo "Training with LR=$lr"
-    python3 radio_cortex_complete.py --mode train --learning-rate $lr --model-path models/lr_${lr}.pt
-done
-```
-
-# Radio-Cortex Evaluation Metrics
-
-This document details the evaluation metrics used to benchmark the Radio-Cortex Intelligent RAN Controller against baselines.
-
-## 1. Metric Categories
-
-We categorize metrics based on the network layer they analyze, ensuring a holistic view of performance.
-
-### 🌐 Quality of Service (QoS / Application Layer)
-* **Throughput (Mbps):** Average successful data delivery rate to UEs.
-* **End-to-End Delay (ms):** Average time for a packet to travel from source to destination.
-* **Satisfied User Ratio (%):** Percentage of users meeting the SLA:
-    *   *SLA Criteria:* Throughput > 1 Mbps AND Delay < 100 ms.
-
-### 🛡️ Reliability & Stability
-*   **Packet Loss Ratio (%):** Ratio of lost packets to total sent.
-*   **Handover Success Rate (%):** Successful / Attempted handovers.
-
-### ⚡ Resource Efficiency (Spectrum & Network)
-*   **Spectrum Utilization (%):** Average usage of Resource Blocks (RBs) across all cells.
-*   **Congestion Intensity (%):** Percentage of time where network utilization > 90%.
-*   **Cell Edge Throughput (Mbps):** 5th Percentile throughput. Indicates how well the network serves users with poor coverage (fairness).
-*   **Jain's Fairness Index (0-1):** Measures how equally resources are shared. 1.0 = perfect equality.
-    *   *Formula:* $(\sum x_i)^2 / (n \cdot \sum x_i^2)$ where $x_i$ is UE throughput.
-*   **Energy Efficiency (Mbps/Watt):** System Throughput / Total Power Consumption. Measures the "cost" of transmitting data.
-
-
-### 📶 PHY / Wireless Layer
-*   **Average SINR (dB):** Signal-to-Interference-plus-Noise Ratio.
-*   **Average RSRP (dBm):** Reference Signal Received Power (Signal Strength).
-
-### 🚀 Mobility Metrics
-*   **Handover Count:** Number of cell switches per UE.
-
-### 🖧 RIC / E2 Interface Metrics
-*   **Control Stability (%):** 0-100 score measuring AI "jitter". High score means stable decisions; low score means frequent, large action changes.
-
-### 🧠 Architecture & Compute Metrics
-*   **Inference Time (ms):** Average time taken by the agent to compute an action. Critical for comparing model architectures (e.g., Transformer vs MLP) against O-RAN real-time constraints.
-
----
-
-## 2. Composite Health Scores (Radar Chart)
-
-To provide a quick "Health Check" of the network, we aggregate metrics into **6 composite scores** (0-100).
-
-### 🏆 1. QoS Score (User Experience)
-Combines how fast, responsive, and consistent the network felt to users. Includes tail-latency (p95) to capture stuttering.
-*   **Formula:** `25% Throughput + 25% Delay + 15% p95 Delay + 35% Satisfied Users`
-
-### 🛡️ 2. Reliability Score (Stability)
-Penalizes both constant loss, sudden outages (Peak/Max Loss), service downtime, unstable mobility, and handover failures. Rewards fast recovery and stable control.
-*   **Formula:** `35% Avg Loss + 15% Max Loss + 20% Downtime + 10% Avg HO Count/UE + 20% HO Success`
-*   *Note:* Control Stability and HO Stability were removed from the composite formula to focus on physical metrics.
-
-### 🏗️ 3. Resource Score (Efficiency & Fairness)
-Rewards high spectrum utilization AND efficiency, while ensuring fairness.
-*   **Formula:** `10% Utilization + 30% Cell Edge + 30% Jain's Fairness + 30% Energy Efficiency`
-*   **Note:** Energy Efficiency acts as a tie-breaker, rewarding agents that achieve similar QoS with lower power.
-
-### 📦 4. Buffer Score (Congestion Health)
-Measures buffer occupancy and congestion spikes.
-*   **Formula:** `60% Norm. Queue Length + 40% Congestion Intensity`
-
-### 📡 5. PHY Score (Signal Quality)
-Combined physical layer conditions.
-*   **Formula:** `60% SINR + 40% RSRP`
-
-
-
-### 🧠 7. Architecture Score (Model Efficiency)
-Measures the "cost of intelligence" - how heavy the model is.
-*   **Formula:** `50% Normalized Params + 50% Normalized Inference Speed`
-*   **Penalties:** 
-    *   0 score if Params > 1,000,000 (1M)
-    *   0 score if Inference > 10ms (O-RAN limit)
-    *   Baseline (Static) gets 100/100 (Efficient).
-
-
----
-
-## 3. Data Quality Indicator
-
-Every 50 steps, a data quality summary is printed:
-```
-[Data Quality] RSRP: 18/20 real | Cell: 18/20 real | HO: 0/20 with events
-```
-
-| Indicator | Good | Concerning |
-|-----------|------|------------|
-| RSRP | >80% real | <50% after 30s |
-| Cell | >80% real | Persistently 0 |
-| HO | 0 in non-mobility scenarios | 0 in `mobility_storm` |
-
----
-
-## 4. Excluded Metrics & Limitations
-
-The following metrics were considered but **not implemented** due to simulator constraints:
-
-| Metric | Category | Reason for Exclusion |
-| :--- | :--- | :--- |
-| **Collision Rate** | Reliability | Requires MAC layer tracing with significant I/O overhead. |
-| **Control Overhead** | Resource | Requires deep packet inspection, not feasible in real-time RL. |
-
----
-
-## 5. How to Run Evaluation
-
-For the full **🚀 CLI Reference Guide** (including all training and scenario flags), see the main [README.md](README.md).
-
-### Quick Eval Commands
-
-Run independently using `--model`:
-
-```bash
-# ── Baseline only ──
-python3 radio_cortex_complete.py --mode eval --model base --scenario flash_crowd
-
-# ── AI agent only ──
-python3 radio_cortex_complete.py --mode eval --model bdh --scenario flash_crowd
-
-# ── All scenarios in parallel ──
-python3 radio_cortex_complete.py --mode eval --model bdh --scenario all --n-envs 12
-```
-
-
-> [!IMPORTANT]
-> **Performance Note:** Evaluation relies on the ns-3 binary. Ensure you have compiled the **optimized build** (see README.md) to avoid slow evaluation speeds.
-
-
-### Outputs
-
-All results are **appended** to a single master CSV:
-
-```
-results/experiment_results.csv
-```
-
-Each row includes a timestamp, all metrics, and config parameters — allowing you to build a dataset incrementally across runs.
-
-## ⚠️ Data Quality & Limitations
-
-While Radio-Cortex provides a comprehensive metric suite, users should be aware of the current data source fidelity for certain fields:
-
-| Metric | Source Fidelity | Note |
-|--------|-----------------|------|
-| **Throughput/Delay/Loss** | **High** | Measured directly from UE-level NetDevice trace sources in ns-3. |
-| **SINR/RSRP/CQI** | **High** | Extracted from the LteAmc and LtePhy layers; highly accurate. |
-| **RB Utilization** | **High** | Computed from actual per-cell RB allocations aggregated from UE metrics in `CollectCellMetrics`. |
-| **Queue Length** | **Medium** | Estimated from per-cell packet loss counts. Buffer occupancy (`_buffer`) remains a placeholder as ns-3 LTE does not directly expose per-bearer queue depth. |
-| **Handover Events** | **High** | Captured via RRC state machine transitions in real-time. |
-
-> [!NOTE]
-> `CollectCellMetrics` now derives `rbUtilization`, `numConnectedUes`, and `queueLength` from actual UE metrics via `servingCellId`. The only remaining placeholder is per-UE `bufferOccupancy`.
-
----
-
-**Explore results interactively:**
-```bash
-# Standalone HTML dashboard
-python3 -m http.server 8080
-# Then open http://localhost:8080/dashboard.html
-```
 
 # KPM Report Reference
 
@@ -828,36 +592,36 @@ These reports provide a snapshot of the network state and utilize the E2SM-KPM (
 
 For each UE, keys are formatted as `ue_{id}_{metric}`.
 
-| Metric Key Suffix | Type | Unit | Typical Range | Description |
-| :--- | :--- | :--- | :--- | :--- |
-| `_tput` | `float` | Mbps | 0.0 - 150.0 | Downlink Throughput. Calculated based on bytes received in the interval. |
-| `_delay` | `float` | ms | 5.0 - 500.0 | Average Downlink Latency for packets received in the interval. |
-| `_loss` | `float` | Ratio | 0.0 - 1.0 | Packet Loss Ratio. (Lost Packets / Total Packets). |
-| `_sinr` | `float` | dB | -10.0 - 60.0 | Signal-to-Interference-plus-Noise Ratio. Linear average converted to dB. |
-| `_rsrp` | `float` | dBm | -140.0 - -60.0 | Reference Signal Received Power. Indicates signal strength. |
-| `_rsrq` | `float` | dB | -20.0 - 0.0 | Reference Signal Received Quality. Indicates signal quality. |
-| `_cqi` | `float` | Index | 0 - 15 | Channel Quality Indicator. Estimated from SINR. |
-| `_rbs` | `float` | count | 0 - 5000 | Number of Downlink Resource Blocks allocated over the interval. |
-| `_ul_rbs` | `float` | count | 0 - 5000 | Average Uplink Resource Blocks used. |
-| `_cell` | `int` | ID | 0 - N (N=Cells-1) | The ID of the serving cell the UE is currently connected to. |
-| `_ho_att` | `int` | count | 0 - 5 | Number of handover attempts initiated in the interval. |
-| `_ho_succ` | `int` | count | 0 - 5 | Number of successful handovers in the interval. |
-| `_rsrp_var` | `float` | - | 0.0 - 100.0 | Variance of RSRP samples (High values indicate rapid shadowing). |
-| `_rsrq_var` | `float` | - | 0.0 - 5.0 | Variance of RSRQ samples (High values indicate rapid fading). |
-| `_buffer` | `float` | bytes | 0.0 | Buffer occupancy (Currently a placeholder returning `0.0`). |
+| Metric Key Suffix | Unit | Range | Description |
+| :--- | :--- | :--- | :--- |
+| `_tput` | Mbps | 0.0 - 150.0 | Downlink Throughput. Calculated based on bytes received in the interval. |
+| `_delay` | ms | 5.0 - 500.0 | Average Downlink Latency for packets received in the interval. |
+| `_loss` | Ratio | 0.0 - 1.0 | Packet Loss Ratio. (Lost Packets / Total Packets). |
+| `_sinr` | dB | -10.0 - 60.0 | Signal-to-Interference-plus-Noise Ratio. Linear average converted to dB. |
+| `_rsrp` | dBm | -140.0 - -60.0 | Reference Signal Received Power. Indicates signal strength. |
+| `_rsrq` | dB | -20.0 - 0.0 | Reference Signal Received Quality. Indicates signal quality. |
+| `_cqi`  | Index | 0 - 15 | Channel Quality Indicator. Estimated from SINR. |
+| `_rbs`  | count | 0 - 5000 | Number of Downlink Resource Blocks allocated over the interval. |
+| `_ul_rbs`  | count | 0 - 5000 | Average Uplink Resource Blocks used. |
+| `_cell` | ID | 0 - N (N=Cells-1) | The ID of the serving cell the UE is currently connected to. |
+| `_ho_att`  | count | 0 - 5 | Number of handover attempts initiated in the interval. |
+| `_ho_succ` | count | 0 - 5 | Number of successful handovers in the interval. |
+| `_rsrp_var` | - | 0.0 - 100.0 | Variance of RSRP samples (High values indicate rapid shadowing). |
+| `_rsrq_var` | - | 0.0 - 5.0 | Variance of RSRQ samples (High values indicate rapid fading). |
+| `_buffer` | bytes | 0.0 | Buffer occupancy (Currently a placeholder returning `0.0`). |
 
 ## Cell Metrics (Base Stations)
 
 For each Cell/eNodeB, keys are formatted as `cell_{id}_{metric}`.
 
-| Metric Key Suffix | Type | Unit | Typical Range | Description |
-| :--- | :--- | :--- | :--- | :--- |
-| `_power` | `float` | dBm | 10.0 - 46.0 | Current Transmission Power. |
-| `_load` | `float` | count | 0 - 50 | Number of active UEs served by this cell in the last interval. |
-| `_avg_rb_req` | `float` | count | 0 - 5000 | Average total Resource Blocks requested per UE over the interval. |
-| `_rb_util` | `float` | ratio | 0.0 - 1.0 | Resource block utilization (Now calculated from UE allocations). |
-| `_queue` | `int` | count | 0 - 5000 | Queue length (Estimated from per-cell packet loss). |
-| `_ues` | `int` | count | 0 - 50 | Number of connected UEs in this cell. |
+| Metric Key Suffix | Unit | Range | Description |
+| :--- | :--- | :--- | :--- |
+| `_power` | dBm | 10.0 - 46.0 | Current Transmission Power. |
+| `_load` | count | 0 - 50 | Number of active UEs served by this cell in the last interval. |
+| `_avg_rb_req` | count | 0 - 5000 | Average total Resource Blocks requested per UE over the interval. |
+| `_rb_util` | ratio | 0.0 - 1.0 | Resource block utilization (Now calculated from UE allocations). |
+| `_queue` | count | 0 - 5000 | Queue length (Estimated from per-cell packet loss). |
+| `_ues` | count | 0 - 50 | Number of connected UEs in this cell. |
 
 ## Example JSON Payload
 
@@ -898,7 +662,7 @@ This document provides a comprehensive analysis of the reinforcement learning mo
 
 | Model | File Size (MB) | Total Params | Timesteps Trained | Hidden Dim | Architecture |
 | :--- | :--- | :--- | :--- | :--- | :--- |
-| **BDH** | 72.94 | 6,418,451 | 983,040 | 512 | Scale-Free Transformer (BDH) |
+| **BDH** | 72.94 | 6,418,451 | 983,040 | 512 | BDH |
 | **GPT2** | 36.96 | 3,234,323 | 1,000,000 | 256 | GPT-2 Style Transformer |
 | **LINEAR** | 36.89 | 3,217,939 | 1,000,000 | 256 | Linear Attention Transformer |
 | **REFORMER** | 37.05 | 3,232,019 | 1,000,000 | 256 | Reformer Transformer |
@@ -912,7 +676,7 @@ This document provides a comprehensive analysis of the reinforcement learning mo
 
 ## 🔬 Per-Model Detailed Metadata
 
-### 1. BDH (Scale-Free Transformer)
+### 1. BDH 
 - **File Size:** 72.94 MB
 - **Total Parameters:** 6,418,451
 - **Timesteps Trained:** 983,040
@@ -979,106 +743,11 @@ This document provides a comprehensive analysis of the reinforcement learning mo
   - The lightest model mapping observations using simple dense mappings (`feature_net.0.weight`: [256, 144] and `feature_net.2.weight`: [256, 256]) then linearly mapped independently to an `actor_mean` [9, 256] vector.
 
 
-# Progressive Curriculum Training Plan for O-RAN RL Agent
-## Scenario-by-Scenario Training with Percentage-Based Mixing
 
----
+# 🔬 Advanced Workflows
 
-## 📋 Training Philosophy
-
-**Core Principle**: Gradual introduction of complexity while maintaining exposure to mastered scenarios to prevent **catastrophic forgetting**.
-
-**Key Strategy**: 
-- Start with 100% on easiest scenario
-- Add new scenarios progressively
-- Keep 15-20% exposure to previous scenarios as "maintenance dose"
-- Focus 70-80% on current learning target
-
----
-
-# Progressive Curriculum Training Plan for O-RAN RL Agent
-## Scenario-by-Scenario Training: The "Lean Power Suite"
-
----
-
-## 📋 Training Philosophy
-
-**Core Principle**: Gradual introduction of complexity while maintaining exposure to mastered scenarios to prevent **catastrophic forgetting**.
-
-**Key Strategy**: 
-- Start with 100% on easiest scenario (Flash Crowd).
-- Add new scenarios progressively via weighted mixing.
-- Keep exposure to previous scenarios as a "maintenance dose".
-- Focus majority of training on the newest/hardest targets.
-
----
-
-## 🎯 Complete Training Curriculum (Lean Power Suite)
-
-The Lean Power Suite consists of **8 Stages** designed to guide the BDH agent from basic load balancing to full multi-objective generalization.
-
-### **Stage 1: Flash Crowd (Bootstrap)**
-**Duration**: 84,000 timesteps  
-**Scenario Mix**: Flash Crowd: **100%**  
-**Goal**: Learn basic cell-to-cell load balancing and handover triggering.
-
-### **Stage 2: Sleepy Campus (Green RAN)**
-**Duration**: 210,000 timesteps  
-**Scenario Mix**: Flash Crowd: 20%, Sleepy Campus: **80%**  
-**Goal**: Master energy-efficient power adaptation without sacrificing QoS.
-
-### **Stage 3: Urban Canyon (PHY Robustness)**
-**Duration**: 252,000 timesteps  
-**Scenario Mix**: 15% each for Flash/Sleepy, Urban Canyon: **70%**  
-**Goal**: Learn reactive signal recovery and SINR optimization in blocked environments.
-
-### **Stage 4: Mobility Storm (Handover Mastery)**
-**Duration**: 378,000 timesteps  
-**Scenario Mix**: 10% each for previous scenarios, Mobility Storm: **70%**  
-**Goal**: Optimize handover success rate under high-speed mobility conditions.
-
-### **Stage 5: Traffic Burst (Massive Congestion)**
-**Duration**: 504,000 timesteps  
-**Scenario Mix**: 8% each for previous scenarios, Traffic Burst: **68%**  
-**Goal**: Master scheduler optimization under severe buffer overload (5x-10x traffic).
-
-### **Stage 6: Ambulance (Emergency Slicing)**
-**Duration**: 504,000 timesteps  
-**Scenario Mix**: 7% each for previous scenarios, Ambulance: **65%**  
-**Goal**: Learn network slicing and QoS priority differentiation for emergency streams.
-
-### **Stage 7: Spectrum Crunch (Spectral Efficiency)**
-**Duration**: 630,000 timesteps  
-**Scenario Mix**: 6% each for previous scenarios, Spectrum Crunch: **64%**  
-**Goal**: Optimal resource management and maximizing bits/sec/Hz.
-
-### **Stage 8: Consolidation (Multi-Mix Generalization)**
-**Duration**: 1,050,000 timesteps  
-**Scenario Mix**: **Uniform Mix (12% each)** across all key scenarios above.  
-**Goal**: Achieve robust, production-ready generalization across the complete suite.
-
----
-
-## 📊 Training Timeline Summary
-
-| Stage | Timesteps | Primary Scenario | Mix Complexity | Goal |
-|-------|-----------|------------------|----------------|------|
-| 1 | 84,000 | Flash Crowd | Single | Load Balancing |
-| 2 | 210,000 | Sleepy Campus | 2-scenario | Energy Efficiency |
-| 3 | 252,000 | Urban Canyon | 3-scenario | PHY Robustness |
-| 4 | 378,000 | Mobility Storm | 4-scenario | Handover Success |
-| 5 | 504,000 | Traffic Burst | 5-scenario | Overload Management |
-| 6 | 504,000 | Ambulance | 6-scenario | Emergency Slicing |
-| 7 | 630,000 | Spectrum Crunch | 7-scenario | Spectral Efficiency |
-| 8 | 1,050,000 | Power Suite Mix | All equal | Full Generalization |
-
-**Total Training Time**: ~3.6M timesteps Focused on mission-critical scenarios.
-
----
-
-## 🔧 Execution Guide
-
-The curriculum is executed via the `scripts/train_curriculum.sh` wrapper, which manages checkpoint loading, scenario mixing, and GPU memory safety.
+### Scenario Curriculum (8-Stage "Lean Power Suite")
+The curriculum script trains on progressively harder scenarios with automated inter-stage storage cleanup.
 
 ```bash
 # Start the full 8-stage curriculum
@@ -1088,16 +757,32 @@ bash scripts/train_curriculum.sh
 bash scripts/train_curriculum.sh --start 5
 ```
 
----
+**Core Principle**: Gradual introduction of complexity while maintaining exposure to mastered scenarios to prevent **catastrophic forgetting**.
 
-## 📈 Performance Tracking
+**Key Strategy**: 
+- Start with 100% on easiest scenario (Flash Crowd).
+- Add new scenarios progressively via weighted mixing.
+- Keep exposure to previous scenarios as a "maintenance dose".
+- Focus majority of training on the newest/hardest targets.
 
-### Best Practices for Success
-1. **Checkpointing**: The script saves models to `models/curriculum/stage_N.pt`. Always evaluate the latest stage.
-2. **Evaluation**: Use `python3 radio_cortex_complete.py --mode eval --model bdh --scenario all` to verify zero-shot generalization to scenarios NOT included in the curriculum (e.g., `ping_pong`, `iot_tsunami`).
-3. **Hardware**: This plan is optimized for high-parallelism (16-24 envs). If using fewer envs, total training time (wall-clock) will increase linearly.
+| Stage | Focus | Total-timesteps | Skill Description |
+|:---:|:---:|:---:|:---|
+| 1 | Flash Crowd | 400k | Basic load balancing (Bootstrap) |
+| 2 | Sleepy Campus | 450k | Energy efficiency (Green RAN) |
+| 3 | Urban Canyon | 500k | Signal recovery & Robustness |
+| 4 | Mobility Storm | 550k | Handover Optimization |
+| 5 | Traffic Burst | 600k | Congestion Management |
+| 6 | Ambulance | 650k | QoS Priority & Slicing |
+| 7 | Spectrum Crunch | 700k | Spectral Efficiency |
+| 8 | Generalization Mix | 1000k | Multi-goal Mastery |
 
----
+**Total: ~1M timesteps** to full multi-domain mastery. *(Note: Test `ping_pong` and `iot_tsunami` for zero-shot generalization after training)*
 
-## 🎓 Note on Zero-Shot Generalization
-The "Lean Power Suite" specifically excludes `ping_pong` and `iot_tsunami` during training to test the agent's ability to generalize to novel challenges without retraining. A successful agent should achieve "Passed" scores on these scenarios despite never seeing them during the 7.2M steps of curriculum training.
+### Batch Experiments (Terminal)
+Run multiple evaluations on different models efficiently:
+```bash
+for model in bdh nn linear; do
+    echo "Evaluating $model"
+    python3 radio_cortex_complete.py --mode eval --model $model --scenario all
+done
+```

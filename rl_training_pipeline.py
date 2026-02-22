@@ -1080,10 +1080,3 @@ def evaluate_policy(
     }
 
 
-# ============================================================================
-# Main Training Script (Legacy - Use radio_cortex_complete.py)
-# ============================================================================
-
-# if __name__ == "__main__":
-#     # Legacy training code removed.
-#     pass

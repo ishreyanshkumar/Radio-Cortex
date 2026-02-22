@@ -4,13 +4,13 @@
 # 
 
 
-# Run Training (Stable Low-End Config)
+# Run Training 
 # --scenario flash_crowd: Target specific scenario
 # --n-envs 4: Low resource usage (Consumer Laptop/VM)
-# --steps 200000: Sufficient for single scenario convergence
+# --steps 100000: Sufficient for single scenario convergence
 # --model bdh: Uses the Balanced BDH architecture (Dim 256)
-# --rollout-steps 512: Larger rollout to compensate for few envs (Buffer=2048)
-# --batch-size 512: Stable updates with smaller buffer
+# --rollout-steps 256: Larger rollout to compensate for few envs (Buffer=2048)
+# --batch-size 256: Stable updates with smaller buffer
 # --ppo-epochs 10: Standard PPO epochs
 
 echo "🚀 Starting Training for Flash Crowd..."

@@ -1,0 +1,477 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Radio-Cortex | Simulation Visualizer</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/sql.js/1.6.2/sql-wasm.js"></script>
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;700&display=swap');
+        body { font-family: 'Outfit', sans-serif; }
+        .glass { background: rgba(255, 255, 255, 0.05); backdrop-filter: blur(10px); border: 1px solid rgba(255, 255, 255, 0.1); }
+        .gradient-bg { background: radial-gradient(circle at top right, #1e1b4b, #020617); }
+        input[type="range"]::-webkit-slider-thumb { -webkit-appearance: none; appearance: none; width: 16px; height: 16px; background: #3b82f6; cursor: pointer; border-radius: 50%; }
+        .chart-container { position: relative; height: 180px; width: 100%; }
+        .pulse { animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite; }
+        @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: .5; } }
+    </style>
+</head>
+<body class="gradient-bg text-slate-200 min-h-screen">
+    <!-- Header -->
+    <header class="p-4 border-b border-slate-800 flex justify-between items-center glass sticky top-0 z-50">
+        <div class="flex items-center gap-3">
+            <div class="w-10 h-10 bg-blue-600 rounded-lg flex items-center justify-center shadow-lg shadow-blue-500/20">
+                <i data-lucide="radio" class="text-white"></i>
+            </div>
+            <div>
+                <h1 class="text-xl font-bold tracking-tight text-white">Radio-Cortex</h1>
+                <p class="text-xs text-slate-400 uppercase tracking-widest font-semibold">Self-Healing O-RAN xApp</p>
+            </div>
+        </div>
+        <div class="flex items-center gap-4">
+            <div id="fileInfo" class="text-sm text-slate-400 hidden lg:block">No database loaded</div>
+            <label class="bg-blue-600 hover:bg-blue-500 text-white px-4 py-2 rounded-full text-sm font-semibold cursor-pointer transition-all flex items-center gap-2">
+                <i data-lucide="upload" class="w-4 h-4"></i>
+                Load Simulation DB
+                <input type="file" id="dbFile" class="hidden" accept=".db">
+            </label>
+        </div>
+    </header>
+
+    <main id="app" class="p-6 max-w-[1600px] mx-auto hidden">
+        <!-- Dashboard Grid -->
+        <div class="grid grid-cols-12 gap-6">
+            
+            <!-- Sidebar: Controls & Metadata -->
+            <div class="col-span-12 lg:col-span-3 space-y-6">
+                <!-- Playback Card -->
+                <div class="glass p-5 rounded-2xl">
+                    <h3 class="text-slate-400 text-xs font-bold uppercase mb-4 flex items-center gap-2">
+                        <i data-lucide="play-circle" class="w-4 h-4 text-blue-400"></i> Playback Controls
+                    </h3>
+                    <div class="flex flex-col gap-6">
+                        <div class="flex justify-between items-center text-2xl font-bold">
+                            <span class="text-slate-500">STEP</span>
+                            <span id="currentStepDisplay" class="text-blue-400">0</span>
+                        </div>
+                        <input type="range" id="stepSlider" min="0" max="100" value="0" class="w-full h-1 bg-slate-700 rounded-lg appearance-none cursor-pointer">
+                        <div class="flex justify-center gap-4">
+                            <button id="btnPrev" class="p-3 bg-slate-800 hover:bg-slate-700 rounded-full transition-colors"><i data-lucide="skip-back" class="w-6 h-6 text-blue-400"></i></button>
+                            <button id="btnPlay" class="p-3 bg-blue-600 hover:bg-blue-500 rounded-full transition-all shadow-lg shadow-blue-500/20"><i data-lucide="play" class="w-6 h-6 text-white" id="playIcon"></i></button>
+                            <button id="btnNext" class="p-3 bg-slate-800 hover:bg-slate-700 rounded-full transition-colors"><i data-lucide="skip-forward" class="w-6 h-6 text-blue-400"></i></button>
+                        </div>
+                        <div class="flex items-center gap-4">
+                            <i data-lucide="zap" class="w-4 h-4 text-slate-500"></i>
+                            <input type="range" id="speedSlider" min="50" max="2000" step="50" value="500" class="flex-1 h-1 bg-slate-700 rounded-lg appearance-none cursor-pointer">
+                            <span class="text-xs font-mono text-slate-500 w-12" id="speedDisplay">500ms</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Metadata Card -->
+                <div class="glass p-5 rounded-2xl">
+                    <h3 class="text-slate-400 text-xs font-bold uppercase mb-4 flex items-center gap-2">
+                        <i data-lucide="info" class="w-4 h-4 text-purple-400"></i> Run Configuration
+                    </h3>
+                    <div id="metadataList" class="space-y-4">
+                        <!-- Populated by JS -->
+                    </div>
+                </div>
+
+                <!-- Final Evaluation Scores -->
+                <div id="evalCard" class="glass p-5 rounded-2xl border-purple-500/20 hidden">
+                    <h3 class="text-slate-400 text-xs font-bold uppercase mb-4 flex items-center gap-2">
+                        <i data-lucide="award" class="w-4 h-4 text-yellow-400 pulse"></i> Evaluation Results
+                    </h3>
+                    <div id="evalResults" class="grid grid-cols-2 gap-3">
+                        <!-- Populated by JS -->
+                    </div>
+                </div>
+            </div>
+
+            <!-- Main Panel: Charts & Status -->
+            <div class="col-span-12 lg:col-span-9 space-y-6">
+                <!-- Top Metrics Row -->
+                <div class="grid grid-cols-1 md:grid-cols-4 gap-4">
+                    <div class="glass p-4 rounded-xl border-l-4 border-emerald-500">
+                        <p class="text-slate-500 text-[10px] font-bold uppercase mb-1">Total Throughput</p>
+                        <p id="statTput" class="text-2xl font-bold">0.00 <span class="text-xs text-slate-400">Mbps</span></p>
+                    </div>
+                    <div class="glass p-4 rounded-xl border-l-4 border-rose-500">
+                        <p class="text-slate-500 text-[10px] font-bold uppercase mb-1">Mean Packet Loss</p>
+                        <p id="statLoss" class="text-2xl font-bold">0.0%</p>
+                    </div>
+                    <div class="glass p-4 rounded-xl border-l-4 border-amber-500">
+                        <p class="text-slate-500 text-[10px] font-bold uppercase mb-1">Satisfied Users</p>
+                        <p id="statSatisfied" class="text-2xl font-bold">0/0</p>
+                    </div>
+                    <div class="glass p-4 rounded-xl border-l-4 border-indigo-500">
+                        <p class="text-slate-500 text-[10px] font-bold uppercase mb-1">Current Reward</p>
+                        <p id="statReward" class="text-2xl font-bold">0.00</p>
+                    </div>
+                </div>
+
+                <!-- Real-time Charts Row -->
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                    <div class="glass p-5 rounded-2xl">
+                        <h4 class="text-slate-400 text-[10px] font-bold uppercase mb-4 flex justify-between">
+                            <span>RAN Performance (Tput / Loss)</span>
+                            <i data-lucide="activity" class="w-3 h-3 text-blue-400"></i>
+                        </h4>
+                        <div class="chart-container">
+                            <canvas id="chartPerf"></canvas>
+                        </div>
+                    </div>
+                    <div class="glass p-5 rounded-2xl">
+                        <h4 class="text-slate-400 text-[10px] font-bold uppercase mb-4 flex justify-between">
+                            <span>Fairness Index (Jain's)</span>
+                            <i data-lucide="trending-up" class="w-3 h-3 text-emerald-400"></i>
+                        </h4>
+                        <div class="chart-container">
+                            <canvas id="chartFairness"></canvas>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Cell & Actions Table -->
+                <div class="glass rounded-2xl overflow-hidden">
+                    <div class="p-4 border-b border-slate-800 flex justify-between items-center">
+                        <h3 class="text-slate-400 text-xs font-bold uppercase flex items-center gap-2">
+                            <i data-lucide="cpu" class="w-4 h-4 text-blue-400"></i> Cell Parameters & Control
+                        </h3>
+                    </div>
+                    <div class="overflow-x-auto">
+                        <table class="w-full text-left text-sm">
+                            <thead class="bg-slate-900/50 text-slate-500 uppercase text-[10px] tracking-widest font-bold">
+                                <tr>
+                                    <th class="px-6 py-4">Cell ID</th>
+                                    <th class="px-6 py-4">Tx Power (dBm)</th>
+                                    <th class="px-6 py-4">CIO (dB)</th>
+                                    <th class="px-6 py-4">TTT (ms)</th>
+                                    <th class="px-6 py-4">Users</th>
+                                    <th class="px-6 py-4">Load %</th>
+                                    <th class="px-6 py-4">Status</th>
+                                </tr>
+                            </thead>
+                            <tbody id="cellTableBody">
+                                <!-- Populated by JS -->
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <!-- Detailed Raw Metrics (Step Detail) -->
+                <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                     <div class="glass p-5 rounded-2xl">
+                        <h4 class="text-slate-400 text-[10px] font-bold uppercase mb-4">Raw Step Metrics (JSON)</h4>
+                        <pre id="stepJson" class="text-[10px] h-64 overflow-y-auto bg-black/40 p-4 rounded-lg font-mono text-emerald-400"></pre>
+                    </div>
+                    <div class="glass p-5 rounded-2xl">
+                        <h4 class="text-slate-400 text-[10px] font-bold uppercase mb-4">Handover Distribution</h4>
+                        <div class="chart-container">
+                             <canvas id="chartHO"></canvas>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <!-- Empty State -->
+    <div id="landing" class="flex flex-col items-center justify-center min-h-[80vh] p-6 text-center">
+        <div class="w-24 h-24 bg-slate-800 rounded-3xl flex items-center justify-center mb-8 shadow-2xl pulse">
+            <i data-lucide="database" class="w-12 h-12 text-slate-500"></i>
+        </div>
+        <h2 class="text-3xl font-bold text-white mb-2">Simulation Playback Interface</h2>
+        <p class="text-slate-400 max-w-sm mb-8">Select a <code>simulation_data_*.db</code> file from your <code>results/</code> directory to begin visual analysis.</p>
+        <div class="flex gap-4">
+             <button onclick="document.getElementById('dbFile').click()" class="bg-blue-600 hover:bg-blue-500 text-white px-8 py-3 rounded-full font-bold transition-all transform hover:scale-105">
+                Select Database File
+             </button>
+        </div>
+    </div>
+
+    <script>
+        // Initialize SQL.js
+        let config = { locateFile: file => `https://cdnjs.cloudflare.com/ajax/libs/sql.js/1.6.2/${file}` };
+        let SQL;
+        let db = null;
+        let simulationSteps = [];
+        let currentIndex = 0;
+        let isPlaying = false;
+        let playInterval = null;
+
+        // Charts
+        let charts = {};
+
+        initSql();
+
+        async function initSql() {
+            SQL = await initSqlJs(config);
+            lucide.createIcons();
+        }
+
+        // File Loading
+        document.getElementById('dbFile').addEventListener('change', async e => {
+            const file = e.target.files[0];
+            if (!file) return;
+
+            const reader = new FileReader();
+            reader.onload = async function() {
+                const Uints = new Uint8Array(reader.result);
+                db = new SQL.Database(Uints);
+                loadSimulationData();
+            };
+            reader.readAsArrayBuffer(file);
+        });
+
+        function loadSimulationData() {
+            // 1. Load Metadata
+            const metaRes = db.exec("SELECT key, value FROM metadata");
+            const metadata = {};
+            if (metaRes.length > 0) {
+                metaRes[0].values.forEach(row => {
+                   let val = row[1];
+                   try { val = JSON.parse(val); } catch(e) {}
+                   metadata[row[0]] = val;
+                });
+            }
+
+            // 2. Load Steps
+            const stepsRes = db.exec("SELECT * FROM steps ORDER BY step ASC");
+            simulationSteps = [];
+            if (stepsRes.length > 0) {
+                const cols = stepsRes[0].columns;
+                stepsRes[0].values.forEach(row => {
+                    const stepObj = {};
+                    cols.forEach((col, i) => {
+                        stepObj[col] = row[i];
+                        if (['state', 'action', 'next_state', 'metrics'].includes(col)) {
+                            try { stepObj[col] = JSON.parse(row[i]); } catch(e) { stepObj[col] = {}; }
+                        }
+                    });
+                    simulationSteps.push(stepObj);
+                });
+            }
+
+            document.getElementById('landing').classList.add('hidden');
+            document.getElementById('app').classList.remove('hidden');
+            document.getElementById('fileInfo').innerText = "Loaded " + simulationSteps.length + " steps";
+            
+            // Set UI Max Steps
+            document.getElementById('stepSlider').max = simulationSteps.length - 1;
+            
+            renderMetadata(metadata);
+            initCharts();
+            renderStep(0);
+        }
+
+        function renderMetadata(meta) {
+            const list = document.getElementById('metadataList');
+            const evalList = document.getElementById('evalResults');
+            const evalCard = document.getElementById('evalCard');
+            list.innerHTML = '';
+            evalList.innerHTML = '';
+            evalCard.classList.add('hidden');
+
+            const icons = {
+                scenario: 'map',
+                num_ues: 'users',
+                num_cells: 'radio',
+                sim_time: 'timer',
+                controller: 'terminal'
+            };
+
+            Object.keys(meta).forEach(key => {
+                if (key.startsWith('eval_')) {
+                    evalCard.classList.remove('hidden');
+                    const label = key.replace('eval_', '').replace(/_/g, ' ');
+                    let val = meta[key];
+                    if (typeof val === 'number') val = val.toLocaleString(undefined, { maximumFractionDigits: 2 });
+                    
+                    evalList.innerHTML += `
+                        <div class="bg-white/5 p-3 rounded-xl border border-white/5">
+                            <p class="text-[9px] text-slate-500 uppercase font-bold">${label}</p>
+                            <p class="text-sm font-bold text-white">${val}</p>
+                        </div>
+                    `;
+                } else {
+                    const icon = icons[key] || 'box';
+                    list.innerHTML += `
+                        <div class="flex items-center gap-3">
+                            <div class="w-8 h-8 rounded-lg bg-slate-800 flex items-center justify-center">
+                                <i data-lucide="${icon}" class="w-4 h-4 text-slate-400"></i>
+                            </div>
+                            <div>
+                                <p class="text-[10px] text-slate-500 uppercase font-bold">${key.replace(/_/g, ' ')}</p>
+                                <p class="text-sm font-semibold">${meta[key]}</p>
+                            </div>
+                        </div>
+                    `;
+                }
+            });
+            lucide.createIcons();
+        }
+
+        function renderStep(idx) {
+            currentIndex = idx;
+            const step = simulationSteps[idx];
+            if (!step) return;
+
+            // UI Elements
+            document.getElementById('currentStepDisplay').innerText = step.step;
+            document.getElementById('stepSlider').value = idx;
+
+            // Stats
+            const m = step.metrics || {};
+            document.getElementById('statTput').innerHTML = `${(m.avg_throughput || 0).toFixed(2)} <span class="text-xs text-slate-400">Mbps</span>`;
+            document.getElementById('statLoss').innerText = `${((m.avg_loss || 0) * 100).toFixed(1)}%`;
+            document.getElementById('statReward').innerText = (step.reward || 0).toFixed(2);
+            
+            const totalUes = m.e2_data?.ue_metrics ? Object.keys(m.e2_data.ue_metrics).length : 20;
+            const satisfied = (m.z_success || 0) * totalUes;
+            document.getElementById('statSatisfied').innerText = `${Math.round(satisfied)} / ${totalUes}`;
+
+            // Cell Table
+            const tbody = document.getElementById('cellTableBody');
+            tbody.innerHTML = '';
+            
+            const cellMetrics = m.e2_data?.cell_metrics || {};
+            const actions = m.actions_applied?.cell || m.e2_data?.actions_applied?.cell || [];
+
+            Object.keys(cellMetrics).forEach((cid, i) => {
+                const cm = cellMetrics[cid];
+                const act = actions.find(a => a.cell_id == cid) || {};
+                
+                const load = (cm.rb_utilization || 0) * 100;
+                const loadColor = load > 80 ? 'text-rose-400' : (load > 50 ? 'text-amber-400' : 'text-emerald-400');
+                
+                tbody.innerHTML += `
+                    <tr class="border-b border-slate-800/50 hover:bg-white/5 transition-colors">
+                        <td class="px-6 py-4 font-mono text-blue-400">#${cid}</td>
+                        <td class="px-6 py-4 font-semibold">${(act.tx_power_dbm || 46).toFixed(1)}</td>
+                        <td class="px-6 py-4">${(act.cell_individual_offset_db || 0).toFixed(1)}</td>
+                        <td class="px-6 py-4 text-slate-400">${Math.round(act.time_to_trigger_ms || 192)}</td>
+                        <td class="px-6 py-4">${cm.num_connected_ues || 0}</td>
+                        <td class="px-6 py-4 font-bold ${loadColor}">${load.toFixed(1)}%</td>
+                        <td class="px-6 py-4">
+                            <span class="px-2 py-1 rounded-full text-[10px] font-bold bg-emerald-500/10 text-emerald-500 border border-emerald-500/20">ACTIVE</span>
+                        </td>
+                    </tr>
+                `;
+            });
+
+            // JSON Detail
+            document.getElementById('stepJson').innerText = JSON.stringify(step.metrics, null, 2);
+
+            updateCharts(idx);
+        }
+
+        function initCharts() {
+            const ctxPerf = document.getElementById('chartPerf').getContext('2d');
+            charts.perf = new Chart(ctxPerf, {
+                type: 'line',
+                data: {
+                    labels: simulationSteps.map(s => s.step),
+                    datasets: [
+                        { label: 'Tput (Mbps)', data: simulationSteps.map(s => s.metrics.avg_throughput), borderColor: '#3b82f6', tension: 0.4, yAxisID: 'y' },
+                        { label: 'Loss (%)', data: simulationSteps.map(s => s.metrics.avg_loss * 100), borderColor: '#f43f5e', tension: 0.4, yAxisID: 'y1' }
+                    ]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: { legend: { display: false } },
+                    scales: {
+                        x: { display: false },
+                        y: { position: 'left', grid: { color: 'rgba(255,255,255,0.05)' } },
+                        y1: { position: 'right', grid: { display: false } }
+                    }
+                }
+            });
+
+            const ctxFair = document.getElementById('chartFairness').getContext('2d');
+            charts.fairness = new Chart(ctxFair, {
+                type: 'line',
+                data: {
+                    labels: simulationSteps.map(s => s.step),
+                    datasets: [{ label: 'Fairness', data: simulationSteps.map(s => s.metrics.jains), borderColor: '#10b981', fill: true, backgroundColor: 'rgba(16, 185, 129, 0.1)', tension: 0.4 }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: { legend: { display: false } },
+                    scales: {
+                        x: { display: false },
+                        y: { min: 0, max: 1, grid: { color: 'rgba(255,255,255,0.05)' } }
+                    }
+                }
+            });
+
+            const ctxHO = document.getElementById('chartHO').getContext('2d');
+            charts.ho = new Chart(ctxHO, {
+                type: 'bar',
+                data: {
+                    labels: simulationSteps.map(s => s.step),
+                    datasets: [{ label: 'HO Success', data: simulationSteps.map(s => {
+                        const ue_m = s.metrics.e2_data?.ue_metrics || {};
+                        return Object.values(ue_m).reduce((a, b) => a + (b.handover_successes || 0), 0);
+                    }), backgroundColor: '#8b5cf6' }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: { legend: { display: false } },
+                    scales: { x: { display: false }, y: { beginAtZero: true, grid: { color: 'rgba(255,255,255,0.05)' } } }
+                }
+            });
+        }
+
+        function updateCharts(idx) {
+             // Redraw charts with vertical line at idx?
+             // Not implemented yet to keep performance high
+        }
+
+        // Controls
+        document.getElementById('stepSlider').addEventListener('input', e => {
+            renderStep(parseInt(e.target.value));
+        });
+
+        document.getElementById('btnPrev').onclick = () => {
+            if (currentIndex > 0) renderStep(currentIndex - 1);
+        };
+        document.getElementById('btnNext').onclick = () => {
+             if (currentIndex < simulationSteps.length - 1) renderStep(currentIndex + 1);
+        };
+
+        const speedSlider = document.getElementById('speedSlider');
+        const speedDisplay = document.getElementById('speedDisplay');
+        speedSlider.oninput = () => { speedDisplay.innerText = speedSlider.value + 'ms'; if (isPlaying) togglePlay(true); };
+
+        document.getElementById('btnPlay').onclick = () => togglePlay();
+
+        function togglePlay(restart = false) {
+            if (isPlaying && !restart) {
+                isPlaying = false;
+                clearInterval(playInterval);
+                document.getElementById('playIcon').setAttribute('data-lucide', 'play');
+            } else {
+                if (!restart) isPlaying = true;
+                document.getElementById('playIcon').setAttribute('data-lucide', 'pause');
+                clearInterval(playInterval);
+                playInterval = setInterval(() => {
+                    if (currentIndex < simulationSteps.length - 1) {
+                        renderStep(currentIndex + 1);
+                    } else {
+                        togglePlay();
+                    }
+                }, parseInt(speedSlider.value));
+            }
+            lucide.createIcons();
+        }
+    </script>
+</body>
+</html>
