@@ -109,13 +109,49 @@ For subsequent starts, you can use:
 source .venv/bin/activate
 ```
 
-## 🛠️ Utilities
+## 🛠️ Multi-Language Utilities
 
-The `scripts/` directory contains multi-language utilities to assist with development:
+The `scripts/` directory contains a curated set of tools to automate the Radio-Cortex lifecycle:
 
-- **Cleanup**: `bash scripts/cleanup.sh` - Removes logs, residuals, and caches.
-- **Curriculum Training**: `bash scripts/train_curriculum.sh` - 8-stage progressive "Lean Power Suite".
-- **Log Analyzer (Go)**: `go run scripts/log_analyzer.go`
+### **🏗️ Setup & Infrastructure**
+- **Full Setup**: `bash scripts/setup.sh` - Automated venv creation, dependency install, and ns-3 compilation.
+- **Kafka Bootstrap**: `bash scripts/run_kafka_native.sh` - One-click Kafka/Zookeeper installer and service starter.
+- **Service Control**: `bash scripts/start_kafka.sh` - Reliable service monitor for existing Kafka installations.
+
+### **🚅 Training & Optimization**
+- **Curriculum Master**: [train_curriculum.sh](file:///home/hp/Radio-Cortex/scripts/train_curriculum.sh) - Our flagship 8-stage progressive "Lean Power Suite" mastery script.
+- **Quick Test**: `bash scripts/train_quick.sh` - 100-step smoke test for pipeline verification.
+- **Baseline Logic**: `python3 evaluation_baseline.py` - Core logic for benchmarking AI vs Static policies.
+
+### **🧹 Maintenance**
+- **Deep Cleanup**: `bash scripts/cleanup.sh` - Efficiently purges logs, residuals, CSVs, and `__pycache__` to reclaim storage and keep the project snappy.
+- **Log Analyzer (Go)**: `go run scripts/log_analyzer.go` - High-performance log parser for raw ns-3 trace analysis.
+
+---
+
+## 🌐 Unified Radio-Cortex Web Suite
+
+We have unified our specialized analysis tools into a single, high-performance web interface.
+
+**Access:** Open [ui/index.html](file:///home/hp/Radio-Cortex/ui/index.html) in any modern browser.
+
+### **1. Eval Dashboard**
+- **Role:** High-level performance tracking.
+- **Data:** Parses `results/experiment_results.csv`.
+- **Features:** Radar charts for composite health, bar charts for scenario comparison, and live table filtering.
+
+### **2. ModelBench**
+- **Role:** Deep-dive model comparison.
+- **Features:** Bubble charts for Pareto analysis (Accuracy vs Inference Speed), Parameter-to-Reward mapping, and ranking logic to identify the true "State of the Art" model in your directory.
+
+### **3. Simulation Visualizer**
+- **Role:** Step-by-step playback of agent behavior.
+- **Data:** Uses specialized **SQLite Database** files (`results/simulation_data_*.db`).
+- **Features:** Interactive timeline, per-cell control action visualization (TxPower/CIO/TTT), and real-time performance curves (Throughput/Delay/Loss).
+
+### **4. Integrated Control**
+- Unified sidebar navigation allows seamless switching between monitoring and analysis without reloading data.
+- Direct links to the **Gradio Controller** (running on `localhost:7860`).
 
 ---
 
@@ -243,7 +279,7 @@ python3 radio_cortex_complete.py --mode eval --model bdh --scenario mobility_sto
 
 # After curriculum training — point to the curriculum checkpoint
 python3 radio_cortex_complete.py --mode eval --model bdh --scenario all --n-envs 4 \
-    --model-path models/curriculum/stage_13.pt
+    --model-path models/curriculum/stage_3.pt
 ```
 
 #### 3. Comparing Specific Architectures
@@ -426,7 +462,7 @@ Implements the PPO algorithm from scratch using PyTorch.
 ### 4. Policy Architectures Supported:
 All policies use **state-dependent exploration** (learned log-std heads) for adaptive exploration.
 
-*   **BDH** (Default): Baby Dragon Hatchling (Scale-Free Transformer) — Cell tokenization (12 features per cell), bidirectional self-attention across cells
+*   **BDH** (Default): Baby Dragon Hatchling
 *   **GPT-2** (`gpt2`): Standard Decoder-Only Transformer — Causal attention over time
 *   **Transformer-XL** (`trxl`): Segment-Level Recurrence
 *   **Linear Transformer** (`linear`): O(T) Kernel Attention (Katharopoulos)
@@ -466,10 +502,18 @@ Extracts metrics and evaluates trained models against the static baseline, compu
 **Role:** 8-Stage "Lean Power Suite" Curriculum.
 Automates the progressive training of the RL agent from simple to complex congestion scenarios, managing storage and preventing catastrophic forgetting.
 
-### 10. Visualization & Deployment (`ui/`, Docker)
-**Role:** Interaction and Containerization.
-*   **`ui/dashboard.html`** & **`ui/gradio_app.py`**: Rich visual dashboards for viewing metrics securely.
-*   **`Dockerfile`** & **`docker-compose.yml`**: Full containerized deployment for Kafka, Zookeeper, and the compiled ns-3 Agent environment.
+### 10. Unified Web Suite (`ui/`)
+**Role:** Integrated visualization and command interface.
+- **`ui/index.html`**: The unified single-page shell with sidebar navigation.
+- **`ui/pages/`**: Modularized JavaScript logic:
+    - `dashboard.js`: Logic for the Evaluation Dashboard.
+    - `modelbench.js`: Logic for ranking and comparing weights.
+    - `visualizer.js`: SQL.js powered simulation playback logic.
+- **`ui/styles.css`**: Shared premium dark-theme design system.
+- **`ui/gradio_app.py`**: Python-based interactive controller for manual overrides.
+
+### 11. Infrastructure & Deployment
+- **`Dockerfile`** & **`docker-compose.yml`**: Full containerized deployment for Kafka, Zookeeper, and the compiled ns-3 Agent environment.
 
 ---
 
@@ -546,7 +590,6 @@ All debug and verification logs are stored in the `logs/` directory:
 |:---|:---|
 | `logs/ns3_out_X.log` | Standard output from ns-3 simulation instance X. Includes E2 interface heartbeats. |
 | `logs/ns3_err_X.log` | Standard error (debug logs) from ns-3 simulation instance X. Critical for debugging C++ crashes. |
-| `logs/kpm_verification_X.jsonl` | Audit trail of raw vs reported KPM values for environment X, used to verify MetricCollector fidelity. |
 | `results/simulation_data_*.db` | **Unified SQLite Database** containing all step traces (state/action/reward) and final evaluation results. Ideal for interactive visual playback and query-based analysis. |
 | `logs/worker_failure_X.log` | Error tracebacks specifically for environment worker X if it fails to initialize. |
 
@@ -561,20 +604,7 @@ Radio-Cortex includes a high-fidelity, web-based playback tool for analyzing age
 3.  **Load Data**: Drag and drop the `.db` file into the window (or use the "Load" button).
 4.  **Analyze**: Use playback controls to step through the simulation, view real-time charts, and inspect per-cell control actions.
 
-> [!TIP]
-> This tool is entirely client-side (using **SQL.js**). No backend server is required — just open the HTML file and load your data.
-
 ---
-
-## 📈 Training Dashboard Guide
-
-| Metric | Target Trend | What it means |
-|:---|:---:|:---|
-| **Reward** | ↗ Growing | The agent is successfully reducing congestion and improving user QoS. |
-| **Trend** | ↗ (Green) | Recent updates have improved performance by 5% or more. |
-| **Expl Var** | → 0.9 | High values mean the agent correctly predicts the "cost" of its actions. |
-| **Entropy** | ↘ Decreasing | The agent is narrowing down its optimal control strategy (good). |
-| **Policy Loss** | ⇄ Oscillating | Normal in PPO; indicates the agent is exploring different tradeoffs. |
 
 # KPM Report Reference
 
@@ -623,40 +653,9 @@ For each Cell/eNodeB, keys are formatted as `cell_{id}_{metric}`.
 | `_queue` | count | 0 - 5000 | Queue length (Estimated from per-cell packet loss). |
 | `_ues` | count | 0 - 50 | Number of connected UEs in this cell. |
 
-## Example JSON Payload
-
-```json
-{
-  "timestamp": 12.5,
-  "ue_0_tput": 5.2,
-  "ue_0_delay": 15.4,
-  "ue_0_loss": 0.0,
-  "ue_0_sinr": 18.5,
-  "ue_0_rsrp": -85.0,
-  "ue_0_rsrq": -10.5,
-  "ue_0_cqi": 12.0,
-  "ue_0_rbs": 25.0,
-  "ue_0_ul_rbs": 10.0,
-  "ue_0_cell": 1,
-  "ue_0_ho_att": 0,
-  "ue_0_ho_succ": 0,
-  "ue_0_rsrp_var": 0.5,
-  "ue_0_rsrq_var": 0.1,
-  "ue_0_buffer": 0.0,
-
-  "cell_0_power": 43.0,
-  "cell_0_load": 4,
-  "cell_0_avg_rb_req": 15.0,
-  "cell_0_rb_util": 0.75,
-  "cell_0_queue": 150,
-  "cell_0_ues": 4
-}
-```
-
-
 # Complete Model Analysis
 
-This document provides a comprehensive analysis of the reinforcement learning models found in the `models/` directory. The metadata (parameter counts, training steps, layer architectures) is extracted **directly from the `.pt` checkpoint files** rather than relying on prior documentation.
+This section provides a comprehensive analysis of the reinforcement learning models found in the `models/` directory. The metadata (parameter counts, training steps, layer architectures) is extracted **directly from the `.pt` checkpoint files** rather than relying on prior documentation.
 
 ## 📊 Summary Table
 
