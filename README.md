@@ -374,17 +374,6 @@ Measures the "cost of intelligence" - how heavy the model is in terms of latency
 
 ---
 
-#### 3. Excluded Metrics & Limitations
-
-The following metrics were considered but **not implemented** due to simulator constraints:
-
-| Metric | Category | Reason for Exclusion |
-| :--- | :--- | :--- |
-| **Collision Rate** | Reliability | Requires MAC layer tracing with significant I/O overhead. |
-| **Control Overhead** | Resource | Requires deep packet inspection, not feasible in real-time RL. |
-
----
-
 ## 🧠 Stationary Reward Engine
 
 Radio-Cortex uses a **single-stage, stationary reward function** optimized for distributed RL training (SubprocVecEnv). A **Survival Bias** of `+1.0` keeps rewards positive during exploration.
