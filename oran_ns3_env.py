@@ -8,6 +8,7 @@ import gymnasium as gym
 from gymnasium import spaces
 import numpy as np
 import subprocess
+import signal
 try:
     import orjson as json
 except ImportError:
@@ -453,7 +454,7 @@ class NS3Interface:
             start_poll = time.time()
             found_partitions = False
             # Reduced from 10s to 1s as per user suggestion for "fail fast" behavior
-            while time.time() - start_poll < 10.0: 
+            while time.time() - start_poll < 1.0: 
                 self.kafka_consumer.poll(timeout_ms=100) # Faster poll
                 partitions = self.kafka_consumer.assignment()
                 if partitions:
@@ -671,13 +672,15 @@ class NS3Interface:
                  self.adapter_process.kill()
             
         if self.ns3_process:
-            self.ns3_process.terminate()
             try:
-                self.ns3_process.wait(timeout=5)
+                # Instantly kill the entire ns-3 process group to prevent rollout freezing
+                os.killpg(os.getpgid(self.ns3_process.pid), signal.SIGKILL)
+            except Exception:
+                pass
+            try:
+                self.ns3_process.wait(timeout=1)
             except subprocess.TimeoutExpired:
-                print(f"Warning: Force killing ns-3 process {self.ns3_process.pid}...")
-                self.ns3_process.kill()
-                self.ns3_process.wait()
+                pass
             self.ns3_process = None
 
 

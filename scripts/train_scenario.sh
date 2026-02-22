@@ -15,15 +15,15 @@
 
 echo "🚀 Starting Training for Flash Crowd..."
 
-python3 radio_cortex_complete.py \
+./.venv/bin/python3 radio_cortex_complete.py \
     --mode train \
     --scenario flash_crowd \
     --model bdh \
     --n-envs 4 \
     --total-timesteps 100000 \
     --kpm-interval 100 \
-    --rollout-steps 512 \
-    --batch-size 512 \
+    --rollout-steps 256 \
+    --batch-size 256 \
     --lr-gamma 0.99 \
     --learning-rate 3e-5 \
     --clip-epsilon 0.1 \
