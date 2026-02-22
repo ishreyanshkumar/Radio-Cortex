@@ -22,13 +22,13 @@ python3 radio_cortex_complete.py \
     --n-envs 4 \
     --total-timesteps 100000 \
     --kpm-interval 100 \
-    --rollout-steps 128 \
-    --batch-size 128 \
+    --rollout-steps 512 \
+    --batch-size 512 \
     --lr-gamma 0.99 \
-    --learning-rate 8e-5 \
+    --learning-rate 3e-5 \
     --clip-epsilon 0.1 \
     --ent-coef 0.03 \
-    --gamma 0.98 \
-    --ppo-epochs 20
+    --gamma 0.99 \
+    --ppo-epochs 10
 
 echo "✅ Training Complete. Check logs/reward_metrics_*.csv for results."

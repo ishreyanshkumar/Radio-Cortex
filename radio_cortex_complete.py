@@ -769,21 +769,21 @@ def main():
 
     # --- Hyperparameters Group ---
     hyper = parser.add_argument_group('Advanced PPO / RL Tuning')
-    hyper.add_argument('--learning-rate', type=float, default=5e-5, help='PPO Learning rate')
-    hyper.add_argument('--batch-size', type=int, default=128, help='Batch size for optimization updates')
-    hyper.add_argument('--rollout-steps', type=int, default=128, help='Steps per rollout trajectory')
+    hyper.add_argument('--learning-rate', type=float, default=3e-5, help='PPO Learning rate')
+    hyper.add_argument('--batch-size', type=int, default=512, help='Batch size for optimization updates')
+    hyper.add_argument('--rollout-steps', type=int, default=512, help='Steps per rollout trajectory')
     hyper.add_argument('--gamma', type=float, default=0.99, help='Discount factor')
     hyper.add_argument('--hidden-dim', type=int, default=256, help='Network hidden dimension')
     hyper.add_argument('--gae-lambda', type=float, default=0.95, help='GAE normalization lambda')
     hyper.add_argument('--clip-epsilon', type=float, default=0.1, help='PPO clipping bound')
     hyper.add_argument('--vf-coef', type=float, default=0.5, help='Value function loss weight')
-    hyper.add_argument('--ent-coef', type=float, default=0.02, help='Entropy regularization weight')
+    hyper.add_argument('--ent-coef', type=float, default=0.03, help='Entropy regularization weight')
     hyper.add_argument('--max-grad-norm', type=float, default=0.5, help='Gradient clipping threshold')
     hyper.add_argument('--checkpoint-interval', type=int, default=10, help='Checkpoint frequency (updates)')
     hyper.add_argument('--log-interval', type=int, default=10, help='Console log frequency (updates)')
     hyper.add_argument('--ppo-epochs', type=int, default=20, help='PPO update epochs per batch')
     hyper.add_argument('--lr-gamma', type=float, default=0.99, help='Exponential LR decay gamma per update')
-    hyper.add_argument('--target-kl', type=float, default=0.05, help='Target KL divergence for early stopping')
+    hyper.add_argument('--target-kl', type=float, default=0.03, help='Target KL divergence for early stopping')
 
     args = parser.parse_args()
 

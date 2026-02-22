@@ -189,12 +189,12 @@ To achieve maximum accuracy for project displays or research, use the hypertuned
 
 | Parameter | Default | Turbo Config | Rationale |
 |:---|:---:|:---:|:---|
-| `--learning-rate` | 5e-5 | **5e-5** | Safe stable LR for sensitive rewards |
-| `--batch-size` | 128 | **2048** | High throughput for 48-core hardware |
-| `--rollout-steps` | 128 | **256** | Longer horizons for better advantage estimation |
-| `--ppo-epochs` | 20 | **20** | High data efficiency (replay experience) |
+| `--learning-rate` | 3e-5 | **3e-5** | Safe stable LR for sensitive rewards |
+| `--batch-size` | 512 | **512** | High throughput for modern hardware |
+| `--rollout-steps` | 512 | **512** | Longer horizons for better advantage estimation |
+| `--ppo-epochs` | 10 | **10** | High data efficiency (cleaner batches) |
 | `--hidden-dim` | 256 | **512** | Wider network for better GPU utilization |
-| `--ent-coef` | 0.02 | **0.03** | Boosted exploration to prevent collapse |
+| `--ent-coef` | 0.03 | **0.03** | Boosted exploration to prevent collapse |
 | `--gamma` | 0.99 | **0.99** | Standard discount for 50s episodes |
 | `--sim-time` | 60.0 | **50.0** | Meaningful congestion dynamics |
 
@@ -204,15 +204,15 @@ To achieve maximum accuracy for project displays or research, use the hypertuned
 #### 3. Advanced RL Tuning
 | Argument | Default | Description |
 |:---|:---|:---|
-| `--learning-rate` | 5e-5 | PPO Learning rate. |
-| `--batch-size` | 128 | Batch size for optimization updates. |
-| `--rollout-steps` | 128 | Steps per rollout trajectory. |
+| `--learning-rate` | 3e-5 | PPO Learning rate. |
+| `--batch-size` | 512 | Batch size for optimization updates. |
+| `--rollout-steps` | 512 | Steps per rollout trajectory. |
 | `--gamma` | 0.99 | Discount factor. |
 | `--hidden-dim` | 256 | Network hidden dimension. |
 | `--gae-lambda` | 0.95 | GAE normalization lambda. |
 | `--clip-epsilon` | 0.1 | PPO clipping bound (Conservative). |
 | `--vf-coef` | 0.5 | Value function loss weight. |
-| `--ent-coef` | 0.02 | Entropy regularization weight. |
+| `--ent-coef` | 0.03 | Entropy regularization weight. |
 | `--max-grad-norm` | 0.5 | Gradient clipping threshold. |
 | `--checkpoint-interval` | 10 | Checkpoint frequency (updates). |
 | `--log-interval` | 10 | Console log frequency (updates). |
@@ -614,17 +614,17 @@ bash scripts/train_curriculum.sh
 ```
 
 | Stage | Focus | Timesteps | updates | Skill Description |
-|:---:|:---|:---:|:---:|:---|
-| 1 | Flash Crowd | 300k | ~15 | Basic load balancing (Bootstrap) |
-| 2 | Sleepy Campus | 300k | ~15 | Energy efficiency (Green RAN) |
-| 3 | Urban Canyon | 400k | ~20 | Signal recovery & Robustness |
-| 4 | Mobility Storm | 500k | ~25 | Handover Optimization |
-| 5 | Traffic Burst | 500k | ~25 | Congestion Management |
-| 6 | Ambulance | 500k | ~25 | QoS Priority & Slicing |
-| 7 | Spectrum Crunch | 500k | ~25 | Spectral Efficiency |
-| 8 | Generalization Mix | 800k | ~40 | Multi-goal Mastery |
+|:---:|:---:|:---:|:---:|:---|
+| 1 | Flash Crowd | 400k | ~16 | Basic load balancing (Bootstrap) |
+| 2 | Sleepy Campus | 450k | ~18 | Energy efficiency (Green RAN) |
+| 3 | Urban Canyon | 500k | ~20 | Signal recovery & Robustness |
+| 4 | Mobility Storm | 550k | ~22 | Handover Optimization |
+| 5 | Traffic Burst | 600k | ~24 | Congestion Management |
+| 6 | Ambulance | 650k | ~26 | QoS Priority & Slicing |
+| 7 | Spectrum Crunch | 700k | ~28 | Spectral Efficiency |
+| 8 | Generalization Mix | 1000k | ~40 | Multi-goal Mastery |
 
-**Total: ~3.8M timesteps** to full multi-domain mastery.
+**Total: ~4.85M timesteps** to full multi-domain mastery.
 
 ### Network Size Curriculum (Manual)
 ```bash
