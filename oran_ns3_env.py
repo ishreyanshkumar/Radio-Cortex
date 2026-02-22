@@ -443,27 +443,26 @@ class NS3Interface:
             self.kafka_consumer = KafkaConsumer(
                 kpm_topic,
                 bootstrap_servers=[os.getenv('KAFKA_BOOTSTRAP', 'localhost:9092')],
-                auto_offset_reset='latest',  # Catch ONLY new messages to avoid stale data
+                auto_offset_reset='earliest',  # Read from beginning to catch startup msgs
                 enable_auto_commit=False,
                 value_deserializer=lambda x: json.loads(x.decode('utf-8')),
                 group_id=f'oran_rl_agent{self.config.topic_suffix}_{int(time.time())}' # Unique group ID
             )
 
-            # Optimization: Use 'latest' to catch only new messages. 
-            # We connect BEFORE starting ns-3 to ensure we are ready.
-            # No seek_to_end needed as group_id is unique and auto_offset_reset='latest' handles it.
-            # Wait for assignment to ensure consumer is ready before ns-3 starts.
+            # Optimization: Wait for partition assignment with a tight loop rather than a hard 30s poll
             start_poll = time.time()
             found_partitions = False
-            while time.time() - start_poll < 5.0: 
-                self.kafka_consumer.poll(timeout_ms=100) 
+            # Reduced from 10s to 1s as per user suggestion for "fail fast" behavior
+            while time.time() - start_poll < 10.0: 
+                self.kafka_consumer.poll(timeout_ms=100) # Faster poll
                 partitions = self.kafka_consumer.assignment()
                 if partitions:
+                    self.kafka_consumer.seek_to_end(*partitions)
                     found_partitions = True
                     break
             
             if not found_partitions and self.config.verbose:
-                print(f"Note: Kafka partitions not yet assigned for Env {self.config.topic_suffix} (will auto-assign on first poll)")
+                print(f"Warning: Kafka partitions not assigned within 10s for Env {self.config.topic_suffix}")
 
             self.last_kpm_ts = None
             
@@ -897,7 +896,7 @@ class ORANns3Env(gym.Env):
             
             e2_msg = self.ns3.receive_kpm_report(
                 wait_for_new=True,
-                max_wait_s=5.0  # Fail fast if simulation stalls (5s is plenty for 100ms interval)
+                max_wait_s=60.0
             )
             next_state = self._extract_state(e2_msg)
             

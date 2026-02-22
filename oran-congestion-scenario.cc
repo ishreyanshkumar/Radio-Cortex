@@ -135,8 +135,9 @@ public:
                             uint8_t componentCarrierId);
   void ReportUlPhyResourceBlocks(uint16_t rnti, const std::vector<int> &rbs);
   void ReportDlScheduling(DlSchedulingCallbackInfo info);
-  void ReportAppRx(uint32_t ueIndex, Ptr<const Packet> packet);
-
+  void ReportAppRx(uint32_t ueIndex, Ptr<const Packet> packet,
+                   const Address &from);
+  
   // Handover Callbacks
   void ReportHandoverStart(uint64_t imsi, uint16_t cellId, uint16_t rnti,
                            uint16_t targetCellId);
@@ -330,7 +331,8 @@ void MetricCollector::ReportDlScheduling(DlSchedulingCallbackInfo info) {
   //           << " EstRBs=" << estimatedRbs << std::endl;
 }
 
-void MetricCollector::ReportAppRx(uint32_t ueIndex, Ptr<const Packet> packet) {
+void MetricCollector::ReportAppRx(uint32_t ueIndex, Ptr<const Packet> packet,
+                                  const Address &from) {
   SeqTsHeader seqTs;
   // We need to copy because packet is const
   Ptr<Packet> p = packet->Copy();

@@ -65,6 +65,7 @@ class BDHPolicy(nn.Module):
         )
         
         self.apply(self._init_weights)
+        self._apply_specialized_init()
 
     def _init_weights(self, module):
         if isinstance(module, (nn.Linear, nn.Conv2d)):
@@ -72,6 +73,14 @@ class BDHPolicy(nn.Module):
                 nn.init.orthogonal_(module.weight, gain=np.sqrt(2))
             if module.bias is not None:
                 nn.init.constant_(module.bias, 0)
+
+    def _apply_specialized_init(self):
+        # Action head should start with near-zero weights (gain=0.01) to prevent action saturation
+        if hasattr(self, 'action_head') and isinstance(self.action_head[-1], nn.Linear):
+            nn.init.orthogonal_(self.action_head[-1].weight, gain=0.01)
+        # Value head should start with gain=1.0
+        if hasattr(self, 'value_head') and isinstance(self.value_head[-1], nn.Linear):
+            nn.init.orthogonal_(self.value_head[-1].weight, gain=1.0)
 
     # ── Tokenization ──────────────────────────────────────────────
     def _process_state(self, state: torch.Tensor) -> torch.Tensor:
