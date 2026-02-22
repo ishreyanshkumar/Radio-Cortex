@@ -1,6 +1,11 @@
-# Linguist overrides
-scripts/*.rs linguist-documentation=false
-scripts/*.go linguist-documentation=false
-scripts/*.js linguist-documentation=false
-*.html linguist-documentation=false
+# Exclude vendored dependencies and build artifacts from language stats
+ns-3-allinone/** linguist-vendored
+kafka_** linguist-vendored
+java-17/** linguist-vendored
 
+# Exclude documentation and data files
+*.md linguist-documentation
+*.pdf linguist-documentation
+results/*.csv linguist-documentation
+telemetry/*.jsonl linguist-documentation
+logs/*.log linguist-documentation
