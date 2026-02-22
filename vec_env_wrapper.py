@@ -149,7 +149,7 @@ def make_vec_env(
     return vec_env
 
 
-def save_vec_normalize(vec_env: VecEnv, path: str) -> None:
+def save_vec_normalize(vec_env: 'VecEnv', path: str) -> None:
     """
     Save VecNormalize statistics to a file.
     
@@ -171,7 +171,7 @@ def save_vec_normalize(vec_env: VecEnv, path: str) -> None:
     print("[VecEnv] Warning: No VecNormalize found in environment chain")
 
 
-def load_vec_normalize(vec_env: VecEnv, path: str) -> None:
+def load_vec_normalize(vec_env: 'VecEnv', path: str) -> None:
     """
     Load VecNormalize statistics from a file.
     

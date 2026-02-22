@@ -256,6 +256,20 @@ def train_radio_cortex(
 # Evaluation Pipeline
 # ============================================================================
 
+def _get_model_id(model_path: str) -> str:
+    """Helper to get the identifier used for results/CSV logging"""
+    if model_path == "base":
+        return "Baseline"
+        
+    try:
+        repo_root = Path(__file__).parent.absolute()
+        abs_model = Path(model_path).absolute()
+        if abs_model.is_relative_to(repo_root):
+            return str(abs_model.relative_to(repo_root))
+        return Path(model_path).name
+    except Exception:
+        return Path(model_path).name
+
 def evaluate_radio_cortex(
     config: NS3Config,
     model_path: str = 'models/radio_cortex.pt',
@@ -297,6 +311,27 @@ def evaluate_radio_cortex(
     else:
         scenarios = all_scenarios
         print(f"Running full benchmark on all {len(all_scenarios)} scenarios...")
+    
+    # --- SKIP REDUNDANT EVALUATIONS ---
+    model_id = _get_model_id(model_path)
+    completed_pairs = ResultLogger.get_completed_pairs() # returns List[Tuple(scenario, controller)]
+    
+    remaining_scenarios = []
+    skipped_scenarios = []
+    for s in scenarios:
+        if (s, model_id) in completed_pairs:
+            skipped_scenarios.append(s)
+        else:
+            remaining_scenarios.append(s)
+            
+    if skipped_scenarios:
+        print(f"  [INFO] Skipping {len(skipped_scenarios)} scenarios already present in results: {', '.join(skipped_scenarios)}")
+        
+    if not remaining_scenarios:
+        print(f"✅ All requested scenarios for {model_id} are already completed. Nothing to do.")
+        return {}
+        
+    scenarios = remaining_scenarios
     
     # Run evaluations
     all_results = {}
@@ -582,132 +617,110 @@ def evaluate_single_scenario(
     }
 
     # Decoupled evaluation: run ONLY baseline or ONLY AI based on model_type
+    max_retries = 3
     if model_path == "base":
         # ── Baseline ONLY ──
-        env = create_oran_env(config)
-        controller_label = f"Baseline ({scenario_name})"
-        try:
-            results['Baseline'] = evaluator.evaluate_controller(
-                baseline, env, controller_label,
-                progress_queue=progress_queue,
-                task_id=f"{scenario_idx}_baseline"
-            )
-        finally:
-            env.close()
+        success = False
+        for attempt in range(max_retries):
+            env = create_oran_env(config)
+            controller_label = f"Baseline ({scenario_name})"
+            try:
+                results['Baseline'] = evaluator.evaluate_controller(
+                    baseline, env, controller_label,
+                    progress_queue=progress_queue,
+                    task_id=f"{scenario_idx}_baseline"
+                )
+                success = True
+                break
+            except Exception as e:
+                print(f"      [WARN] Baseline attempt {attempt+1}/{max_retries} failed for {scenario_name}: {e}")
+                results['Baseline'] = None
+            finally:
+                env.close()
+        
+        if not success:
+            print(f"      [ERROR] Baseline failed after {max_retries} attempts for {scenario_name}")
     else:
         # ── RL Model ONLY ──
-        controller_label = f"Radio-Cortex ({scenario_name})"
-        try:
-            checkpoint = torch.load(model_path, map_location='cpu')
-            state_dict = checkpoint['policy_state_dict']
-            
-            # Detect model type
-            model_type = getattr(config, 'model_type', 'bdh')
-            
-            # Detect dimensions from state_dict (if standard MLP)
-            stored_action_dim = 0
-            stored_state_dim = 0
+        model_id = _get_model_id(model_path)
+        controller_label = f"{model_id} ({scenario_name})"
+        
+        success = False
+        for attempt in range(max_retries):
+            env = None
             try:
-                if 'actor_mean.0.bias' in state_dict:
-                    stored_action_dim = state_dict['actor_mean.0.bias'].shape[0]
-                if 'feature_net.0.weight' in state_dict:
-                     stored_state_dim = state_dict['feature_net.0.weight'].shape[1]
-            except Exception:
-                pass
-            
-            # Verify if it matches current config
-            expected_state_dim = config.num_cells * 16 * 3   # Cell-centric: 16 features * 3 frames (Stacked)
-            expected_action_dim = config.num_cells * 3       # 3 actions per cell: [TxPower, CIO, TTT]
-            
-            # Determine device: Default to CPU for evaluation to stay within 16GB limit.
-            # BDH is particularly heavy and evaluation is bottlenecked by the simulation, not AI.
-            eval_device = 'cpu'
-            if getattr(config, 'force_cuda_eval', False):
-                eval_device = 'cuda'
-            
-            print(f"      [INFO] Initializing {model_type.upper()} Policy on {eval_device}...")
-            
-            if model_type == 'bdh':
-                from policies.bdh_policy import BDHPolicy
-                policy = BDHPolicy(expected_state_dim, expected_action_dim, device=eval_device, env_config=config).to(eval_device)
-            elif model_type == 'gpt2':
-                from policies.policy_gpt2 import GPT2Policy
-                policy = GPT2Policy(expected_state_dim, expected_action_dim, device=eval_device).to(eval_device)
-            elif model_type == 'trxl':
-                from policies.policy_trxl import TrXLPolicy
-                policy = TrXLPolicy(expected_state_dim, expected_action_dim, device=eval_device).to(eval_device)
-            elif model_type == 'linear':
-                from policies.policy_linear import LinearPolicy
-                policy = LinearPolicy(expected_state_dim, expected_action_dim, device=eval_device).to(eval_device)
-            elif model_type == 'universal':
-                from policies.policy_universal import UniversalPolicy
-                policy = UniversalPolicy(expected_state_dim, expected_action_dim, device=eval_device).to(eval_device)
-            elif model_type == 'reformer':
-                from policies.policy_reformer import ReformerPolicy
-                policy = ReformerPolicy(expected_state_dim, expected_action_dim, device=eval_device).to(eval_device)
-            else:  # 'nn' or default
-                state_dim = expected_state_dim
-                action_dim = expected_action_dim
-                if stored_state_dim > 0 and stored_action_dim > 0:
-                    if stored_action_dim != expected_action_dim or stored_state_dim != expected_state_dim:
-                        # Cell-centric: state = num_cells * 16, action = num_cells * 5
-                        detected_cells = stored_action_dim // 5
-                        print(f"      [WARN] Dimension mismatch: stored cells={detected_cells}, config cells={config.num_cells}")
-                        state_dim = stored_state_dim
-                        action_dim = stored_action_dim
-                from policies.neural_networks import ActorCritic
-                policy = ActorCritic(state_dim, action_dim).to(eval_device)
-            
-            # Load weights
-            try:
+                # Setup Policy and Agent for each attempt to ensure clean state
+                checkpoint = torch.load(model_path, map_location='cpu')
+                state_dict = checkpoint['policy_state_dict']
+                model_type = getattr(config, 'model_type', 'bdh')
+                
+                # Determine dimensions
+                stored_action_dim = 0
+                stored_state_dim = 0
+                try:
+                    if 'actor_mean.0.bias' in state_dict:
+                        stored_action_dim = state_dict['actor_mean.0.bias'].shape[0]
+                    if 'feature_net.0.weight' in state_dict:
+                         stored_state_dim = state_dict['feature_net.0.weight'].shape[1]
+                except Exception:
+                    pass
+                
+                expected_state_dim = config.num_cells * 16 * 3
+                expected_action_dim = config.num_cells * 3
+                
+                eval_device = 'cpu'
+                if getattr(config, 'force_cuda_eval', False):
+                    eval_device = 'cuda'
+                
+                from policies import get_policy
+                policy = get_policy(model_type, config.num_ues, config.num_cells, device=eval_device, env_config=config)
+                policy.to(eval_device)
                 policy.load_state_dict(state_dict, strict=False)
-                # Verify final device
-                actual_device = next(policy.parameters()).device
-                print(f"      [INFO] Loaded {model_type.upper()} weights. Final Device: {actual_device}")
+                
+                rc_agent = RadioCortexAgent(config.num_ues, config.num_cells, policy_model=policy)
+
+                # Check for VecNormalize stats
+                vec_normalize_path = str(Path(model_path).parent / f"vec_normalize_{Path(model_path).stem}.pkl")
+                if os.path.exists(vec_normalize_path) and VEC_ENV_AVAILABLE:
+                    from stable_baselines3.common.vec_env import DummyVecEnv, VecNormalize
+                    def make_env():
+                        return create_oran_env(config)
+                    env = DummyVecEnv([make_env])
+                    env = VecNormalize.load(vec_normalize_path, env)
+                    env.training = False
+                    env.norm_reward = False
+                else:
+                    env = create_oran_env(config)
+
+                results[model_id] = evaluator.evaluate_controller(
+                    rc_agent, env, controller_label,
+                    progress_queue=progress_queue,
+                    task_id=f"{scenario_idx}_rl"
+                )
+                success = True
+                break
             except Exception as e:
-                print(f"      [WARN] Could not load weights: {e}")
-            
-        except Exception as e:
-            print(f"      [ERROR] Could not load model {model_path}: {e}")
-            raise
-            
-        rc_agent = RadioCortexAgent(config.num_ues, config.num_cells, policy_model=policy)
+                print(f"      [WARN] RL attempt {attempt+1}/{max_retries} failed for {scenario_name}: {e}")
+                results[model_id] = None
+            finally:
+                if env:
+                    env.close()
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
         
-        # Check for VecNormalize stats
-        vec_normalize_path = str(Path(model_path).parent / f"vec_normalize_{Path(model_path).stem}.pkl")
-        use_vec_normalize = os.path.exists(vec_normalize_path) and VEC_ENV_AVAILABLE
-        
-        if use_vec_normalize:
-            print(f"      [INFO] Found VecNormalize stats at {vec_normalize_path}. Wrapping env...")
-            def make_env():
-                return create_oran_env(config)
-            from stable_baselines3.common.vec_env import DummyVecEnv, VecNormalize
-            env = DummyVecEnv([make_env])
-            env = VecNormalize.load(vec_normalize_path, env)
-            env.training = False
-            env.norm_reward = False
-        else:
-            env = create_oran_env(config)
+        if not success:
+            print(f"      [ERROR] RL Model failed after {max_retries} attempts for {scenario_name}")
 
-        try:
-            results['Radio-Cortex'] = evaluator.evaluate_controller(
-                rc_agent, env, controller_label,
-                progress_queue=progress_queue,
-                task_id=f"{scenario_idx}_rl"
-            )
-        finally:
-            env.close()
-            # Clean up GPU memory for next scenario (crucial for large models)
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
-
-    # Log results to central CSV (appending)
-    # Log results to central CSV (appending)
-    ResultLogger.log_to_csv(
-        results,
-        scenario_name,
-        config=eval_config
-    )
+    # Log results to central CSV (appending) ONLY if we have valid data
+    valid_results = {k: v for k, v in results.items() if v is not None}
+    if valid_results:
+        ResultLogger.log_to_csv(
+            valid_results,
+            scenario_name,
+            config=eval_config
+        )
+    else:
+        results = {"CRASHED": True}
     
     return scenario_name, results
 
