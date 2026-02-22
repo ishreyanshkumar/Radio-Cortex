@@ -888,3 +888,216 @@ For each Cell/eNodeB, keys are formatted as `cell_{id}_{metric}`.
   "cell_0_ues": 4
 }
 ```
+
+
+# Complete Model Analysis
+
+This document provides a comprehensive analysis of the reinforcement learning models found in the `models/` directory. The metadata (parameter counts, training steps, layer architectures) is extracted **directly from the `.pt` checkpoint files** rather than relying on prior documentation.
+
+## 📊 Summary Table
+
+| Model | File Size (MB) | Total Params | Timesteps Trained | Hidden Dim | Architecture |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| **BDH** | 72.94 | 6,418,451 | 983,040 | 512 | Scale-Free Transformer (BDH) |
+| **GPT2** | 36.96 | 3,234,323 | 1,000,000 | 256 | GPT-2 Style Transformer |
+| **LINEAR** | 36.89 | 3,217,939 | 1,000,000 | 256 | Linear Attention Transformer |
+| **REFORMER** | 37.05 | 3,232,019 | 1,000,000 | 256 | Reformer Transformer |
+| **TRXL** | 36.62 | 3,195,155 | 1,000,000 | 256 | Transformer-XL |
+| **UNIVERSAL** | 9.73 | 851,475 | 1,000,000 | 256 | Universal Transformer |
+| **NN** | 1.62 | 140,563 | 1,000,000 | 256 | 2-layer MLP Baseline |
+
+
+
+---
+
+## 🔬 Per-Model Detailed Metadata
+
+### 1. BDH (Scale-Free Transformer)
+- **File Size:** 72.94 MB
+- **Total Parameters:** 6,418,451
+- **Timesteps Trained:** 983,040
+- **Hyperparameters:**
+  - `hidden_dim`: 512
+  - `lr`: 3e-05 (stable learning rate config)
+  - `batch_size`: 512, `rollout_steps`: 512, `n_envs`: 48
+  - `clip_epsilon`: 0.1, `vf_coef`: 1.0
+  - Entropy annealing: `ent_coef_start`: 0.03 → `ent_coef_end`: 0.005 (`ent_decay_fraction`: 0.8)
+- **Key Architecture Characteristics:**
+  - Uses an independent `logstd_head`: [1, 9] mapped to 9 action spaces.
+  - Scale-free slot-based memory mapping inside the `encoder`: [4, 128, 4096] (4 heads, 128 dim, 4096 keys) and `decoder`: [16384, 128].
+
+### 2. GPT2
+- **File Size:** 36.96 MB
+- **Total Parameters:** 3,234,323
+- **Timesteps Trained:** 1,000,000 
+- **Hyperparameters:** `hidden_dim`: 256, `lr`: 0.0005, `batch_size`: 512, `rollout_steps`: 512, `n_envs`: 48
+- **Key Architecture Characteristics:**
+  - `pos_embed`: [1, 64, 256] contextual sequence embedding for sequential state representations.
+  - State projection block utilizes an initialized size of `state_embed.weight` [256, 144].
+
+### 3. LINEAR (Linear Attention Transformer)
+- **File Size:** 36.89 MB
+- **Total Parameters:** 3,217,939
+- **Timesteps Trained:** 1,000,000 
+- **Hyperparameters:** `hidden_dim`: 256, `lr`: 0.0005, `batch_size`: 512, `rollout_steps`: 512, `n_envs`: 48
+- **Key Architecture Characteristics:**
+  - Standard autoregressive linear attention mechanisms. Identical input mapping block to the GPT2 backbone via `pos_embed`: [1, 64, 256] and `state_embed.weight`: [256, 144]. 
+
+### 4. REFORMER
+- **File Size:** 37.05 MB
+- **Total Parameters:** 3,232,019
+- **Timesteps Trained:** 1,000,000 
+- **Hyperparameters:** `hidden_dim`: 256, `lr`: 0.0005, `batch_size`: 512, `rollout_steps`: 512, `n_envs`: 48
+- **Key Architecture Characteristics:**
+  - Designed for much longer context sequence history. 
+  - Notable distinction in position embedding sequence length - `pos_embed`: [1, 128, 256] (128 context tokens compared to 64 for GPT2/Linear)
+  - Also utilizes independent `actor_logstd`: [1, 9] for log-based standard deviation bounding.
+
+### 5. TRXL (Transformer-XL)
+- **File Size:** 36.62 MB
+- **Total Parameters:** 3,195,155
+- **Timesteps Trained:** 1,000,000 
+- **Hyperparameters:** `hidden_dim`: 256, `lr`: 0.0005, `batch_size`: 512, `rollout_steps`: 512, `n_envs`: 48
+- **Key Architecture Characteristics:**
+  - Standard TrXL blocks without hardcoded positional embeddings natively printed, but features the standard projection mappings such as `state_embed.weight`: [256, 144] and independent `actor_logstd`: [1, 9]. 
+
+### 6. UNIVERSAL (Universal Transformer)
+- **File Size:** 9.73 MB
+- **Total Parameters:** 851,475
+- **Timesteps Trained:** 1,000,000 
+- **Hyperparameters:** `hidden_dim`: 256, `lr`: 0.0005, `batch_size`: 512, `rollout_steps`: 512, `n_envs`: 48
+- **Key Architecture Characteristics:**
+  - Uniquely features a fraction of the parameter count relative to other Transformer variants due to **weight-tied blocks** across depth.
+  - Implements recurrent depth embeddings (`step_embed.weight`: [4, 256]) for depth conditioning. Uses standard `pos_embed`: [1, 64, 256].
+
+### 7. NN (MLP Baseline)
+- **File Size:** 1.62 MB
+- **Total Parameters:** 140,563
+- **Timesteps Trained:** 1,000,000
+- **Hyperparameters:** `hidden_dim`: 256, `lr`: 0.0005, `batch_size`: 512, `rollout_steps`: 512, `n_envs`: 48
+- **Key Architecture Characteristics:**
+  - The lightest model mapping observations using simple dense mappings (`feature_net.0.weight`: [256, 144] and `feature_net.2.weight`: [256, 256]) then linearly mapped independently to an `actor_mean` [9, 256] vector.
+
+
+# Progressive Curriculum Training Plan for O-RAN RL Agent
+## Scenario-by-Scenario Training with Percentage-Based Mixing
+
+---
+
+## 📋 Training Philosophy
+
+**Core Principle**: Gradual introduction of complexity while maintaining exposure to mastered scenarios to prevent **catastrophic forgetting**.
+
+**Key Strategy**: 
+- Start with 100% on easiest scenario
+- Add new scenarios progressively
+- Keep 15-20% exposure to previous scenarios as "maintenance dose"
+- Focus 70-80% on current learning target
+
+---
+
+# Progressive Curriculum Training Plan for O-RAN RL Agent
+## Scenario-by-Scenario Training: The "Lean Power Suite"
+
+---
+
+## 📋 Training Philosophy
+
+**Core Principle**: Gradual introduction of complexity while maintaining exposure to mastered scenarios to prevent **catastrophic forgetting**.
+
+**Key Strategy**: 
+- Start with 100% on easiest scenario (Flash Crowd).
+- Add new scenarios progressively via weighted mixing.
+- Keep exposure to previous scenarios as a "maintenance dose".
+- Focus majority of training on the newest/hardest targets.
+
+---
+
+## 🎯 Complete Training Curriculum (Lean Power Suite)
+
+The Lean Power Suite consists of **8 Stages** designed to guide the BDH agent from basic load balancing to full multi-objective generalization.
+
+### **Stage 1: Flash Crowd (Bootstrap)**
+**Duration**: 84,000 timesteps  
+**Scenario Mix**: Flash Crowd: **100%**  
+**Goal**: Learn basic cell-to-cell load balancing and handover triggering.
+
+### **Stage 2: Sleepy Campus (Green RAN)**
+**Duration**: 210,000 timesteps  
+**Scenario Mix**: Flash Crowd: 20%, Sleepy Campus: **80%**  
+**Goal**: Master energy-efficient power adaptation without sacrificing QoS.
+
+### **Stage 3: Urban Canyon (PHY Robustness)**
+**Duration**: 252,000 timesteps  
+**Scenario Mix**: 15% each for Flash/Sleepy, Urban Canyon: **70%**  
+**Goal**: Learn reactive signal recovery and SINR optimization in blocked environments.
+
+### **Stage 4: Mobility Storm (Handover Mastery)**
+**Duration**: 378,000 timesteps  
+**Scenario Mix**: 10% each for previous scenarios, Mobility Storm: **70%**  
+**Goal**: Optimize handover success rate under high-speed mobility conditions.
+
+### **Stage 5: Traffic Burst (Massive Congestion)**
+**Duration**: 504,000 timesteps  
+**Scenario Mix**: 8% each for previous scenarios, Traffic Burst: **68%**  
+**Goal**: Master scheduler optimization under severe buffer overload (5x-10x traffic).
+
+### **Stage 6: Ambulance (Emergency Slicing)**
+**Duration**: 504,000 timesteps  
+**Scenario Mix**: 7% each for previous scenarios, Ambulance: **65%**  
+**Goal**: Learn network slicing and QoS priority differentiation for emergency streams.
+
+### **Stage 7: Spectrum Crunch (Spectral Efficiency)**
+**Duration**: 630,000 timesteps  
+**Scenario Mix**: 6% each for previous scenarios, Spectrum Crunch: **64%**  
+**Goal**: Optimal resource management and maximizing bits/sec/Hz.
+
+### **Stage 8: Consolidation (Multi-Mix Generalization)**
+**Duration**: 1,050,000 timesteps  
+**Scenario Mix**: **Uniform Mix (12% each)** across all key scenarios above.  
+**Goal**: Achieve robust, production-ready generalization across the complete suite.
+
+---
+
+## 📊 Training Timeline Summary
+
+| Stage | Timesteps | Primary Scenario | Mix Complexity | Goal |
+|-------|-----------|------------------|----------------|------|
+| 1 | 84,000 | Flash Crowd | Single | Load Balancing |
+| 2 | 210,000 | Sleepy Campus | 2-scenario | Energy Efficiency |
+| 3 | 252,000 | Urban Canyon | 3-scenario | PHY Robustness |
+| 4 | 378,000 | Mobility Storm | 4-scenario | Handover Success |
+| 5 | 504,000 | Traffic Burst | 5-scenario | Overload Management |
+| 6 | 504,000 | Ambulance | 6-scenario | Emergency Slicing |
+| 7 | 630,000 | Spectrum Crunch | 7-scenario | Spectral Efficiency |
+| 8 | 1,050,000 | Power Suite Mix | All equal | Full Generalization |
+
+**Total Training Time**: ~3.6M timesteps Focused on mission-critical scenarios.
+
+---
+
+## 🔧 Execution Guide
+
+The curriculum is executed via the `scripts/train_curriculum.sh` wrapper, which manages checkpoint loading, scenario mixing, and GPU memory safety.
+
+```bash
+# Start the full 8-stage curriculum
+bash scripts/train_curriculum.sh
+
+# Resume from a specific stage (e.g., Stage 5)
+bash scripts/train_curriculum.sh --start 5
+```
+
+---
+
+## 📈 Performance Tracking
+
+### Best Practices for Success
+1. **Checkpointing**: The script saves models to `models/curriculum/stage_N.pt`. Always evaluate the latest stage.
+2. **Evaluation**: Use `python3 radio_cortex_complete.py --mode eval --model bdh --scenario all` to verify zero-shot generalization to scenarios NOT included in the curriculum (e.g., `ping_pong`, `iot_tsunami`).
+3. **Hardware**: This plan is optimized for high-parallelism (16-24 envs). If using fewer envs, total training time (wall-clock) will increase linearly.
+
+---
+
+## 🎓 Note on Zero-Shot Generalization
+The "Lean Power Suite" specifically excludes `ping_pong` and `iot_tsunami` during training to test the agent's ability to generalize to novel challenges without retraining. A successful agent should achieve "Passed" scores on these scenarios despite never seeing them during the 7.2M steps of curriculum training.
