@@ -149,8 +149,8 @@ body::before{content:'';position:fixed;inset:0;background:url("data:image/svg+xm
 
 <script>
 const MC='Config_model_path',SC='Scenario';
-const HI=['Throughput_Mbps','Jains_Fairness','Satisfaction_Percent','Cell_Edge_Tput','Avg_SINR_dB','EnergyEfficiency_Mbps_W','HO_Success_Rate','Control_Stability','QoS_Score','Reliability_Score','Resource_Score','Buffer_Score','PHY_Score','Architecture_Score'];
-const LO=['Avg_Delay_ms','PacketLoss_Ratio','p95_Delay_ms','Max_PacketLoss','QoS_Violations','Total_Downtime_s','Avg_Inference_ms'];
+const HI=['Throughput_Mbps','Jains_Fairness','Satisfaction_Percent','Cell_Edge_Tput','Avg_SINR_dB','Avg_RSRP_dBm','EnergyEfficiency_Mbps_W','HO_Success_Rate','Control_Stability','QoS_Score','Reliability_Score','Resource_Score','Buffer_Score','PHY_Score','Architecture_Score'];
+const LO=['Avg_Delay_ms','PacketLoss_Ratio','p95_Delay_ms','Max_PacketLoss','QoS_Violations','Total_Downtime_s','Congestion_Intensity','Avg_HO_per_UE','Avg_Inference_ms','Model_Params'];
 const AM=[...HI,...LO];
 const SH={};AM.forEach(m=>{SH[m]=m.replace('_Mbps','').replace('_ms','').replace('_Ratio','%').replace('_Percent','%').replace('_dB','dB').replace('_dBm','dBm').replace('Avg_','').replace('Config_','')});
 const P=['#00e5c8','#9580ff','#50fa7b','#ffb86c','#ff5555','#ff6eb4','#f1fa8c','#8be9fd','#bd93f9','#ff79c6','#6272a4','#44475a','#00b8a0','#e6db74','#66d9ef','#a6e22e','#fd971f','#ae81ff','#f92672','#75715e'];

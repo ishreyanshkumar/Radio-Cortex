@@ -307,7 +307,7 @@ def _process_csv(path: str):
 
         # ── Summary stats ──────────────────────────────────────────────────
         numeric_cols = ["reward", "r_tput", "r_delay", "r_loss", "r_load", "r_energy", "r_sla", "r_cio",
-                        "avg_throughput", "avg_delay", "avg_loss", "z_success"]
+                        "jains", "p95_delay", "avg_throughput", "avg_delay", "avg_loss", "z_success"]
         available = [c for c in numeric_cols if c in df.columns]
         stats = df[available].describe().round(4).reset_index()
         stats.rename(columns={"index": "Statistic"}, inplace=True)

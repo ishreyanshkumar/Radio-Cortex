@@ -714,7 +714,6 @@ class ResultLogger:
                 "Max_PacketLoss": metrics.max_packet_loss,
                 "Jains_Fairness": metrics.jains_fairness,
                 "QoS_Violations": metrics.qos_violations,
-                "QoS_Violations": metrics.qos_violations,
                 "Total_Downtime_s": metrics.total_downtime,
                 "Congestion_Intensity": metrics.congestion_intensity,
                 "Satisfaction_Percent": metrics.satisfied_user_ratio * 100,
@@ -747,8 +746,15 @@ class ResultLogger:
         os.makedirs(os.path.dirname(save_path), exist_ok=True)
         
         # Append if file exists, write header if new
-        write_header = not os.path.exists(save_path)
-        df.to_csv(save_path, mode='a', header=write_header, index=False)
+        if os.path.exists(save_path) and os.path.getsize(save_path) > 0:
+            try:
+                old_df = pd.read_csv(save_path)
+                combined_df = pd.concat([old_df, df], ignore_index=True)
+                combined_df.to_csv(save_path, index=False)
+            except Exception:
+                df.to_csv(save_path, mode='a', header=True, index=False)
+        else:
+            df.to_csv(save_path, index=False)
         print(f"  📊 Results appended to {save_path}")
 
     @staticmethod
