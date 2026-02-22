@@ -34,6 +34,22 @@ class SchedulerType(Enum):
     MAX_THROUGHPUT = 2
 
 
+def _to_python(obj):
+    """Recursively convert numpy types and non-JSON values (NaN/Inf) to plain Python."""
+    if isinstance(obj, np.ndarray):
+        return [_to_python(v) for v in obj.tolist()]
+    if isinstance(obj, (np.generic, float)):
+        val = obj.item() if hasattr(obj, 'item') else obj
+        if np.isnan(val) or np.isinf(val): return 0.0
+        return val
+    if isinstance(obj, dict):
+        return {str(k): _to_python(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_to_python(v) for v in obj]
+    return obj
+
+
+
 class SimulationDB:
     """
     Unified SQLite logger — stores step-wise simulation traces and run metadata.
@@ -471,6 +487,7 @@ class ORANns3Env(gym.Env):
         self.max_steps = int(self.config.sim_time * 10)
         self.episode_metrics = []
         self._prev_obs_raw = None
+        self.prev_obs = np.zeros(self.config.num_cells * 16, dtype=np.float32)  # safe default
         self._obs_history = deque([np.zeros(self.config.num_cells * 16) for _ in range(3)], maxlen=3)
         self.current_params = {'cell': {c: {'tx_power': 46.0, 'cio': 0.0, 'ttt': 192.0} for c in range(self.config.num_cells)}}
 
@@ -489,7 +506,14 @@ class ORANns3Env(gym.Env):
         try:
             e2_msg = self.ns3.receive_kpm_report(max_wait_s=20.0, wait_for_new=True)
             state = self._extract_state(e2_msg)
-            if self._sim_db: self._sim_db.log_step({'episode': self._episode, 'step': 0, 'state': state.tolist(), 'timestamp': time.time()})
+            if self._sim_db:
+                # Log step 0 with dummy metrics to satisfy visualizer
+                dummy_metrics = self.reward_engine._empty_breakdown()
+                dummy_metrics['e2_data'] = self._serialize_e2_message(e2_msg)
+                self._sim_db.log_step({
+                    'episode': self._episode, 'step': 0, 'state': _to_python(state),
+                    'timestamp': time.time(), 'metrics': _to_python(dummy_metrics)
+                })
         except Exception as e:
             print(f"Reset failed: {e}")
             state = np.zeros(self.observation_space.shape[0]//3)
@@ -527,17 +551,19 @@ class ORANns3Env(gym.Env):
             
             if self._sim_db:
                 try:
-                    import copy
-                    enriched = copy.deepcopy(breakdown)
-                    enriched['e2_data'] = self._serialize_e2_message(e2_msg)
-                    enriched['actions_applied'] = rc_actions
-                    
+                    enriched = _to_python(breakdown)
+                    enriched['e2_data'] = _to_python(self._serialize_e2_message(e2_msg))
+                    enriched['actions_applied'] = _to_python(rc_actions)
                     self._sim_db.log_step({
-                        'episode': self._episode, 'step': self.current_step, 'state': self.prev_obs.tolist(),
-                        'action': action.tolist(), 'reward': round(reward, 4),
-                        'next_state': next_state.tolist(), 'metrics': enriched, 'timestamp': time.time()
+                        'episode': self._episode, 'step': self.current_step,
+                        'state': _to_python(self.prev_obs),
+                        'action': _to_python(action),
+                        'reward': round(float(np.mean(reward)), 4),
+                        'next_state': _to_python(next_state),
+                        'metrics': enriched, 'timestamp': time.time()
                     })
-                except: pass
+                except Exception as db_err:
+                    print(f"[SimDB] step log failed: {db_err}", flush=True)
 
             self.prev_obs = next_state
             return stacked_state, reward, terminated, False, info

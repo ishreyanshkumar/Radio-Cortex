@@ -26,7 +26,7 @@ kafka_*/
 # Simulation artifacts and model checkpoints
 simulation/
 models/
-results/experiment_results*.csv
+results/experiment_*.csv
 results/simulation_data_*.db
 logs/
 telemetry/
