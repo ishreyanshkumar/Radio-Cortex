@@ -50,8 +50,8 @@ Combines how fast, responsive, and consistent the network felt to users. Include
 
 ### 🛡️ 2. Reliability Score (Stability)
 Penalizes both constant loss, sudden outages (Peak/Max Loss), service downtime, unstable mobility, and handover failures. Rewards fast recovery and stable control.
-*   **Formula:** `30% Avg Loss + 20% Downtime + 20% HO Success + 10% HO Stability + 10% Max Loss + 10% Control Stability`
-*   *Note:* Control Stability weight reduced to 10% (Baseline is naturally 100% stable).
+*   **Formula:** `35% Avg Loss + 15% Max Loss + 20% Downtime + 10% Avg HO Count/UE + 20% HO Success`
+*   *Note:* Control Stability and HO Stability were removed from the composite formula to focus on physical metrics.
 
 ### 🏗️ 3. Resource Score (Efficiency & Fairness)
 Rewards high spectrum utilization AND efficiency, while ensuring fairness.

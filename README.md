@@ -187,16 +187,16 @@ To achieve maximum accuracy for project displays or research, use the hypertuned
 
 #### Optimal Hyperparameters (Stable / Turbo Suite)
 
-| Parameter | Default | Stable Config | Rationale |
+| Parameter | Default | Turbo Config | Rationale |
 |:---|:---:|:---:|:---|
-| `--learning-rate` | 5e-5 | **8e-5** | Conservative start, slightly boosted for speed |
-| `--batch-size` | 128 | **256** | Balanced for 20 epochs |
+| `--learning-rate` | 5e-5 | **5e-5** | Safe stable LR for sensitive rewards |
+| `--batch-size` | 128 | **2048** | High throughput for 48-core hardware |
 | `--rollout-steps` | 128 | **256** | Longer horizons for better advantage estimation |
 | `--ppo-epochs` | 20 | **20** | High data efficiency (replay experience) |
-| `--hidden-dim` | 256 | **256** | Adequate capacity for cell-centric features |
+| `--hidden-dim` | 256 | **512** | Wider network for better GPU utilization |
 | `--ent-coef` | 0.02 | **0.03** | Boosted exploration to prevent collapse |
-| `--gamma` | 0.99 | **0.98** | Focus on immediate stability (loss avoidance) |
-| `--sim-time` | 60.0 | **60.0** | Standard episode duration |
+| `--gamma` | 0.99 | **0.99** | Standard discount for 50s episodes |
+| `--sim-time` | 60.0 | **50.0** | Meaningful congestion dynamics |
 
 > [!TIP]
 > Use `scripts/train_scenario.sh` to run this optimized configuration.
@@ -342,10 +342,10 @@ Radio-Cortex uses a **single-stage, stationary reward function** optimized for d
 
 | Component | Weight | Formula | Range |
 |:---|:---:|:---|:---:|
-| **Throughput** | 12.0 | $W \cdot \log(1 + T/T_{max})$ | [-0.5, 50.0] |
-| **Delay** | 2.0 | $-W \cdot \min(D/D_{max}, 1)$ (strictly linear) | [-50.0, 0.0] |
-| **Packet Loss** | 5.0 | Bounded penalty (now 5.0x weight) | [-25.0, 0.0] |
-| **Load Balance** | 2.0 | $-\text{std}(\text{cell\_loads})$ | [-4.0, 0.0] |
+| **Throughput** | 8.0 | $W \cdot \log(1 + T/T_{max})$ | [-0.5, 50.0] |
+| **Delay** | 4.0 | $-W \cdot \min(D/D_{max}, 1)$ (strictly linear) | [-50.0, 0.0] |
+| **Packet Loss** | 8.0 | Bounded penalty (now 8.0x weight) | [-25.0, 0.0] |
+| **Load Balance** | 4.0 | $-\text{std}(\text{cell\_loads})$ | [-4.0, 0.0] |
 | **Energy Eff.** | 0.1 | Tie-breaker: $-\text{mean}(\text{norm\_tx\_power})$ | [-1.0, 0.0] |
 | **SLA Bonus** | 0.5 | +0.5 per UE meeting SLA (>1Mbps, <100ms) | [0.0, +NumUEs*0.5] |
 | **CIO Regularization**| 0.4 | Centering penalty: $-W \cdot \text{mean}(|\text{CIO}|/6)$ | [-0.4, 0.0] |
@@ -615,16 +615,16 @@ bash scripts/train_curriculum.sh
 
 | Stage | Focus | Timesteps | updates | Skill Description |
 |:---:|:---|:---:|:---:|:---|
-| 1 | Flash Crowd | 800k | ~50 | Basic load balancing (Bootstrap) |
-| 2 | Sleepy Campus | 1.5M | ~90 | Energy efficiency (Green RAN) |
-| 3 | Urban Canyon | 2.0M | ~120 | Signal recovery & Robustness |
-| 4 | Mobility Storm | 2.5M | ~150 | Handover Optimization |
-| 5 | Traffic Burst | 3.0M | ~180 | Congestion Management |
-| 6 | Ambulance | 3.0M | ~180 | QoS Priority & Slicing |
-| 7 | Spectrum Crunch | 3.0M | ~180 | Spectral Efficiency |
-| 8 | Generalization Mix | 4.0M | ~240 | Multi-goal Mastery |
+| 1 | Flash Crowd | 300k | ~15 | Basic load balancing (Bootstrap) |
+| 2 | Sleepy Campus | 300k | ~15 | Energy efficiency (Green RAN) |
+| 3 | Urban Canyon | 400k | ~20 | Signal recovery & Robustness |
+| 4 | Mobility Storm | 500k | ~25 | Handover Optimization |
+| 5 | Traffic Burst | 500k | ~25 | Congestion Management |
+| 6 | Ambulance | 500k | ~25 | QoS Priority & Slicing |
+| 7 | Spectrum Crunch | 500k | ~25 | Spectral Efficiency |
+| 8 | Generalization Mix | 800k | ~40 | Multi-goal Mastery |
 
-**Total: ~14.7M timesteps** (approx 3-4 hours on hi-end hardware) to full multi-domain mastery.
+**Total: ~3.8M timesteps** to full multi-domain mastery.
 
 ### Network Size Curriculum (Manual)
 ```bash
