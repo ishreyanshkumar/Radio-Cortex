@@ -73,7 +73,13 @@ class SimulationDB:
 
     def log_metadata(self, key: str, value):
         conn = sqlite3.connect(self.db_path)
-        val = json.dumps(value) if not isinstance(value, str) else value
+        # Always coerce to string — avoids SQLite BLOB storage of ints/bytes
+        if isinstance(value, bytes):
+            val = value.decode('utf-8', errors='replace')
+        elif isinstance(value, str):
+            val = value
+        else:
+            val = str(value)  # int, float, etc. → plain string
         conn.execute('INSERT OR REPLACE INTO metadata (key, value) VALUES (?, ?)', (key, val))
         conn.commit(); conn.close()
 

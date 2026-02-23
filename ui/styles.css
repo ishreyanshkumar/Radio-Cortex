@@ -623,3 +623,91 @@ body::before {
   cursor: pointer;
   font-size: 18px;
 }
+
+/* ── Live Indicator & Pulse ──────────── */
+.live-indicator {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: rgba(255, 85, 85, 0.15);
+  color: var(--rd);
+  padding: 4px 10px;
+  border-radius: 6px;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 1px;
+  border: 1px solid rgba(255, 85, 85, 0.3);
+}
+
+.pulse {
+  width: 8px;
+  height: 8px;
+  background: var(--rd);
+  border-radius: 50%;
+  box-shadow: 0 0 0 rgba(255, 85, 85, 0.4);
+  animation: pulse-red 2s infinite;
+}
+
+@keyframes pulse-red {
+  0% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(255, 85, 85, 0.7); }
+  70% { transform: scale(1); box-shadow: 0 0 0 10px rgba(255, 85, 85, 0); }
+  100% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(255, 85, 85, 0); }
+}
+
+/* ── Custom Toggle Switch ────────────── */
+.switch {
+  position: relative;
+  display: inline-block;
+  width: 34px;
+  height: 20px;
+}
+
+.switch input { opacity: 0; width: 0; height: 0; }
+
+.slider {
+  position: absolute;
+  cursor: pointer;
+  inset: 0;
+  background-color: var(--bd);
+  transition: .4s;
+}
+
+.slider:before {
+  position: absolute;
+  content: "";
+  height: 14px;
+  width: 14px;
+  left: 3px;
+  bottom: 3px;
+  background-color: var(--tx);
+  transition: .4s;
+}
+
+input:checked + .slider { background-color: var(--blue); }
+input:checked + .slider:before { transform: translateX(14px); }
+.slider.round { border-radius: 34px; }
+.slider.round:before { border-radius: 50%; }
+
+/* ── Trend Indicators ───────────────── */
+.trend {
+  font-size: 11px;
+  margin-top: 8px;
+  font-weight: 500;
+}
+.up { color: var(--gn); }
+.down { color: var(--rd); }
+
+/* ── Enhanced Cards ─────────────────── */
+.stats-card {
+  min-height: 280px;
+}
+
+.card.glass {
+  background: rgba(22, 25, 35, 0.7);
+  box-shadow: var(--shadow);
+  border: 1px solid var(--glass-bd);
+}
+
+/* ── Table Accents ──────────────────── */
+.data-table th { background: #1a1e2e; }
+.data-table tr.highlight { background: rgba(59, 130, 246, 0.05); }

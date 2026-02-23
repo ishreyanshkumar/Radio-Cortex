@@ -73,9 +73,19 @@
 
             <!-- Dashboard Content (hidden until CSV loaded) -->
             <div id="dashContent" class="hidden">
+                <!-- Filter Controls -->
+                <div class="controls" style="margin-bottom:16px;">
+                    <label>Model:</label>
+                    <select id="dashFilterModel"><option value="">All Models</option></select>
+                    <label>Scenario:</label>
+                    <select id="dashFilterScenario"><option value="">All Scenarios</option></select>
+                    <button class="btn btn-sm" id="dashApplyFilter">Apply Filters</button>
+                    <button class="btn btn-sm" id="dashClearFilter">Clear</button>
+                </div>
+
                 <!-- Results Table -->
                 <div class="table-wrap">
-                    <h3>📋 Experiment Results (Select rows to visualize)</h3>
+                    <h3>📋 Experiment Results <span id="dashRowCount" style="font-size:11px;color:var(--tx3);font-weight:400"></span></h3>
                     <div style="max-height:400px;overflow:auto;">
                         <table class="data-table" id="dashResultsTable">
                             <thead id="dashTableHead"></thead>
@@ -178,9 +188,9 @@
                     <div class="chart-wrap" style="height:440px"><canvas id="mbChartScat"></canvas></div>
                 </div>
 
-                <!-- 8. Model Family Comparison -->
+                <!-- 8. Model Family Comparison
                 <div class="section-title"><span class="num">8</span>Model Family Comparison</div>
-                <div class="card"><div class="chart-wrap" style="height:440px"><canvas id="mbChartCat"></canvas></div></div>
+                <div class="card"><div class="chart-wrap" style="height:440px"><canvas id="mbChartCat"></canvas></div></div> -->
 
                 <!-- 9. Per-Scenario Winners -->
                 <div class="section-title"><span class="num">9</span>Per-Scenario Winners</div>
@@ -205,85 +215,103 @@
 
             <!-- Visualizer Content -->
             <div id="vizContent" class="hidden">
-                <div style="display:grid;grid-template-columns:280px 1fr;gap:24px;">
-                    <!-- Sidebar -->
+                <!-- Advanced Telemetry Header -->
+                <div class="score-grid" style="grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); margin-bottom: 24px;">
+                    <div class="score-card" style="--accent:var(--blue)">
+                        <div class="label">Total System Throughput</div>
+                        <div class="value" id="vizStatTput">0.00 <span class="unit">Mbps</span></div>
+                        <div class="trend" id="vizTrendTput">Loading...</div>
+                    </div>
+                    <div class="score-card" style="--accent:var(--rd)">
+                        <div class="label">Avg Packet Loss</div>
+                        <div class="value" id="vizStatLoss">0.0%</div>
+                        <div class="trend" id="vizTrendLoss">N/A</div>
+                    </div>
+                    <div class="score-card" style="--accent:var(--vi)">
+                        <div class="label">SLA Success Rate</div>
+                        <div class="value" id="vizStatSatisfied">0%</div>
+                        <div class="trend" id="vizTrendSatisfied">Target: 95%</div>
+                    </div>
+                    <div class="score-card" style="--accent:var(--cy)">
+                        <div class="label">AI Agent Reward</div>
+                        <div class="value" id="vizStatReward">0.00</div>
+                        <div class="trend" id="vizTrendReward">Optimizing...</div>
+                    </div>
+                </div>
+
+                <div style="display:grid;grid-template-columns:300px 1fr;gap:24px;">
+                    <!-- Sidebar Controls -->
                     <div style="display:flex;flex-direction:column;gap:16px;">
                         <!-- Playback -->
-                        <div class="card">
-                            <div class="card-title">▶ Playback Controls</div>
-                            <div style="display:flex;justify-content:space-between;align-items:center;font-size:22px;font-weight:700;margin-bottom:12px;">
-                                <span style="color:var(--tx3)">STEP</span>
-                                <span id="vizStepDisplay" style="color:var(--blue)">0</span>
+                        <div class="card glass">
+                            <div class="card-title">▶ MISSION CONTROL</div>
+                            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
+                                <div style="font-size:12px;font-weight:700;color:var(--tx2)">TICK: <span id="vizStepDisplay" style="color:var(--blue)">0</span></div>
+                                <div id="vizLiveBadge" class="live-indicator hidden"><span class="pulse"></span> LIVE</div>
                             </div>
-                            <input type="range" id="vizStepSlider" min="0" max="100" value="0" class="step-slider" style="width:100%;margin-bottom:12px;">
+                            <input type="range" id="vizStepSlider" min="0" max="100" value="0" class="step-slider" style="margin-bottom:12px;">
                             <div class="playback-controls">
-                                <button id="vizPrevBtn">⏮</button>
-                                <button id="vizPlayBtn" style="font-size:36px;">▶</button>
-                                <button id="vizNextBtn">⏭</button>
+                                <button id="vizPrevBtn" title="Previous Step">⏮</button>
+                                <button id="vizPlayBtn" style="font-size:36px;" title="Play/Pause">▶</button>
+                                <button id="vizNextBtn" title="Next Step">⏭</button>
                             </div>
-                            <div style="display:flex;align-items:center;gap:8px;margin-top:12px;justify-content:center;">
-                                <span style="font-size:12px;color:var(--tx3)">⏱</span>
-                                <input type="range" id="vizSpeedSlider" min="100" max="2000" value="500" class="step-slider" style="width:120px;">
-                                <span id="vizSpeedLabel" style="font-size:12px;color:var(--tx3)">500ms</span>
+                            <div style="display:flex;align-items:center;gap:12px;margin-top:16px;padding-top:12px;border-top:1px solid var(--bd);">
+                                <span style="font-size:14px;">⏱</span>
+                                <input type="range" id="vizSpeedSlider" min="50" max="1000" value="500" class="step-slider">
+                                <span id="vizSpeedLabel" style="font-size:11px;min-width:35px;">500ms</span>
+                            </div>
+                            <div id="vizAutoReloadWrap" style="margin-top:12px; display:flex; align-items:center; gap:8px;">
+                                <label class="switch">
+                                    <input type="checkbox" id="vizAutoReloadToggle">
+                                    <span class="slider round"></span>
+                                </label>
+                                <span style="font-size:11px; color:var(--tx2)">Auto-detect new steps</span>
                             </div>
                         </div>
 
-                        <!-- Metadata -->
+                        <!-- System Specs -->
                         <div class="card">
-                            <div class="card-title">ℹ Run Configuration</div>
+                            <div class="card-title">📡 TOPOLOGY SPECS</div>
                             <div id="vizMetadataList" style="display:flex;flex-direction:column;gap:10px;"></div>
                         </div>
 
-                        <!-- Eval Results -->
+                        <!-- Eval Results Card (populated by visualizer.js) -->
                         <div class="card hidden" id="vizEvalCard">
-                            <div class="card-title">🏅 Evaluation Results</div>
-                            <div id="vizEvalResults" class="grid-2" style="gap:8px;"></div>
+                            <div class="card-title">📊 EVAL RESULTS</div>
+                            <div id="vizEvalResults" style="display:flex;flex-wrap:wrap;gap:8px;"></div>
+                        </div>
+
+                        <!-- Performance Radar Card -->
+                        <div class="card">
+                            <div class="card-title">🕸️ PERFORMANCE RADAR</div>
+                            <div class="chart-wrap" style="height:200px"><canvas id="vizRadarKPI"></canvas></div>
                         </div>
                     </div>
 
-                    <!-- Main Content -->
+                    <!-- Main Visualization Space -->
                     <div style="display:flex;flex-direction:column;gap:16px;">
-                        <!-- Top Stats -->
-                        <div class="score-grid" style="grid-template-columns:repeat(4,1fr);">
-                            <div class="score-card" style="--accent:var(--blue)">
-                                <div class="label">Total Throughput</div>
-                                <div class="value" id="vizStatTput" style="color:var(--blue)">0.00 <span style="font-size:12px;color:var(--tx2)">Mbps</span></div>
-                            </div>
-                            <div class="score-card" style="--accent:var(--rd)">
-                                <div class="label">Mean Packet Loss</div>
-                                <div class="value" id="vizStatLoss" style="color:var(--rd)">0.0%</div>
-                            </div>
-                            <div class="score-card" style="--accent:var(--gn)">
-                                <div class="label">Satisfied Users</div>
-                                <div class="value" id="vizStatSatisfied" style="color:var(--gn)">0 / 0</div>
-                            </div>
-                            <div class="score-card" style="--accent:var(--cy)">
-                                <div class="label">Current Reward</div>
-                                <div class="value" id="vizStatReward" style="color:var(--cy)">0.00</div>
-                            </div>
-                        </div>
-
-                        <!-- Charts -->
+                        
+                        <!-- Main Charts Grid -->
                         <div class="grid-2">
-                            <div class="card">
-                                <div class="card-title">RAN Performance (Tput / Loss)</div>
-                                <div class="chart-wrap" style="height:180px"><canvas id="vizChartPerf"></canvas></div>
+                            <div class="card stats-card">
+                                <div class="card-title">RAN TELEMETRY (REAL-TIME)</div>
+                                <div class="chart-wrap" style="height:220px"><canvas id="vizChartPerf"></canvas></div>
                             </div>
-                            <div class="card">
-                                <div class="card-title">Fairness Index (Jain's)</div>
-                                <div class="chart-wrap" style="height:180px"><canvas id="vizChartFairness"></canvas></div>
+                            <div class="card stats-card">
+                                <div class="card-title">FAIRNESS & JAIN'S INDEX</div>
+                                <div class="chart-wrap" style="height:220px"><canvas id="vizChartFairness"></canvas></div>
                             </div>
                         </div>
 
-                        <!-- Cell Table -->
+                        <!-- Cell Status Console -->
                         <div class="card">
-                            <div class="card-title">📡 Cell Parameters & Control</div>
+                            <div class="card-title">📶 MULTI-CELL COMMAND CENTER</div>
                             <div style="overflow-x:auto;">
                                 <table class="data-table">
                                     <thead>
                                         <tr>
-                                            <th>Cell ID</th><th>TX Power (dBm)</th><th>CIO (dB)</th>
-                                            <th>TTT (ms)</th><th>Users</th><th>Load %</th><th>Status</th>
+                                            <th>ID</th><th>TX POWER</th><th>CIO</th>
+                                            <th>TTT</th><th>UEs</th><th>LOAD</th><th>THROUGHPUT</th><th>STATUS</th>
                                         </tr>
                                     </thead>
                                     <tbody id="vizCellTableBody"></tbody>
@@ -291,15 +319,19 @@
                             </div>
                         </div>
 
-                        <!-- Raw JSON + Handover -->
+                        <!-- Secondary Metrics -->
                         <div class="grid-2">
                             <div class="card">
-                                <div class="card-title">Raw Step Metrics (JSON)</div>
-                                <pre id="vizStepJson" style="font-size:11px;color:var(--tx2);max-height:200px;overflow:auto;font-family:'IBM Plex Mono',monospace;white-space:pre-wrap;">{}</pre>
+                                <div class="card-title">HANDOVER DYNAMICS</div>
+                                <div class="chart-wrap" style="height:200px"><canvas id="vizChartHO"></canvas></div>
                             </div>
                             <div class="card">
-                                <div class="card-title">Handover Distribution</div>
-                                <div class="chart-wrap" style="height:200px"><canvas id="vizChartHO"></canvas></div>
+                                <div class="card-title">📡 KPM TELEMETRY BREAKDOWN</div>
+                                <div id="vizKpmBoxes" style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;"></div>
+                                <details style="margin-top:10px">
+                                    <summary style="cursor:pointer;font-size:10px;color:var(--tx3);font-family:'IBM Plex Mono'">Raw JSON</summary>
+                                    <pre id="vizStepJson" style="font-size:9px;max-height:150px;overflow:auto;opacity:0.5;font-family:'IBM Plex Mono';margin-top:6px">{}</pre>
+                                </details>
                             </div>
                         </div>
                     </div>

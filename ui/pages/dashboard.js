@@ -97,6 +97,7 @@
       uploadZone.classList.add("hidden");
       document.getElementById("dashContent").classList.remove("hidden");
       selectedIndices.clear();
+      populateFilters();
       render();
     };
     reader.readAsText(file);
@@ -111,11 +112,52 @@
     .getElementById("dashDownloadBtn")
     .addEventListener("click", downloadFiltered);
 
+  // Filter controls
+  document.getElementById("dashApplyFilter").addEventListener("click", () => {
+    const modelFilter = document.getElementById("dashFilterModel").value;
+    const scenarioFilter = document.getElementById("dashFilterScenario").value;
+    filteredData = allData.filter((r) => {
+      if (modelFilter && (r.Model || r.Controller) !== modelFilter)
+        return false;
+      if (scenarioFilter && r.Scenario !== scenarioFilter) return false;
+      return true;
+    });
+    render();
+  });
+
+  document.getElementById("dashClearFilter").addEventListener("click", () => {
+    document.getElementById("dashFilterModel").value = "";
+    document.getElementById("dashFilterScenario").value = "";
+    filteredData = [...allData];
+    render();
+  });
+
+  function populateFilters() {
+    const modelSel = document.getElementById("dashFilterModel");
+    const scenarioSel = document.getElementById("dashFilterScenario");
+    modelSel.innerHTML = '<option value="">All Models</option>';
+    scenarioSel.innerHTML = '<option value="">All Scenarios</option>';
+
+    const models = [
+      ...new Set(allData.map((r) => r.Model || r.Controller).filter(Boolean)),
+    ].sort();
+    const scenarios = [
+      ...new Set(allData.map((r) => r.Scenario).filter(Boolean)),
+    ].sort();
+
+    models.forEach((m) => modelSel.add(new Option(m, m)));
+    scenarios.forEach((s) => scenarioSel.add(new Option(s, s)));
+  }
+
   function render() {
     renderTable();
     renderCards();
     renderRadar();
     renderBar();
+    // Update row count
+    const countEl = document.getElementById("dashRowCount");
+    if (countEl)
+      countEl.textContent = `(${filteredData.length} of ${allData.length} rows)`;
   }
 
   function renderCards() {
