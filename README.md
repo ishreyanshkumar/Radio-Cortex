@@ -19,7 +19,9 @@ Radio-Cortex pushes the boundary of O-RAN intelligence by solving three fundamen
         *   **TxPower**: Absolute mapping from [-1, 1] to [10, 46] dBm for direct energy-performance control. 
         *   **CIO**: Absolute mapping from [-1, 1] to [-6, 6] dB for immediate load balancing via handover boundary adjustment.
         *   **TTT**: Inverse mapping from [-1, 1] to [1280, 0] ms to control handover agility vs. stability.
-    All actions are absolute and physics-bounded, restoring causality and ensuring the agent learns stable policies. 
+    
+All actions are absolute and physics-bounded, restoring causality and ensuring the agent learns stable policies. 
+
     The **State Space** utilizes 48 features per cell (12 base + 3 delta + 1 stationary flag, frame stacked × 3) yielding 144 inputs per cell.
 
 ## 🚀 End-to-End Installation Guide
