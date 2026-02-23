@@ -21,7 +21,6 @@ Radio-Cortex pushes the boundary of O-RAN intelligence by solving three fundamen
         *   **TTT**: Inverse mapping from [-1, 1] to [1280, 0] ms to control handover agility vs. stability.
     
 All actions are absolute and physics-bounded, restoring causality and ensuring the agent learns stable policies. 
-
     The **State Space** utilizes 48 features per cell (12 base + 3 delta + 1 stationary flag, frame stacked × 3) yielding 144 inputs per cell.
 
 ## 🚀 End-to-End Installation Guide
