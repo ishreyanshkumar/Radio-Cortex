@@ -358,8 +358,32 @@
             if (link) link.classList.add('active');
 
             // Close mobile nav
-            document.querySelector('.nav-sidebar').classList.remove('open');
+            const sidebar = document.querySelector('.nav-sidebar');
+            if (sidebar) sidebar.classList.remove('open');
         }
+
+        // ── Iframe Embed Support ──
+        document.addEventListener("DOMContentLoaded", () => {
+            const params = new URLSearchParams(window.location.search);
+            
+            // Switch to requested page immediately
+            const embedPage = params.get('page');
+            if (embedPage) {
+                switchPage(embedPage);
+            }
+            
+            // Hide sidebar and expand main content if embedded
+            if (params.get('embed') === 'true') {
+                const sidebar = document.querySelector('.nav-sidebar');
+                if (sidebar) sidebar.style.display = 'none';
+                
+                const mainContent = document.querySelector('.main-content');
+                if (mainContent) mainContent.style.marginLeft = '0';
+                
+                const mobileToggle = document.querySelector('.mobile-toggle');
+                if (mobileToggle) mobileToggle.style.display = 'none';
+            }
+        });
     </script>
 </body>
 </html>

@@ -594,14 +594,3 @@ def main():
 
 if __name__ == '__main__':
     main()
-```
-
-Paste this as `interpretability/visualize.py`. 
-
-Your `interpretability/` folder should now have:
-```
-interpretability/
-├── __init__.py
-├── bdh_interpretability_solo.py
-├── run_analysis.py
-└── visualize.py
