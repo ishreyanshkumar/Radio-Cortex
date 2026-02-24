@@ -1,0 +1,15 @@
+{
+  "num_timesteps": 2,
+  "strengthened_count": 0,
+  "weakened_count": 0,
+  "max_change": 0.0,
+  "mean_change": 0.0,
+  "std_change": 0.0,
+  "threshold_95": 0.0,
+  "weight_shape": [
+    4,
+    128,
+    4096
+  ],
+  "total_synapses": 2097152
+}
