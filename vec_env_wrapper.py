@@ -149,7 +149,7 @@ def make_vec_env(
     return vec_env
 
 
-def save_vec_normalize(vec_env: VecEnv, path: str) -> None:
+def save_vec_normalize(vec_env: 'VecEnv', path: str) -> None:
     """
     Save VecNormalize statistics to a file.
     
@@ -171,7 +171,7 @@ def save_vec_normalize(vec_env: VecEnv, path: str) -> None:
     print("[VecEnv] Warning: No VecNormalize found in environment chain")
 
 
-def load_vec_normalize(vec_env: VecEnv, path: str) -> None:
+def load_vec_normalize(vec_env: 'VecEnv', path: str) -> None:
     """
     Load VecNormalize statistics from a file.
     
@@ -222,18 +222,3 @@ def create_single_env(config: NS3Config, env_id: int = 0) -> ORANns3Env:
     return ORANns3Env(cfg)
 
 
-if __name__ == "__main__":
-    # Simple test
-    print("Testing vec_env_wrapper...")
-    
-    if SB3_AVAILABLE:
-        config = NS3Config(num_ues=5, num_cells=2, sim_time=2.0)
-        print(f"Base config: {config}")
-        
-        # Test factory function
-        factory = make_env(config, 0)
-        print(f"Factory created for env_id=0, topic_suffix will be '_0'")
-        
-        print("\n✓ vec_env_wrapper module loaded successfully")
-    else:
-        print("stable-baselines3 not available, skipping vector env tests")

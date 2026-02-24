@@ -70,14 +70,18 @@ class EvaluationMetrics:
 class BaselineController:
     """
     Static RAN configuration (no adaptation)
-    Represents current 5G networks without AI
+    Represents current 5G networks without AI (e.g., Max Power, Default Handover)
     """
     
     def __init__(self, num_cells: int):
         self.num_cells = num_cells
         # Fixed parameters (never change) — returned as [-1,1]-normalized
-        self.tx_power_norm = 0.0         # 0.0 = no power change (differential)
-        self.handover_sensitivity = 0.0  # 0.0 = neutral handover policy
+        # 1.0 -> 46 dBm (Max power)
+        self.tx_power_norm = 1.0
+        # 0.0 -> 0.0 dB CIO (Neutral)
+        self.cio_norm = 0.0
+        # 0.6 -> 256 ms TTT (Standard agility)
+        self.ttt_norm = 0.6
     
     def get_action(self, state):
         """Returns fixed [-1,1]-normalized action array (no adaptation)"""
@@ -85,7 +89,8 @@ class BaselineController:
         for _ in range(self.num_cells):
             action.extend([
                 self.tx_power_norm,
-                self.handover_sensitivity,
+                self.cio_norm,
+                self.ttt_norm
             ])
         return np.array(action, dtype=np.float32)
         
@@ -161,6 +166,10 @@ class EvaluationRunner:
         else:
              state, info = env.reset()
         
+        # CRITICAL ERROR DETECTION: Check if reset failed
+        if info.get('is_fallback', False):
+            raise RuntimeError(f"Simulation failed to initialize for {controller_name}: {info.get('error', 'Unknown Error')}")
+        
         terminated = False
         truncated = False
         
@@ -203,6 +212,14 @@ class EvaluationRunner:
                     info = infos[0]
                 else:
                     next_state, reward, terminated, truncated, info = env.step(action_arr)
+                
+                # CRITICAL ERROR DETECTION: Check if step failed
+                if info.get('is_fallback', False):
+                    # If it failed extremely early (e.g. step 1), it's a crash
+                    if step_i < 5:
+                        raise RuntimeError(f"Simulation crashed early for {controller_name}: {info.get('error', 'Process Died')}")
+                    # Otherwise treat as early termination
+                    terminated = True
                 
                 actions_history.append(action_arr)
                 
@@ -297,7 +314,8 @@ class EvaluationRunner:
                             per_ue_stats[ue_id] = {'tput': [], 'delay': []}
                         per_ue_stats[ue_id]['tput'].append(m['throughput'])
                         per_ue_stats[ue_id]['delay'].append(m['delay'])
-                
+
+
                 state = next_state
         
         if pbar:
@@ -347,6 +365,10 @@ class EvaluationRunner:
                  ho_successes += m.get('handover_successes', 0)
 
         # Calculate aggregate metrics
+        if not throughputs:
+            print(f"  [ERROR] No data collected for {controller_name}. Marking as CRASHED.")
+            return None
+
         avg_power_w = total_power_w_accum / step_count_power if step_count_power > 0 else 0.001
         avg_inference = np.mean(inference_times) if inference_times else 0.0
         
@@ -379,6 +401,17 @@ class EvaluationRunner:
         print(f"  │ {'Control Stability':<25} │ {metrics.control_stability:>17.1f}% │")
         print(f"  {'─'*50}")
         
+        # 📊 Log to Unified Simulation Database if available
+        if hasattr(env, '_sim_db') and env._sim_db:
+            try:
+                # Convert metrics object to dict
+                results_dict = vars(metrics)
+                env._sim_db.log_evaluation(results_dict)
+                env._sim_db.log_metadata('controller', controller_name)
+                print(f"  💾 Evaluation metrics synced to {env._sim_db_path}")
+            except Exception as e:
+                print(f"  [WARN] Failed to sync to SimDB: {e}")
+
         return metrics
 
     def _parse_state(self, state_arr, config) -> Dict:
@@ -693,7 +726,6 @@ class ResultLogger:
                 "Max_PacketLoss": metrics.max_packet_loss,
                 "Jains_Fairness": metrics.jains_fairness,
                 "QoS_Violations": metrics.qos_violations,
-                "QoS_Violations": metrics.qos_violations,
                 "Total_Downtime_s": metrics.total_downtime,
                 "Congestion_Intensity": metrics.congestion_intensity,
                 "Satisfaction_Percent": metrics.satisfied_user_ratio * 100,
@@ -722,9 +754,32 @@ class ResultLogger:
             rows.append(row)
         
         df = pd.DataFrame(rows)
+        # Ensure directory exists
         os.makedirs(os.path.dirname(save_path), exist_ok=True)
         
         # Append if file exists, write header if new
-        write_header = not os.path.exists(save_path)
-        df.to_csv(save_path, mode='a', header=write_header, index=False)
+        if os.path.exists(save_path) and os.path.getsize(save_path) > 0:
+            try:
+                old_df = pd.read_csv(save_path)
+                combined_df = pd.concat([old_df, df], ignore_index=True)
+                combined_df.to_csv(save_path, index=False)
+            except Exception:
+                df.to_csv(save_path, mode='a', header=True, index=False)
+        else:
+            df.to_csv(save_path, index=False)
         print(f"  📊 Results appended to {save_path}")
+
+    @staticmethod
+    def get_completed_pairs(save_path: str = "results/experiment_results.csv") -> List[Tuple[str, str]]:
+        """
+        Returns a list of (scenario, controller) tuples already present in the CSV.
+        Used to skip redundant evaluations.
+        """
+        if not os.path.exists(save_path):
+            return []
+        try:
+            df = pd.read_csv(save_path, usecols=["Scenario", "Controller"])
+            return list(zip(df["Scenario"], df["Controller"]))
+        except Exception:
+            # If CSV is malformed or column names differ, return empty
+            return []

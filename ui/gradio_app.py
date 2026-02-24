@@ -34,7 +34,8 @@ from plotly.subplots import make_subplots
 from interpretability.gradio_tab import build_interpretability_tab
 
 # ── Add project root to path so we can import policies ───────────────────────
-ROOT = Path(__file__).parent
+# ── Add project root to path so we can import policies ───────────────────────
+ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(ROOT))
 
 # ── Constants ─────────────────────────────────────────────────────────────────
@@ -42,16 +43,17 @@ MODELS_DIR = ROOT / "models"
 LOGS_DIR   = ROOT / "logs"
 RESULTS_DIR= ROOT / "results"
 
-CELL_FEATURES = 12
-CELL_ACTIONS  = 2
+CELL_FEATURES = 16
+CELL_ACTIONS  = 3
 DEFAULT_CELLS = 3
 
 FEATURE_NAMES = [
-    "RSRP (dBm)", "SINR (dB)", "RB Utilization", "Tx Power (dBm)", "CQI",
-    "UE Count", "Avg Throughput (Mbps)", "Avg Delay (ms)", "Avg Loss",
-    "Avg RSRP (dBm)", "Avg SINR (dB)", "Jain's Fairness",
+    "Queue Length", "RB Util", "Tx Power Norm", "Cell Load", "Avg RB Req",
+    "Avg Tput", "Avg Delay", "Avg Loss", "Max Delay", "Max Loss", "Jains",
+    "UE Count Norm", "Padding", "Padding", "Padding", "Padding"
 ]
-ACTION_NAMES = ["TxPower", "Handover Sensitivity"]
+VISIBLE_FEATURES = 12  # Only show the first 12 features, hide padding
+ACTION_NAMES = ["TxPowerDBM", "CIO", "TTT"]
 
 REWARD_COMPONENTS = ["r_tput", "r_delay", "r_loss", "r_load", "r_energy", "r_sla", "r_cio"]
 COMPONENT_COLORS  = ["#00d4ff", "#f87171", "#fbbf24", "#f472b6", "#34d399", "#a78bfa", "#6366f1"]
@@ -59,211 +61,95 @@ COMPONENT_COLORS  = ["#00d4ff", "#f87171", "#fbbf24", "#f472b6", "#34d399", "#a7
 # ── Model loading helpers ─────────────────────────────────────────────────────
 
 def list_models():
-    """Return sorted list of .pt model files in models/."""
+    """Return sorted list of .pt model files in models/ with metadata."""
     pts = sorted(glob.glob(str(MODELS_DIR / "*.pt")))
-    return [os.path.basename(p) for p in pts] or ["(no models found)"]
+    results = []
+    for p in pts:
+        name = os.path.basename(p)
+        try:
+            ckpt = torch.load(p, map_location="cpu", weights_only=False)
+            h = ckpt.get("hyperparams", {})
+            m_type = h.get("model_type", "unknown")
+            steps = ckpt.get("total_steps", ckpt.get("total_timesteps", "unknown"))
+            results.append(f"{name} [{m_type}, {steps} steps]")
+        except:
+             results.append(name)
+    return results or ["(no models found)"]
 
 
-def load_policy(model_name: str, num_cells: int = DEFAULT_CELLS, device: str = "cpu"):
-    """Load a BDHPolicy checkpoint from models/<model_name>. Auto-detects dimensions."""
-    from policies.bdh_policy import BDHPolicy
+def load_policy(model_display_name: str, num_cells: int = DEFAULT_CELLS, device: str = "cpu"):
+    """Load a policy checkpoint from models/."""
+    from policies import get_policy
     from oran_ns3_env import NS3Config
 
+    model_name = model_display_name.split(" [")[0]
     model_path = MODELS_DIR / model_name
     if not model_path.exists():
         raise FileNotFoundError(f"Model not found: {model_path}")
 
     ckpt = torch.load(str(model_path), map_location=device, weights_only=False)
+                n_int = DEFAULT_CELLS
+                # Sliders are VISIBLE_FEATURES per cell (12), but model expects CELL_FEATURES (16)
+                # Reconstruct full state with padding zeros
+                full_frame = []
+                for c in range(n_int):
+                    start = c * VISIBLE_FEATURES
+                    sl = list(slider_vals[start:start+VISIBLE_FEATURES]) if start < len(slider_vals) else []
+                    while len(sl) < VISIBLE_FEATURES: sl.append(0.0)
+                    cell_feats = [0.1, sl[2] if len(sl)>2 else 0.5, (sl[3]-10)/36 if len(sl)>3 else 0.36, 0.2, 0.3, sl[6]/100 if len(sl)>6 else 0.05, sl[7]/100 if len(sl)>7 else 0.3, sl[8] if len(sl)>8 else 0.05, sl[7]/80 if len(sl)>7 else 0.4, sl[8] if len(sl)>8 else 0.05, sl[11] if len(sl)>11 else 0.8, sl[5]/50 if len(sl)>5 else 0.4, sl[1]/30 if len(sl)>1 else 0.5, 0.0, sl[4]/15 if len(sl)>4 else 0.53, 1.0]
+                    full_frame.extend(cell_feats)
+                
+                single_frame = np.array(full_frame, dtype=np.float32)
+                # Tile the single frame 3 times to satisfy n_stack=3
+                state = np.concatenate([single_frame, single_frame, single_frame])
 
-    # Support both raw state_dict and wrapped checkpoint formats
-    if isinstance(ckpt, dict):
-        sd = ckpt.get("policy_state_dict") or ckpt.get("state_dict") or ckpt
-    else:
-        sd = ckpt
+                policy, vec_norm, n_actual = load_policy(model_name, num_cells=n_int)
+                
+                # ── Fix Broadcast Error: Ensure state matches n_actual ──────────
+                if n_actual != n_int:
+                    full_frame_actual = []
+                    for c in range(n_actual):
+                        start = c * VISIBLE_FEATURES
+                        sl = list(slider_vals[start:start+VISIBLE_FEATURES]) if start < len(slider_vals) else []
+                        while len(sl) < VISIBLE_FEATURES: sl.append(0.0)
+                        cell_feats = [0.1, sl[2] if len(sl)>2 else 0.5, (sl[3]-10)/36 if len(sl)>3 else 0.36, 0.2, 0.3, sl[6]/100 if len(sl)>6 else 0.05, sl[7]/100 if len(sl)>7 else 0.3, sl[8] if len(sl)>8 else 0.05, sl[7]/80 if len(sl)>7 else 0.4, sl[8] if len(sl)>8 else 0.05, sl[11] if len(sl)>11 else 0.8, sl[5]/50 if len(sl)>5 else 0.4, sl[1]/30 if len(sl)>1 else 0.5, 0.0, sl[4]/15 if len(sl)>4 else 0.53, 1.0]
+                        full_frame_actual.extend(cell_feats)
+                    single_frame = np.array(full_frame_actual, dtype=np.float32)
+                    state = np.concatenate([single_frame, single_frame, single_frame])
 
-    # ── Auto-detect dimensions from checkpoint weights ──
-    # logstd_head shape → action_dim
-    logstd_key = next((k for k in sd if 'logstd' in k), None)
-    action_key = next((k for k in sd if 'action_head' in k and 'bias' in k), None)
+                actions, value, mean, std = run_inference(policy, state, vec_norm=vec_norm, deterministic=deterministic)
 
-    if logstd_key:
-        action_dim = int(sd[logstd_key].shape[-1])
-    elif action_key:
-        action_dim = int(sd[action_key].shape[0])
-    else:
-        action_dim = num_cells * 3
+                # Run on model's native cell count, then tile to requested count
+                actions_2d = actions.reshape(n_actual, CELL_ACTIONS)
+                mean_2d    = mean.reshape(n_actual, CELL_ACTIONS)
+                std_2d     = std.reshape(n_actual, CELL_ACTIONS)
 
-    # Derive num_cells from action_dim (3 actions per cell)
-    detected_cells = max(action_dim // 3, 1)
-
-    # frame_encoder weight shape → features per cell
-    frame_enc_key = next((k for k in sd if 'frame_encoder' in k and 'weight' in k), None)
-    if frame_enc_key:
-        feat_per_cell = int(sd[frame_enc_key].shape[1])
-        state_dim = detected_cells * feat_per_cell * 3  # 3 temporal frames
-    else:
-        state_dim = detected_cells * 16 * 3
-
-    cfg = NS3Config()
-    cfg.num_cells = detected_cells
-
-    policy = BDHPolicy(state_dim=state_dim, action_dim=action_dim, device=device, env_config=cfg)
-    policy = policy.to(device)
-    policy.load_state_dict(sd, strict=False)
-    policy.eval()
-    return policy
-
-
-def run_inference(policy, state_np: np.ndarray, deterministic: bool = True, device: str = "cpu"):
-    """Run a single forward pass. Returns (actions, value, action_mean, action_std)."""
-    with torch.no_grad():
-        state_t = torch.FloatTensor(state_np).unsqueeze(0).to(device)
-        action_mean, logstd, value = policy._forward_common(state_t)
-        action_std = torch.exp(logstd)
-
-        if deterministic:
-            actions = action_mean
-        else:
-            dist = torch.distributions.Normal(action_mean, action_std)
-            actions = dist.sample()
-
-    actions_np = actions.squeeze(0).cpu().numpy()
-    mean_np    = action_mean.squeeze(0).cpu().numpy()
-    std_np     = action_std.squeeze(0).cpu().numpy()
-    value_f    = value.squeeze().item()
-    return actions_np, value_f, mean_np, std_np
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# TAB 1 — Model Inference
-# ─────────────────────────────────────────────────────────────────────────────
-
-def build_inference_tab():
-    with gr.Tab("🤖 Model Inference"):
-        gr.Markdown("""
-        ## Model Inference
-        Load a BDH checkpoint and feed in cell-level state features to see the agent's predicted actions and value estimate.
-        """)
-
-        with gr.Row():
-            with gr.Column(scale=1):
-                model_dd = gr.Dropdown(
-                    label="Select Model Checkpoint",
-                    choices=list_models(),
-                    value=list_models()[0],
-                    interactive=True,
-                )
-                refresh_btn = gr.Button("🔄 Refresh Model List", size="sm")
-                num_cells_sl = gr.Slider(1, 6, value=3, step=1, label="Number of Cells")
-                deterministic_cb = gr.Checkbox(value=True, label="Deterministic Action (uncheck to sample)")
-
-            with gr.Column(scale=2):
-                gr.Markdown("### Cell State Features")
-                gr.Markdown("*Adjust sliders for each cell (12 features × N cells)*")
-                state_inputs = []
-                for c in range(DEFAULT_CELLS):
-                    with gr.Accordion(f"Cell {c}", open=(c == 0)):
-                        row_inputs = []
-                        for f_idx, fname in enumerate(FEATURE_NAMES):
-                            lo, hi, default = _feature_range(f_idx)
-                            sl = gr.Slider(lo, hi, value=default, label=fname, step=(hi - lo) / 100)
-                            row_inputs.append(sl)
-                        state_inputs.extend(row_inputs)
-
-        run_btn = gr.Button("▶ Run Inference", variant="primary")
-
-        with gr.Row():
-            value_box = gr.Textbox(label="Value Estimate (V)", interactive=False)
-            status_box = gr.Textbox(label="Status", interactive=False)
-
-        actions_plot = gr.Plot(label="Predicted Actions per Cell")
-        actions_table = gr.Dataframe(
-            label="Action Details",
-            headers=["Cell"] + ACTION_NAMES,
-            interactive=False,
-        )
-
-        def refresh_models():
-            return gr.Dropdown(choices=list_models())
-
-        def do_inference(model_name, num_cells, deterministic, *slider_vals):
-            try:
-                policy = load_policy(model_name, num_cells=int(num_cells))
-
-                # Detect dimensions from the loaded policy
-                bdh = policy.bdh if hasattr(policy, 'bdh') else policy
-                detected_cells = bdh.config.num_cells if hasattr(bdh, 'config') else int(num_cells)
-                feat_per_cell = policy.frame_dim if hasattr(policy, 'frame_dim') else 16
-                n_frames = 3
-                model_state_dim = detected_cells * feat_per_cell * n_frames
-
-                # Map 12 slider features → 16 model features per cell
-                # Slider: RSRP, SINR, RB_Util, TxPower, CQI, UE_Count,
-                #         AvgTput, AvgDelay, AvgLoss, AvgRSRP, AvgSINR, Jains
-                # Model:  queue, rb_util, tx_power, load, avg_req,
-                #         avg_tput, avg_delay, avg_loss, max_delay, max_loss,
-                #         jains, n_ues, sinr_mean, ho_count, cqi_mean, stationary
-                one_frame = []
-                for c in range(detected_cells):
-                    sl_offset = c * CELL_FEATURES
-                    sl = list(slider_vals[sl_offset:sl_offset + CELL_FEATURES])
-                    while len(sl) < CELL_FEATURES:
-                        sl.append(0.0)
-
-                    # Build 16-feature vector (normalized)
-                    cell_feats = [
-                        0.1,                           # queue (normalized)
-                        sl[2] if len(sl) > 2 else 0.5, # rb_util
-                        (sl[3] - 10) / 36 if len(sl) > 3 else 0.36,  # tx_power (norm)
-                        0.2,                           # load (normalized)
-                        0.3,                           # avg_req (default)
-                        sl[6] / 100 if len(sl) > 6 else 0.05,  # avg_tput (norm)
-                        sl[7] / 100 if len(sl) > 7 else 0.3,   # avg_delay (norm)
-                        sl[8] if len(sl) > 8 else 0.05,        # avg_loss
-                        sl[7] / 80 if len(sl) > 7 else 0.4,    # max_delay (approx)
-                        sl[8] if len(sl) > 8 else 0.05,        # max_loss
-                        sl[11] if len(sl) > 11 else 0.8,       # jains
-                        sl[5] / 50 if len(sl) > 5 else 0.4,    # n_ues (norm)
-                        sl[1] / 30 if len(sl) > 1 else 0.5,    # sinr_mean (norm)
-                        0.0,                           # ho_count
-                        sl[4] / 15 if len(sl) > 4 else 0.53,   # cqi_mean (norm)
-                        1.0,                           # stationary flag
-                    ]
-                    one_frame.extend(cell_feats[:feat_per_cell])
-
-                # Tile across 3 temporal frames (t-2, t-1, t-0)
-                state = np.array(one_frame * n_frames, dtype=np.float32)
-
-                # Truncate or pad to exact model_state_dim
-                if len(state) > model_state_dim:
-                    state = state[:model_state_dim]
-                elif len(state) < model_state_dim:
-                    state = np.pad(state, (0, model_state_dim - len(state)))
-
-                actions, value, mean, std = run_inference(policy, state, deterministic=deterministic)
-
-                # Reshape by detected dimensions
-                act_per_cell = 3  # TxPower, CIO, TTT
-                n = detected_cells
-                act_names = ["TxPower", "CIO", "TTT"]
-                actions_2d = actions.reshape(n, act_per_cell)
-                mean_2d    = mean.reshape(n, act_per_cell)
-                std_2d     = std.reshape(n, act_per_cell)
+                # Tile (cycle) outputs to fill n_int cells
+                # e.g. model=3 cells, slider=5: [0,1,2,0,1]
+                if n_int > n_actual:
+                    idxs = [i % n_actual for i in range(n_int)]
+                    actions_2d = actions_2d[idxs]
+                    mean_2d    = mean_2d[idxs]
+                    std_2d     = std_2d[idxs]
+                n = n_int  # Always show what the slider requested
 
                 # Build table
                 rows = []
                 for ci in range(n):
-                    rows.append([f"Cell {ci}"] + [f"{v:.4f}" for v in actions_2d[ci]])
-                df = pd.DataFrame(rows, columns=["Cell"] + act_names)
+                    tiled_note = f" (↻{ci % n_actual})" if n_int > n_actual and ci >= n_actual else ""
+                    rows.append([f"Cell {ci}{tiled_note}"] + [f"{v:.4f}" for v in actions_2d[ci]])
+                df = pd.DataFrame(rows, columns=["Cell"] + ACTION_NAMES)
 
                 # Build bar chart
                 fig = go.Figure()
                 for ci in range(n):
+                    is_tiled = n_int > n_actual and ci >= n_actual
                     fig.add_trace(go.Bar(
-                        name=f"Cell {ci}",
-                        x=act_names,
+                        name=f"Cell {ci}" + (f" (↻{ci%n_actual})" if is_tiled else ""),
+                        x=ACTION_NAMES,
                         y=actions_2d[ci].tolist(),
                         error_y=dict(type="data", array=std_2d[ci].tolist(), visible=True),
+                        opacity=0.65 if is_tiled else 1.0,
                     ))
                 fig.update_layout(
                     barmode="group",
@@ -276,7 +162,8 @@ def build_inference_tab():
                     legend=dict(bgcolor="#1a1f35"),
                 )
 
-                return f"{value:.4f}", f"✅ Inference OK ({detected_cells} cell, state_dim={model_state_dim})", fig, df
+                cell_note = f" — model has {n_actual} cells, tiled to {n_int}" if n_actual != n_int else ""
+                return f"{value:.4f}", f"✅ Inference OK{cell_note}", fig, df
 
             except Exception as e:
                 return "—", f"❌ Error: {e}\n{traceback.format_exc()}", None, None
@@ -284,30 +171,36 @@ def build_inference_tab():
         refresh_btn.click(refresh_models, outputs=[model_dd])
         run_btn.click(
             do_inference,
-            inputs=[model_dd, num_cells_sl, deterministic_cb] + state_inputs,
+            inputs=[model_dd, deterministic_cb] + state_inputs,
             outputs=[value_box, status_box, actions_plot, actions_table],
         )
 
-    return model_dd, num_cells_sl, state_inputs
+    return model_dd, state_inputs
 
 
 def _feature_range(f_idx):
     """Return (lo, hi, default) for each of the 12 cell features."""
     ranges = [
-        (-140, -44, -90),   # RSRP
-        (-10,  40,  15),    # SINR
-        (0,    1,   0.5),   # RB Util
-        (0,    46,  23),    # Tx Power
-        (1,    15,  8),     # CQI
-        (0,    200, 20),    # UE Count
-        (0,    100, 5),     # Avg Throughput
-        (0,    500, 30),    # Avg Delay
-        (0,    1,   0.05),  # Avg Loss
-        (-140, -44, -90),   # Avg RSRP
-        (-10,  40,  15),    # Avg SINR
-        (0,    1,   0.8),   # Jain's Fairness
+        (0, 1, 0.1),    # Queue Length
+        (0, 1, 0.5),    # RB Util
+        (0, 1, 0.5),    # Tx Power Norm
+        (0, 1, 0.2),    # Cell Load
+        (0, 1, 0.1),    # Avg RB Req
+        (0, 1, 0.5),    # Avg Tput
+        (0, 1, 0.3),    # Avg Delay
+        (0, 1, 0.05),   # Avg Loss
+        (0, 1, 0.4),    # Max Delay
+        (0, 1, 0.1),    # Max Loss
+        (0, 1, 0.8),    # Jains
+        (0, 1, 0.4),    # UE Count Norm
+        (0, 1, 0),      # Feature 12
+        (0, 1, 0),      # Feature 13
+        (0, 1, 0),      # Feature 14
+        (0, 1, 0),      # Feature 15
     ]
-    return ranges[f_idx]
+    if f_idx < len(ranges):
+        return ranges[f_idx]
+    return (0, 1, 0)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -333,34 +226,63 @@ def build_metrics_tab():
                 refresh_log_btn = gr.Button("🔄 Refresh Log List", size="sm")
 
         load_status = gr.Textbox(label="Status", interactive=False)
+        stat_df = gr.Dataframe(label="Summary Statistics", interactive=False)
 
         with gr.Row():
-            stat_df = gr.Dataframe(label="Summary Statistics", interactive=False)
+            kpi_avg_tput = gr.Number(label="Avg Throughput (Mbps)", value=0, interactive=False)
+            kpi_avg_delay = gr.Number(label="Avg Delay (ms)", value=0, interactive=False)
+            kpi_avg_loss = gr.Number(label="Avg Loss (%)", value=0, interactive=False)
+            kpi_reward = gr.Number(label="Total Reward", value=0, interactive=False)
 
-        reward_plot   = gr.Plot(label="Total Reward Over Time")
-        breakdown_plot = gr.Plot(label="Reward Component Breakdown")
-        kpi_plot      = gr.Plot(label="KPI Trends (Throughput / Delay / Loss)")
-        success_plot  = gr.Plot(label="UE Success Rate")
+        with gr.Row():
+            reward_plot   = gr.Plot(label="Total Reward Over Time")
+            breakdown_plot = gr.Plot(label="Reward Component Breakdown")
+        
+        with gr.Row():
+            kpi_plot      = gr.Plot(label="KPI Trends (Throughput / Delay / Loss)")
+            success_plot  = gr.Plot(label="UE Success Rate")
+
+        # ── Live Polling ─────────────────────────────────────────────────────
+        live_timer = gr.Timer(value=5, active=False)
+        with gr.Row():
+            live_toggle = gr.Checkbox(label="Enable Live Polling", value=False)
+            poll_interval = gr.Slider(label="Poll Interval (s)", minimum=1, maximum=30, value=5, step=1)
 
         def _list_logs_refresh():
             return gr.Dropdown(choices=_list_log_csvs())
 
         def load_from_file(f):
             if f is None:
-                return "No file uploaded.", None, None, None, None, None
+                return ["No file uploaded."] + [None]*9
             return _process_csv(f.name)
 
         def load_from_dropdown(log_name):
             if not log_name:
-                return "No log selected.", None, None, None, None, None
+                return ["No log selected."] + [None]*9
             path = LOGS_DIR / log_name
             return _process_csv(str(path))
 
+        def live_update(log_name, current_rows):
+            if not log_name or log_name == "(no logs found)":
+                return [gr.skip()]*10
+            path = LOGS_DIR / log_name
+            try:
+                # Optimized: could just check file size first
+                # But for now, just reload
+                return _process_csv(str(path))
+            except:
+                return [gr.skip()]*10
+
         refresh_log_btn.click(_list_logs_refresh, outputs=[log_dd])
-        csv_file.change(load_from_file, inputs=[csv_file],
-                        outputs=[load_status, stat_df, reward_plot, breakdown_plot, kpi_plot, success_plot])
-        load_log_btn.click(load_from_dropdown, inputs=[log_dd],
-                           outputs=[load_status, stat_df, reward_plot, breakdown_plot, kpi_plot, success_plot])
+        
+        csv_outputs = [load_status, stat_df, kpi_avg_tput, kpi_avg_delay, kpi_avg_loss, kpi_reward, reward_plot, breakdown_plot, kpi_plot, success_plot]
+        
+        csv_file.change(load_from_file, inputs=[csv_file], outputs=csv_outputs)
+        load_log_btn.click(load_from_dropdown, inputs=[log_dd], outputs=csv_outputs)
+        
+        live_toggle.change(lambda x: gr.Timer(active=x), inputs=[live_toggle], outputs=[live_timer])
+        poll_interval.change(lambda x: gr.Timer(value=x), inputs=[poll_interval], outputs=[live_timer])
+        live_timer.tick(live_update, inputs=[log_dd], outputs=csv_outputs)
 
 
 def _list_log_csvs():
@@ -373,13 +295,13 @@ def _process_csv(path: str):
     try:
         df = pd.read_csv(path)
         if df.empty:
-            return "CSV is empty.", None, None, None, None, None
+            return "CSV is empty.", None, 0, 0, 0, 0, None, None, None, None
 
         status = f"✅ Loaded {len(df)} rows from {os.path.basename(path)}"
 
         # ── Summary stats ──────────────────────────────────────────────────
         numeric_cols = ["reward", "r_tput", "r_delay", "r_loss", "r_load", "r_energy", "r_sla", "r_cio",
-                        "avg_throughput", "avg_delay", "avg_loss", "z_success"]
+                        "jains", "p95_delay", "avg_throughput", "avg_delay", "avg_loss", "z_success"]
         available = [c for c in numeric_cols if c in df.columns]
         stats = df[available].describe().round(4).reset_index()
         stats.rename(columns={"index": "Statistic"}, inplace=True)
@@ -454,10 +376,16 @@ def _process_csv(path: str):
                 ))
         _style_fig(fig_success, "UE Success Rate (Tput > 1 Mbps)", "Step", "Ratio")
 
-        return status, stats, fig_reward, fig_break, fig_kpi, fig_success
+        # ── KPI summary values ─────────────────────────────────────────────
+        avg_tput   = round(df["avg_throughput"].mean(), 2) if "avg_throughput" in df.columns else 0
+        avg_delay  = round(df["avg_delay"].mean(), 2)      if "avg_delay"      in df.columns else 0
+        avg_loss   = round(df["avg_loss"].mean() * 100, 2)  if "avg_loss"       in df.columns else 0
+        total_reward = round(df["reward"].sum(), 2)          if "reward"         in df.columns else 0
+
+        return status, stats, avg_tput, avg_delay, avg_loss, total_reward, fig_reward, fig_break, fig_kpi, fig_success
 
     except Exception as e:
-        return f"❌ Error: {e}\n{traceback.format_exc()}", None, None, None, None, None
+        return f"❌ Error: {e}\n{traceback.format_exc()}", None, 0, 0, 0, 0, None, None, None, None
 
 
 def _style_fig(fig, title, xlab, ylab):
@@ -490,14 +418,14 @@ def build_comparison_tab():
                                      interactive=True)
 
         with gr.Row():
-            num_cells_cmp = gr.Slider(1, 6, value=3, step=1, label="Number of Cells")
             det_cmp = gr.Checkbox(value=True, label="Deterministic")
 
         gr.Markdown("### Shared Cell State Input")
         cmp_state_inputs = []
         for c in range(DEFAULT_CELLS):
             with gr.Accordion(f"Cell {c}", open=(c == 0)):
-                for f_idx, fname in enumerate(FEATURE_NAMES):
+                for f_idx in range(VISIBLE_FEATURES):
+                    fname = FEATURE_NAMES[f_idx]
                     lo, hi, default = _feature_range(f_idx)
                     sl = gr.Slider(lo, hi, value=default, label=fname, step=(hi - lo) / 100)
                     cmp_state_inputs.append(sl)
@@ -522,16 +450,36 @@ def build_comparison_tab():
 
         diff_plot = gr.Plot(label="Action Difference (A − B)")
 
-        def do_comparison(model_a, model_b, num_cells, deterministic, *slider_vals):
+        def _build_state_from_sliders(slider_vals, n_cells):
+            """Reconstruct a full state vector from visible slider values."""
+            full_frame = []
+            for c in range(n_cells):
+                start = c * VISIBLE_FEATURES
+                end   = start + VISIBLE_FEATURES
+                cell_vals = list(slider_vals[start:end]) if start < len(slider_vals) else []
+                cell_vals.extend([0.0] * (CELL_FEATURES - len(cell_vals)))
+                full_frame.extend(cell_vals)
+            single_frame = np.array(full_frame, dtype=np.float32)
+            return np.concatenate([single_frame, single_frame, single_frame])
+
+        def do_comparison(model_a, model_b, deterministic, *slider_vals):
             try:
-                n = int(num_cells)
-                state = np.array(slider_vals[:n * CELL_FEATURES], dtype=np.float32)
+                n_int = DEFAULT_CELLS
+                state = _build_state_from_sliders(slider_vals, n_int)
 
-                pol_a = load_policy(model_a, num_cells=n)
-                pol_b = load_policy(model_b, num_cells=n)
+                pol_a, vn_a, n_a = load_policy(model_a, num_cells=n_int)
+                pol_b, vn_b, n_b = load_policy(model_b, num_cells=n_int)
 
-                acts_a, val_a, mean_a, std_a = run_inference(pol_a, state, deterministic)
-                acts_b, val_b, mean_b, std_b = run_inference(pol_b, state, deterministic)
+                # Check if models have different cell counts
+                if n_a != n_b:
+                     return f"❌ Cannot compare models with different cell counts: {model_a} ({n_a} cells) vs {model_b} ({n_b} cells)", None, None, None, "—", "—", None
+
+                n = n_a
+                if n != n_int:
+                    state = _build_state_from_sliders(slider_vals, n)
+
+                acts_a, val_a, mean_a, std_a = run_inference(pol_a, state, vec_norm=vn_a, deterministic=deterministic)
+                acts_b, val_b, mean_b, std_b = run_inference(pol_b, state, vec_norm=vn_b, deterministic=deterministic)
 
                 acts_a_2d = acts_a.reshape(n, CELL_ACTIONS)
                 acts_b_2d = acts_b.reshape(n, CELL_ACTIONS)
@@ -598,7 +546,7 @@ def build_comparison_tab():
 
         cmp_btn.click(
             do_comparison,
-            inputs=[model_a_dd, model_b_dd, num_cells_cmp, det_cmp] + cmp_state_inputs,
+            inputs=[model_a_dd, model_b_dd, det_cmp] + cmp_state_inputs,
             outputs=[cmp_status, cmp_plot, table_a, table_b, val_a_box, val_b_box, diff_plot],
         )
 

@@ -1,6 +1,0 @@
-# Linguist overrides
-scripts/*.rs linguist-documentation=false
-scripts/*.go linguist-documentation=false
-scripts/*.js linguist-documentation=false
-*.html linguist-documentation=false
-

@@ -127,8 +127,8 @@ class PPOTrainer:
         self.target_kl = target_kl
         
         # Entropy Annealing State
-        self.ent_coef = ent_coef_start
-        self.ent_coef_start = ent_coef_start
+        self.ent_coef = ent_coef
+        self.ent_coef_start = ent_coef
         self.ent_coef_end = ent_coef_end
         self.ent_decay_fraction = ent_decay_fraction
         self.ns3_config = ns3_config
@@ -289,11 +289,12 @@ class PPOTrainer:
             state_tensor = torch.FloatTensor(state).unsqueeze(0).to(self.device)
             
             with torch.no_grad():
-                action, log_prob, entropy = self.policy.get_action(state_tensor)
-                _, _, value = self.policy(state_tensor)
+                with torch.cuda.amp.autocast(enabled=self.enable_amp, dtype=self.amp_dtype):
+                    action, log_prob, entropy = self.policy.get_action(state_tensor)
+                    _, _, value = self.policy(state_tensor)
             
             # Denormalize action to environment's action space
-            action_np = action.cpu().numpy()[0]
+            action_np = action.float().cpu().numpy()[0]
             action_denorm = self._denormalize_action(action_np)
             
             next_state, reward, terminated, truncated, info = self.env.step(action_denorm)
@@ -383,7 +384,8 @@ class PPOTrainer:
         # Get value of final state for GAE
         with torch.no_grad():
             state_tensor = torch.FloatTensor(state).unsqueeze(0).to(self.device)
-            _, _, next_value = self.policy(state_tensor)
+            with torch.cuda.amp.autocast(enabled=self.enable_amp, dtype=self.amp_dtype):
+                _, _, next_value = self.policy(state_tensor)
             next_value = next_value.item()
         
         # Compute advantages
@@ -394,6 +396,7 @@ class PPOTrainer:
             'states': torch.FloatTensor(np.array(states)),
             'actions': torch.FloatTensor(np.array(actions)),
             'log_probs': torch.FloatTensor(np.array(log_probs)),
+            'values': torch.FloatTensor(np.array(values)),
             'returns': returns,
             'advantages': advantages,
         }
@@ -426,12 +429,13 @@ class PPOTrainer:
             states_tensor = torch.FloatTensor(states).to(self.device)
             
             with torch.no_grad():
-                # Get actions for all envs at once
-                actions, log_probs, entropy = self.policy.get_action(states_tensor)
-                _, _, values = self.policy(states_tensor)
+                # Get actions for all envs at once using same precision as update
+                with torch.cuda.amp.autocast(enabled=self.enable_amp, dtype=self.amp_dtype):
+                    actions, log_probs, entropy = self.policy.get_action(states_tensor)
+                    _, _, values = self.policy(states_tensor)
             
             # Convert to numpy: (n_envs, action_dim)
-            actions_np = actions.cpu().numpy()
+            actions_np = actions.float().cpu().numpy()
             
             # Denormalize actions for each env
             actions_denorm = np.array([self._denormalize_action(a) for a in actions_np])
@@ -459,8 +463,8 @@ class PPOTrainer:
             all_actions.append(actions_np)
             all_rewards.append(rewards_arr)
             all_dones.append(dones_arr)
-            all_values.append(values.cpu().numpy().flatten())
-            all_log_probs.append(log_probs.cpu().numpy().flatten())
+            all_values.append(values.float().cpu().numpy().flatten())
+            all_log_probs.append(log_probs.float().cpu().numpy().flatten())
             
             states = next_states
             self._last_obs = states # Store for next rollout cycle
@@ -477,7 +481,8 @@ class PPOTrainer:
         # Get value of final states for GAE
         with torch.no_grad():
             states_tensor = torch.FloatTensor(states).to(self.device)
-            _, _, next_values = self.policy(states_tensor)
+            with torch.cuda.amp.autocast(enabled=self.enable_amp, dtype=self.amp_dtype):
+                _, _, next_values = self.policy(states_tensor)
             next_values = next_values.squeeze(-1) # (n_envs,)
         
         # Compute advantages across all environments at once (vectorized)
@@ -494,6 +499,7 @@ class PPOTrainer:
             'states': all_states_tensor.reshape(-1, all_states_tensor.size(-1)),
             'actions': all_actions_tensor.reshape(-1, all_actions_tensor.size(-1)),
             'log_probs': all_log_probs_tensor.flatten(),
+            'values': all_values_tensor.flatten(),
             'returns': returns.flatten(),
             'advantages': advantages.flatten(),
         }
@@ -504,6 +510,7 @@ class PPOTrainer:
         states = rollout['states'].to(self.device)
         actions = rollout['actions'].to(self.device)
         old_log_probs = rollout['log_probs'].to(self.device)
+        old_values = rollout['values'].to(self.device)
         returns = rollout['returns'].to(self.device)
         advantages = rollout['advantages'].to(self.device)
         
@@ -522,6 +529,7 @@ class PPOTrainer:
                 batch_states = states[idx]
                 batch_actions = actions[idx]
                 batch_old_log_probs = old_log_probs[idx]
+                batch_old_values = old_values[idx]
                 batch_returns = returns[idx]
                 batch_advantages = advantages[idx]
                 
@@ -537,7 +545,17 @@ class PPOTrainer:
                     surr2 = torch.clamp(ratio, 1 - self.clip_epsilon, 1 + self.clip_epsilon) * batch_advantages
                     
                     policy_loss = -torch.min(surr1, surr2).mean()
-                    value_loss = nn.MSELoss()(values.squeeze(), batch_returns)
+                    
+                    # Value function clipping (Anchor new predictions to rollout values)
+                    v_loss_unclipped = (values.squeeze() - batch_returns) ** 2
+                    v_clipped = batch_old_values + torch.clamp(
+                        values.squeeze() - batch_old_values,
+                        -self.clip_epsilon,
+                        self.clip_epsilon
+                    )
+                    v_loss_clipped = (v_clipped - batch_returns) ** 2
+                    value_loss = 0.5 * torch.max(v_loss_unclipped, v_loss_clipped).mean()
+                    
                     entropy_loss = -entropy.mean()
                     
                     loss = (
@@ -551,6 +569,12 @@ class PPOTrainer:
                         log_ratio = log_probs - batch_old_log_probs
                         approx_kl = torch.mean((torch.exp(log_ratio) - 1) - log_ratio).item()
                 
+                # Check KL BEFORE applying the gradient step
+                if self.target_kl is not None and approx_kl > self.target_kl * 1.5:
+                    # Soft-clip the policy loss if KL diverges.
+                    # CRITICAL FIX: Only train the Value network when KL goes over target. If we keep entropy_loss, it will skyrocket.
+                    loss = self.vf_coef * value_loss
+                    
                 # Optimization step with GradScaler
                 self.optimizer.zero_grad()
                 self.scaler.scale(loss).backward()
@@ -559,13 +583,8 @@ class PPOTrainer:
                 self.scaler.step(self.optimizer)
                 self.scaler.update()
             
-            # KL Early-Stop: if policy diverges too far, stop epoch updates
-            # Healthy PPO keeps KL < 0.05. KL > 0.1 = catastrophic update.
-            # KL Early-Stop: if policy diverges too far, stop epoch updates
-            # Healthy PPO keeps KL < target_kl (usually 0.05). KL > 0.1 = catastrophic update.
-            if self.target_kl is not None and approx_kl > self.target_kl:
-                break
-                
+            # Epoch-level early stopping is removed to ensure Critic fully trains.
+            # We rely on PPO's clip_epsilon and the mini-batch soft-clip above for policy safety.
         # Update learning rate
         self.scheduler.step()
         
@@ -612,15 +631,22 @@ class PPOTrainer:
         
         # Calculate update frequency based on total samples per rollout
         samples_per_update = rollout_steps * self.n_envs
-        num_updates = total_timesteps // samples_per_update
+        
+        # Resumption logic: Determine how many updates are actually needed
+        start_update = self.total_steps // samples_per_update
+        total_updates = total_timesteps // samples_per_update
+        num_updates = max(0, total_updates - start_update)
+        
+        if num_updates == 0 and self.total_steps < total_timesteps:
+            # If we have less than one full update remaining, run one final update
+            num_updates = 1
         
         if num_updates == 0:
-            print(f"ERROR: Total timesteps ({total_timesteps}) is less than samples per update ({samples_per_update}).")
-            print(f"       With {self.n_envs} envs x {rollout_steps} steps, a single update is {samples_per_update} steps.")
-            print("       Adjust arguments: Increase --total-timesteps or decrease --rollout-steps.")
+            print(f"INFO: Target total timesteps ({total_timesteps:,}) already reached (currently at {self.total_steps:,} steps).")
             return
         
-        print(f"Starting PPO training for {total_timesteps} timesteps")
+        print(f"Resuming PPO training from Update {start_update} ({self.total_steps:,} steps)")
+        print(f"Running {num_updates} more updates to reach {total_timesteps:,} steps")
         print(f"Device: {self.device} | Mixed Precision (AMP): {self.enable_amp} ({self.amp_dtype})")
         
         # Add training loop params
@@ -896,7 +922,10 @@ class PPOTrainer:
             
         with Live(make_layout(), console=console, refresh_per_second=10) as live:
             live_display = live # Set reference for callback
-            for update in range(num_updates):
+            for current_update_count in range(num_updates):
+                # Calculate absolute update number for logs/UI
+                abs_update = start_update + current_update_count + 1
+                
                 # Reset storage for live reward tracking per update
                 current_rollout_rewards = []
                 
@@ -906,6 +935,10 @@ class PPOTrainer:
                 # Update policy
                 metrics = self.update_policy(rollout, batch_size=batch_size, num_epochs=num_epochs)
                 
+                # Linear decay of entropy coefficient
+                fraction = min(1.0, self.total_steps / (total_timesteps * self.ent_decay_fraction))
+                self.ent_coef = self.ent_coef_start + fraction * (self.ent_coef_end - self.ent_coef_start)
+
                 # ── Periodic Interpretability Analysis ──
                 if getattr(self, 'interp_logger', None):
                     try:
@@ -931,7 +964,7 @@ class PPOTrainer:
                 if len(reward_history) > 10: reward_history.pop(0)
 
                 current_stats = {
-                    'update': update + 1,
+                    'update': abs_update,
                     'steps': self.total_steps,
                     'reward': avg_reward,
                     'trend': trend,
@@ -956,15 +989,15 @@ class PPOTrainer:
                 # -----------------------------------------
                 
                 # Periodic checkpointing
-                if self.checkpoint_interval > 0 and (update + 1) % self.checkpoint_interval == 0:
-                    checkpoint_path = str(Path(self.checkpoint_dir) / f'radio_cortex_upd_{update+1}.pt')
+                if self.checkpoint_interval > 0 and abs_update % self.checkpoint_interval == 0:
+                    checkpoint_path = str(Path(self.checkpoint_dir) / f'radio_cortex_upd_{abs_update}.pt')
                     self.save(checkpoint_path)
                     
                     # --- ADDED: Save scalars for periodic checkpoints ---
                     if self.is_vec_env:
                         try:
                             from vec_env_wrapper import save_vec_normalize
-                            scalar_path = str(Path(self.checkpoint_dir) / f'vec_normalize_upd_{update+1}.pkl')
+                            scalar_path = str(Path(self.checkpoint_dir) / f'vec_normalize_upd_{abs_update}.pkl')
                             save_vec_normalize(self.env, scalar_path)
                         except ImportError:
                             pass
@@ -1087,10 +1120,3 @@ def evaluate_policy(
     }
 
 
-# ============================================================================
-# Main Training Script (Legacy - Use radio_cortex_complete.py)
-# ============================================================================
-
-# if __name__ == "__main__":
-#     # Legacy training code removed.
-#     pass
