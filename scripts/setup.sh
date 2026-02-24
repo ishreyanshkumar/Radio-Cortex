@@ -30,8 +30,8 @@ pip install -r requirements.txt
 echo "[3/4] Building ns-3..."
 # Install system dependency if possible (requires sudo, might fail in some envs)
 if command -v apt-get &> /dev/null; then
-    echo "Attempting to install librdkafka-dev (sudo required)..."
-    sudo apt-get update && sudo apt-get install -y librdkafka-dev || echo "Skipping apt install (permission denied or unnecessary)"
+    echo "Attempting to install librdkafka-dev and java (sudo required)..."
+    sudo apt-get update && sudo apt-get install -y librdkafka-dev default-jre || echo "Skipping apt install (permission denied or unnecessary)"
 fi
 
 NS3_DIR=$(ls -d ns-3-allinone/ns-3.* 2>/dev/null | head -1)

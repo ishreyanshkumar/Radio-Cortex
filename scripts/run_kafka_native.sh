@@ -19,6 +19,11 @@ if ! dpkg-query -W -f='${Status}' librdkafka-dev 2>/dev/null | grep -q "ok insta
     sudo apt-get update && sudo apt-get install -y librdkafka-dev
 fi
 
+if ! command -v java &> /dev/null; then
+    echo "Java not found. Installing default-jre..."
+    sudo apt-get update && sudo apt-get install -y default-jre
+fi
+
 # 2. Download and Extract Kafka if not valid
 if [ ! -d "$KAFKA_PATH" ] || [ ! -x "$KAFKA_PATH/bin/kafka-server-start.sh" ]; then
     echo "Kafka binaries not found or incomplete in $KAFKA_PATH. Preparing..."

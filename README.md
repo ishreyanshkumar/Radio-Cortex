@@ -385,9 +385,9 @@ Radio-Cortex uses a **single-stage, stationary reward function** optimized for d
 |:---|:---:|:---|:---:|
 | **Throughput** | 8.0 | $W \cdot \log(1 + T/T_{max})$ | [-0.5, 50.0] |
 | **Delay** | 4.0 | $-W \cdot \min(D/D_{max}, 1)$ (linear) | [-50.0, 0.0] |
-| **Packet Loss** | 8.0 | $-W \cdot (\text{mean\_loss} \cdot 4)$ | [-25.0, 0.0] |
-| **Load Balance** | 4.0 | $-\text{std}(\text{cell\_loads}) \cdot W$ | [-2.0, 0.0] |
-| **Energy Eff.** | 0.1 | $-\text{mean}(\text{norm\_tx\_power}) \cdot W$ | [-1.0, 0.0] |
+| **Packet Loss** | 8.0 | $-W \cdot (\text{mean loss} \cdot 4)$ | [-25.0, 0.0] |
+| **Load Balance** | 4.0 | $-\text{std}(\text{cell loads}) \cdot W$ | [-2.0, 0.0] |
+| **Energy Eff.** | 0.1 | $-\text{mean}(\text{norm tx power}) \cdot W$ | [-1.0, 0.0] |
 | **SLA Bonus** | 0.5 | +0.5 per UE meeting SLA (>1Mbps, <100ms) | [0.0, +NumUEs*0.5] |
 | **CIO Regularization**| 0.4 | $-W \cdot \text{mean}(\|\text{CIO}\|/6)$ | [-0.4, 0.0] |
 | **Survival Bias** | — | Constant `+1.0` | — |
