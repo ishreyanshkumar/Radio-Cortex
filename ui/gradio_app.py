@@ -30,6 +30,9 @@ import plotly.graph_objects as go
 import plotly.express as px
 from plotly.subplots import make_subplots
 
+# ── Interpretability tab (vis.js neural graph + score cards) ──────────────────
+from interpretability.gradio_tab import build_interpretability_tab
+
 # ── Add project root to path so we can import policies ───────────────────────
 # ── Add project root to path so we can import policies ───────────────────────
 ROOT = Path(__file__).parent.parent
@@ -38,6 +41,7 @@ sys.path.insert(0, str(ROOT))
 # ── Constants ─────────────────────────────────────────────────────────────────
 MODELS_DIR = ROOT / "models"
 LOGS_DIR   = ROOT / "logs"
+RESULTS_DIR= ROOT / "results"
 
 CELL_FEATURES = 16
 CELL_ACTIONS  = 3
@@ -84,245 +88,16 @@ def load_policy(model_display_name: str, num_cells: int = DEFAULT_CELLS, device:
         raise FileNotFoundError(f"Model not found: {model_path}")
 
     ckpt = torch.load(str(model_path), map_location=device, weights_only=False)
-    hyperparams = ckpt.get("hyperparams", {})
-    model_type = hyperparams.get("model_type", "bdh")
-    hidden_dim = hyperparams.get("hidden_dim", 256)
-
-    # ── Auto-Detect num_cells from checkpoint sizes ──────────────────────────
-    # frame_encoder.0.weight shape is (emb_dim, num_cells * 16)
-    # or action_head.2.weight shape is (num_cells * 3, emb_dim)
-    # or logstd_head shape is (1, num_cells * 3)
-    
-    sd = ckpt.get("policy_state_dict") or ckpt.get("state_dict") or ckpt
-    
-    detected_num_cells = num_cells
-    # ── Detection strategy ────────────────────────────────────────────────────
-    # Priority: output-side (arch-agnostic) > input-side (arch-specific)
-    # Key name variants by architecture:
-    #   Universal/TrXL: actor_logstd [1, n*3], actor_mean.weight [n*3, h]
-    #   GPT2/Reformer:  actor_mean.weight [n*3, h] (no actor_logstd param)
-    #   NN (ActorCritic): actor_mean.0.weight [n*3, h], actor_logstd_head.weight [n*3, h]
-    #   BDH:            frame_encoder.0.weight [emb, n*16] (no actor keys)
-    
-    def _detect(sd):
-        # Try output-side keys first (most reliable across all archs)
-        for key in ["actor_logstd", "actor_logstd_head.weight"]:
-            if key in sd:
-                dim = sd[key].shape[-1]  # [1,dim] or [dim,h]
-                if sd[key].dim() == 2 and sd[key].shape[0] != 1:
-                    dim = sd[key].shape[0]  # actor_logstd_head is [n*3, h]
-                return max(1, dim // CELL_ACTIONS)
-        for key in ["actor_mean.weight", "actor_mean.0.weight"]:
-            if key in sd:
-                return max(1, sd[key].shape[0] // CELL_ACTIONS)
-        # Input-side fallbacks
-        if "frame_encoder.0.weight" in sd:
-            return max(1, sd["frame_encoder.0.weight"].shape[1] // CELL_FEATURES)
-        for key in ["state_embed.weight", "feature_net.0.weight"]:
-            if key in sd:
-                # These receive stacked obs: input = num_cells * CELL_FEATURES * 3
-                return max(1, sd[key].shape[1] // (CELL_FEATURES * 3))
-        return num_cells  # No detection possible, keep requested
-
-    detected_num_cells = _detect(sd)
-    if detected_num_cells != num_cells:
-        print(f"⚠️  Model trained on {detected_num_cells} cells (slider={num_cells}) — running on {detected_num_cells}.")
-        num_cells = detected_num_cells
-
-    cfg = NS3Config()
-    cfg.num_cells = num_cells
-
-    # Instantiate via factory
-    policy = get_policy(
-        model_type=model_type,
-        num_ues=cfg.num_ues,
-        num_cells=num_cells,
-        hidden_dim=hidden_dim,
-        device=device,
-        env_config=cfg
-    )
-
-    # Support both raw state_dict and wrapped checkpoint formats
-    if isinstance(ckpt, dict):
-        sd = ckpt.get("policy_state_dict") or ckpt.get("state_dict") or ckpt
-    else:
-        sd = ckpt
-
-    policy.load_state_dict(sd, strict=False)
-    policy.eval()
-
-    # Load VecNormalize if present
-    vn_path = MODELS_DIR / f"vec_normalize_{model_name.replace('.pt', '.pkl')}"
-    vec_norm = None
-    if vn_path.exists():
-        try:
-            from stable_baselines3.common.vec_env import VecNormalize, DummyVecEnv
-            # We need a dummy env to load VecNormalize
-            class DummyEnv:
-                def __init__(self):
-                    self.observation_space = torch.nn.Identity() # Placeholder
-                    self.action_space = torch.nn.Identity()
-            
-            # This is a bit hacky because SB3 VecNormalize expects a VecEnv
-            # But we only need it for the normalization stats.
-            # A better way is to use a simplified normalization if SB3 is not fully compatible here.
-            # For now, let's try to load it properly if possible.
-            from vec_env_wrapper import load_vec_normalize
-            import pickle
-            with open(vn_path, "rb") as f:
-                vec_norm_data = pickle.load(f)
-                # vec_norm_data is usually a VecNormalize object or its state
-                vec_norm = vec_norm_data
-        except Exception as e:
-            print(f"Warning: Failed to load VecNormalize from {vn_path}: {e}")
-
-    return policy, vec_norm, num_cells
-
-
-def run_inference(policy, state_np: np.ndarray, vec_norm=None, deterministic: bool = True, device: str = "cpu"):
-    """Run a single forward pass. Returns (actions, value, action_mean, action_std)."""
-    # Apply normalization if available
-    if vec_norm is not None:
-        try:
-            # obs_rms.mean is normally (obs_dim,)
-            mean = vec_norm.obs_rms.mean
-            var = vec_norm.obs_rms.var
-            
-            # ── Fix Broadcast Error: Slice stats to match input dimension ────────
-            # Input might be fewer cells than what was trained
-            if len(mean) > len(state_np):
-                print(f"Slicing normalization stats from {len(mean)} to {len(state_np)} features.")
-                mean = mean[:len(state_np)]
-                var = var[:len(state_np)]
-            elif len(mean) < len(state_np):
-                # This shouldn't happen with auto-detect, but handle just in case
-                padding = len(state_np) - len(mean)
-                mean = np.pad(mean, (0, padding), 'constant')
-                var = np.pad(var, (0, padding), 'constant', constant_values=1.0)
-            
-            epsilon = 1e-8
-            state_np = (state_np - mean) / np.sqrt(var + epsilon)
-            state_np = np.clip(state_np, -10, 10) # SB3 default clip
-        except Exception as e:
-            print(f"Normalization failed: {e}")
-
-    with torch.no_grad():
-        state_t = torch.FloatTensor(state_np).unsqueeze(0).to(device)
-        
-        # Try different possible forward methods
-        if hasattr(policy, '_forward_common'):
-            action_mean, logstd, value = policy._forward_common(state_t)
-        else:
-            # Fallback to standard forward
-            outputs = policy(state_t)
-            if isinstance(outputs, tuple):
-                if len(outputs) == 3:
-                    action_mean, logstd, value = outputs
-                else:
-                    # Some might return more or fewer
-                    action_mean, logstd = outputs[0], outputs[1]
-                    value = outputs[2] if len(outputs) > 2 else torch.zeros(1)
-            else:
-                action_mean = outputs
-                logstd = torch.zeros_like(outputs)
-                value = torch.zeros(1)
-
-        # Handle transformer-style sequence outputs (B, T, D) -> (B, D)
-        if action_mean.dim() == 3:
-            action_mean = action_mean[:, -1, :]
-        if torch.is_tensor(logstd) and logstd.dim() == 3:
-            logstd = logstd[:, -1, :]
-        if torch.is_tensor(value) and value.dim() == 3:
-            value = value[:, -1, :]
-        
-        # Ensure logstd is a tensor and same shape as action_mean
-        if not torch.is_tensor(logstd):
-            # Might be a Parameter or some other type
-            logstd = torch.as_tensor(logstd).to(device)
-        
-        if logstd.shape != action_mean.shape:
-             logstd = logstd.expand_as(action_mean)
-
-        action_std = torch.exp(logstd)
-
-        if deterministic:
-            actions = action_mean
-        else:
-            dist = torch.distributions.Normal(action_mean, action_std)
-            actions = dist.sample()
-
-    actions_np = actions.squeeze(0).cpu().numpy()
-    mean_np    = action_mean.squeeze(0).cpu().numpy()
-    std_np     = action_std.squeeze(0).cpu().numpy()
-    value_f    = value.squeeze().item()
-    return actions_np, value_f, mean_np, std_np
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# TAB 1 — Model Inference
-# ─────────────────────────────────────────────────────────────────────────────
-
-def build_inference_tab():
-    with gr.Tab("🤖 Model Inference"):
-        gr.Markdown("""
-        ## Model Inference
-        Load a BDH checkpoint and feed in cell-level state features to see the agent's predicted actions and value estimate.
-        """)
-
-        with gr.Row():
-            with gr.Column(scale=1):
-                model_dd = gr.Dropdown(
-                    label="Select Model Checkpoint",
-                    choices=list_models(),
-                    value=list_models()[0],
-                    interactive=True,
-                )
-                refresh_btn = gr.Button("🔄 Refresh Model List", size="sm")
-                deterministic_cb = gr.Checkbox(value=True, label="Deterministic Action (uncheck to sample)")
-
-            with gr.Column(scale=2):
-                gr.Markdown("### Cell State Features")
-                gr.Markdown(f"*Adjust sliders for each cell (12 features × {DEFAULT_CELLS} cells)*")
-                state_inputs = []
-                for c in range(DEFAULT_CELLS):
-                    with gr.Accordion(f"Cell {c}", open=(c == 0)):
-                        row_inputs = []
-                        for f_idx in range(VISIBLE_FEATURES):
-                            fname = FEATURE_NAMES[f_idx]
-                            lo, hi, default = _feature_range(f_idx)
-                            sl = gr.Slider(lo, hi, value=default, label=f"C{c}: {fname}", step=(hi - lo) / 100)
-                            row_inputs.append(sl)
-                        state_inputs.extend(row_inputs)
-
-        run_btn = gr.Button("▶ Run Inference", variant="primary")
-
-        with gr.Row():
-            value_box = gr.Textbox(label="Value Estimate (V)", interactive=False)
-            status_box = gr.Textbox(label="Status", interactive=False)
-
-        actions_plot = gr.Plot(label="Predicted Actions per Cell")
-        actions_table = gr.Dataframe(
-            label="Action Details",
-            headers=["Cell"] + ACTION_NAMES,
-            interactive=False,
-        )
-
-        def refresh_models():
-            return gr.Dropdown(choices=list_models())
-
-        def do_inference(model_name, deterministic, *slider_vals):
-            try:
                 n_int = DEFAULT_CELLS
                 # Sliders are VISIBLE_FEATURES per cell (12), but model expects CELL_FEATURES (16)
                 # Reconstruct full state with padding zeros
                 full_frame = []
                 for c in range(n_int):
                     start = c * VISIBLE_FEATURES
-                    end   = start + VISIBLE_FEATURES
-                    cell_vals = list(slider_vals[start:end])
-                    # Pad to CELL_FEATURES
-                    cell_vals.extend([0.0] * (CELL_FEATURES - len(cell_vals)))
-                    full_frame.extend(cell_vals)
+                    sl = list(slider_vals[start:start+VISIBLE_FEATURES]) if start < len(slider_vals) else []
+                    while len(sl) < VISIBLE_FEATURES: sl.append(0.0)
+                    cell_feats = [0.1, sl[2] if len(sl)>2 else 0.5, (sl[3]-10)/36 if len(sl)>3 else 0.36, 0.2, 0.3, sl[6]/100 if len(sl)>6 else 0.05, sl[7]/100 if len(sl)>7 else 0.3, sl[8] if len(sl)>8 else 0.05, sl[7]/80 if len(sl)>7 else 0.4, sl[8] if len(sl)>8 else 0.05, sl[11] if len(sl)>11 else 0.8, sl[5]/50 if len(sl)>5 else 0.4, sl[1]/30 if len(sl)>1 else 0.5, 0.0, sl[4]/15 if len(sl)>4 else 0.53, 1.0]
+                    full_frame.extend(cell_feats)
                 
                 single_frame = np.array(full_frame, dtype=np.float32)
                 # Tile the single frame 3 times to satisfy n_stack=3
@@ -335,10 +110,10 @@ def build_inference_tab():
                     full_frame_actual = []
                     for c in range(n_actual):
                         start = c * VISIBLE_FEATURES
-                        end   = start + VISIBLE_FEATURES
-                        cell_vals = list(slider_vals[start:end]) if start < len(slider_vals) else []
-                        cell_vals.extend([0.0] * (CELL_FEATURES - len(cell_vals)))
-                        full_frame_actual.extend(cell_vals)
+                        sl = list(slider_vals[start:start+VISIBLE_FEATURES]) if start < len(slider_vals) else []
+                        while len(sl) < VISIBLE_FEATURES: sl.append(0.0)
+                        cell_feats = [0.1, sl[2] if len(sl)>2 else 0.5, (sl[3]-10)/36 if len(sl)>3 else 0.36, 0.2, 0.3, sl[6]/100 if len(sl)>6 else 0.05, sl[7]/100 if len(sl)>7 else 0.3, sl[8] if len(sl)>8 else 0.05, sl[7]/80 if len(sl)>7 else 0.4, sl[8] if len(sl)>8 else 0.05, sl[11] if len(sl)>11 else 0.8, sl[5]/50 if len(sl)>5 else 0.4, sl[1]/30 if len(sl)>1 else 0.5, 0.0, sl[4]/15 if len(sl)>4 else 0.53, 1.0]
+                        full_frame_actual.extend(cell_feats)
                     single_frame = np.array(full_frame_actual, dtype=np.float32)
                     state = np.concatenate([single_frame, single_frame, single_frame])
 
@@ -777,6 +552,161 @@ def build_comparison_tab():
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# TAB 4 — Evaluation Results
+# ─────────────────────────────────────────────────────────────────────────────
+
+def build_evaluation_tab():
+    with gr.Tab("🏆 Evaluation Results"):
+        gr.Markdown("""
+        ## Scenario Evaluation Results
+        Upload an `eval_results_*.csv` file (from `results/`) or select one from the directory to view scenario-level performance.
+        """)
+        
+        with gr.Row():
+            eval_csv_file = gr.File(label="Upload eval_results_*.csv", file_types=[".csv"])
+            with gr.Column():
+                eval_log_dd = gr.Dropdown(
+                    label="Or select from results/",
+                    choices=_list_eval_csvs(),
+                    interactive=True,
+                )
+                load_eval_btn = gr.Button("📂 Load Selected Evaluation", size="sm")
+                refresh_eval_btn = gr.Button("🔄 Refresh Eval List", size="sm")
+                
+        eval_status = gr.Textbox(label="Status", interactive=False)
+        
+        with gr.Row():
+            eval_df = gr.Dataframe(label="Evaluation Summary Table", interactive=False)
+            
+        score_plot = gr.Plot(label="Overall Score by Scenario")
+        
+        with gr.Row():
+            tput_plot = gr.Plot()
+            loss_plot = gr.Plot()
+            
+        with gr.Row():
+            satisf_plot = gr.Plot()
+            eneff_plot = gr.Plot()
+            
+        def _list_evals_refresh():
+            return gr.Dropdown(choices=_list_eval_csvs())
+            
+        def load_eval_from_file(f):
+            if f is None:
+                return "No file uploaded.", None, None, None, None, None, None
+            return _process_eval_csv(f.name)
+            
+        def load_eval_from_dropdown(log_name):
+            if not log_name or "(no eval logs found)" in log_name:
+                return "No log selected.", None, None, None, None, None, None
+            path = RESULTS_DIR / log_name
+            return _process_eval_csv(str(path))
+            
+        refresh_eval_btn.click(_list_evals_refresh, outputs=[eval_log_dd])
+        eval_csv_file.change(load_eval_from_file, inputs=[eval_csv_file],
+                             outputs=[eval_status, eval_df, score_plot, tput_plot, loss_plot, satisf_plot, eneff_plot])
+        load_eval_btn.click(load_eval_from_dropdown, inputs=[eval_log_dd],
+                            outputs=[eval_status, eval_df, score_plot, tput_plot, loss_plot, satisf_plot, eneff_plot])
+
+
+def _list_eval_csvs():
+    if not RESULTS_DIR.exists():
+        return ["(no eval logs found)"]
+    csvs = sorted(glob.glob(str(RESULTS_DIR / "eval_results_*.csv")))
+    return [os.path.basename(p) for p in csvs] or ["(no eval logs found)"]
+
+
+def _process_eval_csv(path: str):
+    try:
+        if not os.path.exists(path):
+            return f"❌ File not found: {path}", None, None, None, None, None, None
+            
+        with open(path, 'r') as f:
+            lines = f.readlines()
+            
+        start_idx = -1
+        for i, line in enumerate(lines):
+            if "EVALUATION SUMMARY" in line:
+                start_idx = i
+                break
+                
+        if start_idx == -1:
+            return "❌ No EVALUATION SUMMARY section found in the CSV.", None, None, None, None, None, None
+            
+        data = []
+        current_scenario = None
+        for line in lines[start_idx+2:]:
+            line = line.strip().strip(',')
+            if not line or "====" in line or "----" in line:
+                continue
+            if "Controller" in line:
+                continue
+            if line.endswith(":"):
+                current_scenario = line[:-1]
+            elif "|" in line:
+                parts = [p.strip() for p in line.split("|")]
+                if len(parts) >= 6 and current_scenario:
+                    controller = parts[0]
+                    try:
+                        tput = float(parts[1])
+                        loss = float(parts[2])
+                        satisf = float(parts[3])
+                        eneff = float(parts[4])
+                        score = float(parts[5])
+                    except ValueError:
+                        continue
+                        
+                    data.append({
+                        "Scenario": current_scenario,
+                        "Controller": controller,
+                        "Tput (Mbps)": tput,
+                        "Loss (%)": loss,
+                        "Satisf (%)": satisf,
+                        "Energy Eff": eneff,
+                        "Score": score
+                    })
+                    
+        if not data:
+            return "❌ No parsed data from EVALUATION SUMMARY.", None, None, None, None, None, None
+            
+        df = pd.DataFrame(data)
+        status = f"✅ Loaded {len(df)} scenario evaluations from {os.path.basename(path)}"
+        
+        def _make_bar(df, metric, title, color):
+            fig = go.Figure()
+            for ctrl in df["Controller"].unique():
+                cdf = df[df["Controller"] == ctrl]
+                fig.add_trace(go.Bar(
+                    name=ctrl,
+                    x=cdf["Scenario"],
+                    y=cdf[metric],
+                    marker_color=color,
+                ))
+            fig.update_layout(
+                barmode="group",
+                title=title,
+                paper_bgcolor="#111827", plot_bgcolor="#1a1f35",
+                font=dict(color="#f1f5f9"),
+                xaxis=dict(gridcolor="#1e293b", tickangle=-45),
+                yaxis=dict(gridcolor="#1e293b", title=metric),
+                legend=dict(bgcolor="#1a1f35"),
+                margin=dict(b=100)
+            )
+            return fig
+
+        fig_score = _make_bar(df, "Score", "Overall Score by Scenario", "#a78bfa")
+        fig_tput = _make_bar(df, "Tput (Mbps)", "Throughput by Scenario", "#00d4ff")
+        fig_loss = _make_bar(df, "Loss (%)", "Packet Loss by Scenario", "#f87171")
+        fig_satisf = _make_bar(df, "Satisf (%)", "Satisfaction (%) by Scenario", "#34d399")
+        fig_eneff = _make_bar(df, "Energy Eff", "Energy Efficiency by Scenario", "#fbbf24")
+        
+        return status, df, fig_score, fig_tput, fig_loss, fig_satisf, fig_eneff
+        
+    except Exception as e:
+        return f"❌ Error: {e}\\n{traceback.format_exc()}", None, None, None, None, None, None
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # App Assembly
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -807,6 +737,8 @@ def build_app():
         build_inference_tab()
         build_metrics_tab()
         build_comparison_tab()
+        build_evaluation_tab()
+        build_interpretability_tab()
 
     return demo
 

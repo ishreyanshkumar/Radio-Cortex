@@ -173,6 +173,19 @@ class PPOTrainer:
             # Default to Neural Network (MLP)
             self.policy = ActorCritic(state_dim, action_dim, hidden_dim).to(device)
             
+        # ── Live Interpretability Logger (BDH only) ──
+        self.interp_logger = None
+        if model_type == 'bdh':
+            try:
+                from interpretability.live_logger import InterpretabilityLogger
+                _num_cells = getattr(self.ns3_config, 'num_cells', 3) if self.ns3_config else 3
+                _log_dir = os.environ.get('RADIO_CORTEX_LOG_DIR', 'logs')
+                self.interp_logger = InterpretabilityLogger(
+                    self.policy, log_dir=_log_dir, num_cells=_num_cells
+                )
+            except Exception as e:
+                print(f"[PPOTrainer] Interpretability logger init failed (non-fatal): {e}")
+
         self.optimizer = torch.optim.Adam(self.policy.parameters(), lr=lr)
         # Decay LR by gamma every step (approximating 0.999 per update)
         self.scheduler = torch.optim.lr_scheduler.ExponentialLR(self.optimizer, gamma=lr_scheduler_gamma)
@@ -285,6 +298,15 @@ class PPOTrainer:
             action_denorm = self._denormalize_action(action_np)
             
             next_state, reward, terminated, truncated, info = self.env.step(action_denorm)
+            
+            # ── Interpretability data collection (per step) ──
+            if getattr(self, 'interp_logger', None):
+                try:
+                    _e2 = info.get('e2_metrics')
+                    _e2_dict = _e2 if isinstance(_e2, dict) else ({'ue_metrics': _e2.ue_metrics, 'cell_metrics': _e2.cell_metrics} if _e2 and hasattr(_e2, 'ue_metrics') else {})
+                    self.interp_logger.collect_step(state, _e2_dict)
+                except Exception:
+                    pass
             
             # Live UI Callback
             if on_step:
@@ -420,6 +442,15 @@ class PPOTrainer:
             
             # Step all environments: returns (n_envs, ...) arrays
             next_states, rewards_arr, dones_arr, infos = self.env.step(actions_denorm)
+            
+            # ── Interpretability data collection (first env only for efficiency) ──
+            if getattr(self, 'interp_logger', None) and len(infos) > 0:
+                try:
+                    _e2 = infos[0].get('e2_metrics', {})
+                    _e2_dict = _e2 if isinstance(_e2, dict) else ({'ue_metrics': _e2.ue_metrics, 'cell_metrics': _e2.cell_metrics} if _e2 and hasattr(_e2, 'ue_metrics') else {})
+                    self.interp_logger.collect_step(states[0], _e2_dict)
+                except Exception:
+                    pass
             
             # Live UI Callback
             if on_step:
@@ -907,6 +938,15 @@ class PPOTrainer:
                 # Linear decay of entropy coefficient
                 fraction = min(1.0, self.total_steps / (total_timesteps * self.ent_decay_fraction))
                 self.ent_coef = self.ent_coef_start + fraction * (self.ent_coef_end - self.ent_coef_start)
+
+                # ── Periodic Interpretability Analysis ──
+                if getattr(self, 'interp_logger', None):
+                    try:
+                        self.interp_logger.run_periodic_analysis(
+                            rollout.get('states'), update + 1, self.total_steps
+                        )
+                    except Exception:
+                        pass
                 
                 # Update Dashboard Stats (Final for this update)
                 avg_reward = rollout['returns'].mean().item()

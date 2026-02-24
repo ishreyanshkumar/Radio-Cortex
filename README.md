@@ -396,10 +396,43 @@ $$R_{total} = \text{clip}\left( r_{tput} + r_{delay} + r_{loss} + r_{load} + r_{
 
 ---
 
-## Interpretability
-Understand which input features (e.g., Queue Length vs Throughput) drove the agent's decisions.
+## 🧠 Interpretability & Live Neural Dashboard
+
+Radio-Cortex includes a state-of-the-art **Live Interpretability Dashboard** that peers inside the Baby Dragon Hatchling (BDH) agent while it trains, analyzing its neural architecture and decision-making drivers.
+
+**Access:** Open the **Gradio Controller** at `http://localhost:7860` and navigate to the **🧠 BDH Interpretability** tab.
+
+### The 4 Pillars of BDH Interpretability
+
+Because the BDH agent uses a Scale-Free Transformer topology, we don't just look at reward curves; we mathematically analyze how the "brain" of the agent physically wires itself together to achieve those rewards.
+
+1. **🌳 Scale-Free Topology (Network Hubs)**
+   - *What it means:* As the network trains, it naturally prunes useless connections (sparsity) and routes critical logic through a tiny minority of "Hub Neurons". This mimics biological brains and the Internet.
+   - *On the Dashboard:* The visual map highlights Hub Neurons in **Red**. The dashboard calculates the power-law parameter (`α`) to confirm if the network has successfully formed a scale-free structure.
+2. **🎯 Monosemanticity (O-RAN Concepts)**
+   - *What it means:* Using Saliency analysis, we map individual neurons to human-interpretable O-RAN concepts (e.g., "This neuron only fires when the Cell is overloaded").
+   - *On the Dashboard:* Bar charts show exactly how many neurons have specialized to track concepts like `High Queue Length` or `Low RSRP`.
+3. **⚡ Sparse Activation (Efficiency)**
+   - *What it means:* Only a fraction of the network's 128 neurons should "fire" for any given decision, preventing feature entanglement and minimizing energy usage.
+   - *On the Dashboard:* Layer-wise histograms show the sparsity percentage of the attention heads and MLP layers.
+4. **🧬 Hebbian Learning (Synaptic Plasticity)**
+   - *What it means:* "Neurons that fire together, wire together." We track the exact changes in synaptic weights across training updates to see how the optimizer physically strengthens important pathways.
+   - *On the Dashboard:* A live counter shows exactly how many thousands of synapses were strengthened in the last training window.
+
+### How to Use the Dashboard
+
+#### Option A: Live Training Tracking (Real-time)
+As you run a training session using `radio_cortex_complete.py --mode train`, the agent automatically generates JSON snapshots in `logs/interpretability/` every few updates. 
+* Just keep the Gradio Interpretability dashboard open. A background timer pulls the newest files every 5 seconds, causing the Neural Graph and Scorecards to **update live as the agent trains!**
+
+#### Option B: Offline Checkpoint Analysis
+To analyze an already fully-trained `.pt` model file from your `models/` directory:
 ```bash
-python3 interpret_policy.py --checkpoint models/radio_cortex.pt
+# Run 1000 synthetic states through the trained model to build the neural maps
+python3 -m interpretability.run_analysis --checkpoint models/radiocortex_bdh.pt --synthetic 1000 --num-cells 3
+
+# Then open Gradio and click "🔄 Load / Refresh Analysis Results"
+python3 gradio_app.py
 ```
 
 ---
