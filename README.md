@@ -413,15 +413,20 @@ Because the BDH agent uses a Scale-Free Transformer topology, we don't just look
 1. **🌳 Scale-Free Topology (Network Hubs)**
    - *What it means:* As the network trains, it naturally prunes useless connections (sparsity) and routes critical logic through a tiny minority of "Hub Neurons". This mimics biological brains and the Internet.
    - *On the Dashboard:* The visual map highlights Hub Neurons in **Red**. The dashboard calculates the power-law parameter (`α`) to confirm if the network has successfully formed a scale-free structure.
-2. **🎯 Monosemanticity (O-RAN Concepts)**
+2. **🎯 Monosemanticity & Concept Correlation (O-RAN Topics)**
    - *What it means:* Using Saliency analysis, we map individual neurons to human-interpretable O-RAN concepts (e.g., "This neuron only fires when the Cell is overloaded").
-   - *On the Dashboard:* Bar charts show exactly how many neurons have specialized to track concepts like `High Queue Length` or `Low RSRP`.
+   - *On the Dashboard:* A rich Data Table maps out the exact correlation scores between specific Neurons and Network Topics/Concepts. Bar charts also show how many neurons have specialized for each topic.
 3. **⚡ Sparse Activation (Efficiency)**
    - *What it means:* Only a fraction of the network's 128 neurons should "fire" for any given decision, preventing feature entanglement and minimizing energy usage.
    - *On the Dashboard:* Layer-wise histograms show the sparsity percentage of the attention heads and MLP layers.
 4. **🧬 Hebbian Learning (Synaptic Plasticity)**
    - *What it means:* "Neurons that fire together, wire together." We track the exact changes in synaptic weights across training updates to see how the optimizer physically strengthens important pathways.
    - *On the Dashboard:* A live counter shows exactly how many thousands of synapses were strengthened in the last training window.
+
+### 🔍 Advanced Saliency Attention
+Beyond the four pillars, the Interpretability Tab includes deep **Feature Saliency Attention**:
+*   **Cell Influence Bar Chart**: Shows exactly which Cell (0, 1, or 2) had the strongest influence over the agent's chosen actions.
+*   **Temporal Influence Bar Chart**: Breaks down the agent's attention across time: `t-0` (Current), `t-1` (Previous), and `t-2` (Oldest).
 
 ### Authenticity Note
 **All Interpretability tools in Radio-Cortex perform 100% genuine mathematical analysis on the raw Neural Network weights.** There are absolutely no "faked" or "mocked" values. When a script runs without a live network simulation, it generates random input traffic ("evaluation states") just to force the model to calculate outputs so that its sparsities, attention hubs, and Hebbian gradient responses can be truly measured.
