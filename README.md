@@ -429,7 +429,7 @@ Because the BDH agent uses a Scale-Free Transformer topology, we don't just look
 ### How to Use Interpretability
 
 #### Option A: Live Training Tracking (Real-time)
-As you run a live training session using `radio_cortex_complete.py --mode train`, the RL agent automatically generates evaluation snapshots in `logs/interpretability/`. 
+As you run a live training session using `radio_cortex_complete.py --mode train`, the RL agent automatically generates evaluation snapshots in `bdh_results/`. 
 * Just keep the Gradio Interpretability dashboard open. A background timer pulls the newest files automatically, causing the Neural Graph and Scorecards to **update live as the agent trains!**
 
 #### Option B: Continuous Native Evaluation (Real-Time UI Feed for Pre-Trained Models)

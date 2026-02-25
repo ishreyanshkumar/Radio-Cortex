@@ -14,8 +14,8 @@ Analyses run (configurable interval, default every 5 PPO updates):
   5. Saliency Maps     — gradient × input feature attribution
 
 Output:
-  - logs/interpretability_scores.csv   (summary row per analysis run)
-  - logs/interpretability/update_N.json (full results per run)
+  - bdh_results/interpretability_scores.csv   (summary row per analysis run)
+  - bdh_results/update_N.json (full results per run)
 
 Author: Radio-Cortex Team / KRITI 2026
 """
@@ -68,8 +68,8 @@ class InterpretabilityLogger:
         self.num_cells = num_cells
 
         # Output paths
-        self.csv_path = os.path.join(log_dir, 'interpretability_scores.csv')
-        self.json_dir = os.path.join(log_dir, 'interpretability')
+        self.csv_path = 'bdh_results/interpretability_scores.csv'
+        self.json_dir = 'bdh_results'
         os.makedirs(self.json_dir, exist_ok=True)
 
         # Write CSV header if file doesn't exist

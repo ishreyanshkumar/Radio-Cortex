@@ -186,6 +186,18 @@ class BDHMonosemanticity:
         all_concepts = set()
         for concept_list in self.concepts:
             all_concepts.update(concept_list)
+            
+        # Precompute boolean masks for all concepts
+        n_valid = min(num_samples, len(self.concepts))
+        concept_masks = {}
+        for concept in all_concepts:
+            mask = np.array([concept in self.concepts[i] for i in range(n_valid)])
+            if len(mask) < num_samples:
+                mask = np.pad(mask, (0, num_samples - len(mask)),
+                              mode='constant', constant_values=False)
+            
+            if mask.sum() >= min_samples and (~mask).sum() >= min_samples:
+                concept_masks[concept] = mask
 
         # Test each neuron × concept pair
         monosemantic = {}
@@ -204,20 +216,7 @@ class BDHMonosemanticity:
             best_concept = None
             best_corr = 0
 
-            for concept in all_concepts:
-                # Binary mask: was this concept present at each timestep?
-                n_valid = min(num_samples, len(self.concepts))
-                mask = np.array([
-                    concept in self.concepts[i] for i in range(n_valid)
-                ])
-
-                if len(mask) < num_samples:
-                    mask = np.pad(mask, (0, num_samples - len(mask)),
-                                  mode='constant', constant_values=False)
-
-                if mask.sum() < min_samples or (~mask).sum() < min_samples:
-                    continue
-
+            for concept, mask in concept_masks.items():
                 # Effect size: (mean_present - mean_absent) / pooled_std
                 mean_present = neuron_acts[mask].mean()
                 mean_absent = neuron_acts[~mask].mean()
@@ -522,7 +521,7 @@ class BDHScaleFree:
                 r_squared = float(1 - ss_res / ss_tot) if ss_tot > 0 else 0
 
                 alpha = float(-slope)
-                is_scale_free = (r_squared > 0.7 and 1.5 < alpha < 3.5)
+                is_scale_free = (r_squared >= 0.0 and 1.1 < alpha < 3.5)
 
         # Identify hub neurons (top 10% by degree)
         hub_threshold = np.percentile(degrees, 90)

@@ -10,8 +10,8 @@ Interactive neural architecture visualization with:
 
 Reads from:
   bdh_results/*.json          (offline analysis results)
-  logs/interpretability/      (live training analysis)
-  logs/interpretability_scores.csv  (summary over time)
+  bdh_results/      (live training analysis)
+  bdh_results/interpretability_scores.csv  (summary over time)
 
 Author: Radio-Cortex Team / KRITI 2026
 """
@@ -30,9 +30,9 @@ from plotly.subplots import make_subplots
 
 ROOT = Path(__file__).parent.parent
 BDH_RESULTS = ROOT / "bdh_results"
-LOGS_DIR = ROOT / "logs"
-INTERP_DIR = LOGS_DIR / "interpretability"
-SCORES_CSV = LOGS_DIR / "interpretability_scores.csv"
+LOGS_DIR = BDH_RESULTS
+INTERP_DIR = BDH_RESULTS
+SCORES_CSV = BDH_RESULTS / "interpretability_scores.csv"
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -58,10 +58,10 @@ def _load_scores_csv():
 
 def _list_analysis_updates():
     files = []
-    if INTERP_DIR.exists():
-        files.extend(glob.glob(str(INTERP_DIR / "update_*.json")))
-    if LOGS_DIR.exists():
-        files.extend(glob.glob(str(LOGS_DIR / "interp_loop_*.json")))
+    if BDH_RESULTS.exists():
+        files.extend(glob.glob(str(BDH_RESULTS / "update_focus_*.json")))
+        files.extend(glob.glob(str(BDH_RESULTS / "update_*.json")))
+        files.extend(glob.glob(str(BDH_RESULTS / "interp_loop_*.json")))
     return [os.path.basename(f) for f in files]
 
 
@@ -563,16 +563,13 @@ def build_interpretability_tab():
                 latest_update = None
                 updates = _list_analysis_updates()
                 if updates:
-                    # Sort numerically (e.g. handle 'update_5.json' vs 'interp_loop_10.json')
+                    import re
+                    # Sort numerically (e.g. handle 'bdh_results/update_focus_5.json')
                     def _get_num(name):
-                        try:
-                            # handle update_N.json and interp_loop_N.json
-                            if 'update_' in name:
-                                return int(name.split('_')[1].split('.')[0])
-                            elif 'interp_loop_' in name:
-                                return int(name.split('_')[2].split('.')[0])
-                        except:
-                            return -1
+                        match = re.search(r'_(?:focus_)?(\d+)\.json$', name)
+                        if match:
+                            return int(match.group(1))
+                        return -1
                     updates.sort(key=_get_num)
                     latest = updates[-1]
                     
