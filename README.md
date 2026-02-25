@@ -593,7 +593,7 @@ https://youtu.be/ZvtCA4xGShE
 
 ## 👥 Team Members
 
-Shreyansh Kumar, Sarthak Sharma, Nikhil Agnihotri, Sarvesh Joshi, Tanush Dhiman, Siddharth Bohra, Yatharth Kabra
+Shreyansh Kumar, Sarthak Sharma, Nikhil Agnihotri, Sarvesh Joshi, Tanush Dhiman, Siddharth Bohra, Yatharth Kabra, Adhikshit
 
 ## ⚠️ Limitations & Future Scope
 
