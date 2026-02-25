@@ -68,6 +68,45 @@ def _list_analysis_updates():
 # ═══════════════════════════════════════════════════════════════════
 # Network Graph (Plotly-based — works natively in Gradio)
 # ═══════════════════════════════════════════════════════════════════
+# Saliency Heatmap (Feature Attributions)
+# ═══════════════════════════════════════════════════════════════════
+
+def _build_saliency_heatmap(saliency):
+    if not saliency or 'per_action' not in saliency:
+        return _empty_fig("No Saliency Data")
+
+    actions = list(saliency['per_action'].keys())
+    # Grab features from the first action to ensure ordering is consistent
+    features = list(saliency['per_action'][actions[0]]['feature_importance'].keys())
+    
+    # Z-matrix: (features on Y, actions on X) -> shape (len(features), len(actions))
+    z_data = []
+    for feat in features:
+        row = []
+        for act in actions:
+            val = saliency['per_action'][act]['feature_importance'].get(feat, 0.0)
+            row.append(val)
+        z_data.append(row)
+
+    fig = go.Figure(data=go.Heatmap(
+        z=z_data,
+        x=actions,
+        y=features,
+        colorscale='Inferno',
+        hoverongaps=False,
+        hovertemplate='Feature: %{y}<br>Action: %{x}<br>Attention: %{z:.4f}<extra></extra>'
+    ))
+
+    _style(fig, 'Feature Attributions per RL Action')
+    fig.update_layout(
+        height=450,
+        xaxis_tickangle=-45,
+        margin=dict(l=100, b=100)
+    )
+    return fig
+
+
+# ═══════════════════════════════════════════════════════════════════
 
 def _build_network_plotly(scale_free, sparsity):
     """Build interactive Plotly network graph of BDH architecture."""
@@ -125,8 +164,8 @@ def _build_network_plotly(scale_free, sparsity):
 
         node_x.append(x_lat)
         node_y.append(y)
-        node_color.append('#ef4444' if is_hub else head_colors[head % len(head_colors)])
-        node_size.append(22 if is_hub else 8 + norm_deg * 12)
+        node_color.append('#facc15' if is_hub else head_colors[head % len(head_colors)])
+        node_size.append(38 if is_hub else 8 + norm_deg * 12)
         node_text.append(f'N{idx} | Head {head} | Deg: {deg}{" | ⭐ HUB" if is_hub else ""}')
         node_label.append(f'⭐{idx}' if is_hub else '')
 
@@ -545,6 +584,8 @@ def build_interpretability_tab():
                 degree_plot = gr.Plot(label="Degree Distribution")
 
         concepts_plot = gr.Plot(label="O-RAN Concepts")
+        
+        saliency_plot = gr.Plot(label="Feature Saliency Attention")
         evolution_plot = gr.Plot(label="Training Evolution")
 
         # Detail viewer
@@ -586,21 +627,24 @@ def build_interpretability_tab():
                     sparsity = latest_update.get('sparsity')
                     scale_free = latest_update.get('scale_free')
                     hebbian = latest_update.get('hebbian')
+                    saliency = latest_update.get('saliency')
                 else:
                     mono = None
                     sparsity = None
                     scale_free = None
                     hebbian = None
+                    saliency = None
                     
                 # Fallbacks to offline bdh_results/ if any is missing
                 if not mono: mono = _load_json('monosemanticity.json')
                 if not sparsity: sparsity = _load_json('sparsity.json')
                 if not scale_free: scale_free = _load_json('scale_free.json')
                 if not hebbian: hebbian = _load_json('hebbian.json')
+                if not saliency: saliency = _load_json('saliency.json')
 
                 scores_df = _load_scores_csv()
 
-                found = sum(1 for x in [mono, sparsity, scale_free, hebbian] if x)
+                found = sum(1 for x in [mono, sparsity, scale_free, hebbian, saliency] if x)
                 if found == 0:
                     return ("⚠️ No interpretability telemetry found. Please run an analysis script first:\n\n"
                             "  [Live Engine] python3 -m interpretability.run_analysis --checkpoint YOUR.pt --focus-duration 15.0\n"
@@ -617,13 +661,14 @@ def build_interpretability_tab():
                 sp_fig = _build_sparsity_chart(sparsity)
                 deg_fig = _build_degree_chart(scale_free)
                 con_fig = _build_concepts_chart(mono)
+                sal_fig = _build_saliency_heatmap(saliency)
                 evo_fig = _build_evolution_chart(scores_df)
 
-                status = f"✅ Loaded {found}/4 analyses"
+                status = f"✅ Loaded {found}/5 analyses"
                 if scores_df is not None:
                     status += f" + {len(scores_df)} training snapshots"
 
-                return status, cards, net_fig, sp_fig, deg_fig, con_fig, evo_fig
+                return status, cards, net_fig, sp_fig, deg_fig, con_fig, sal_fig, evo_fig
 
             except Exception as e:
                 return f"❌ Error: {e}\n{traceback.format_exc()}", "", None, None, None, None, None
@@ -644,7 +689,7 @@ def build_interpretability_tab():
         load_btn.click(
             load_results,
             outputs=[status_box, score_html, network_plot,
-                     sparsity_plot, degree_plot, concepts_plot, evolution_plot],
+                     sparsity_plot, degree_plot, concepts_plot, saliency_plot, evolution_plot],
         )
         detail_dd.change(load_detail, inputs=[detail_dd], outputs=[detail_json])
 
@@ -653,5 +698,5 @@ def build_interpretability_tab():
         timer.tick(
             load_results,
             outputs=[status_box, score_html, network_plot,
-                     sparsity_plot, degree_plot, concepts_plot, evolution_plot],
+                     sparsity_plot, degree_plot, concepts_plot, saliency_plot, evolution_plot],
         )

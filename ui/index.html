@@ -39,7 +39,7 @@
             </a>
             <a data-page="visualizer" onclick="switchPage('visualizer')">
                 <span class="icon">🌐</span>
-                Nexus Matrix
+                Live Matrix
             </a>
             <a href="http://localhost:7860" target="_blank" rel="noopener">
                 <span class="icon">🧠</span>
@@ -209,7 +209,7 @@
         <!-- ─── Visualizer Page ────────────────── -->
         <section id="page-visualizer" class="page-section">
             <div class="page-header">
-                <h1>🌐 Nexus <span>Telemetry Matrix</span></h1>
+                <h1>🌐 Live <span>Signal Matrix</span></h1>
                 <p>Load a <code>simulation_data_*.db</code> file to replay step-by-step live O-RAN simulation traces</p>
             </div>
 
@@ -330,13 +330,13 @@
 
                         <!-- Cell Status Console -->
                         <div class="card">
-                            <div class="card-title">📶 NEXUS CELL COMMAND</div>
+                            <div class="card-title">📶 LIVE CELL COMMAND</div>
                             <div style="overflow-x:auto;">
                                 <table class="data-table">
                                     <thead>
                                         <tr>
                                             <th>ID</th><th>TX POWER</th><th>CIO</th>
-                                            <th>TTT</th><th>UEs</th><th>LOAD</th><th>THROUGHPUT</th><th>STATUS</th>
+                                            <th>TTT</th><th>STATUS</th>
                                         </tr>
                                     </thead>
                                     <tbody id="vizCellTableBody"></tbody>

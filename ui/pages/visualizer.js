@@ -348,9 +348,6 @@
                     <td style="font-weight:600;color:var(--cy)">${tx.toFixed(1)} <span style="font-size:9px;opacity:0.5">dBm</span></td>
                     <td>${cio.toFixed(1)}</td>
                     <td style="color:var(--tx2)">${Math.round(ttt)}</td>
-                    <td>${cm.num_connected_ues || 0}</td>
-                    <td style="font-weight:700;${loadColor}">${rbPercent.toFixed(1)}%</td>
-                    <td style="font-weight:600">${cellTput.toFixed(2)}</td>
                     <td><span style="padding:2px 8px;border-radius:999px;font-size:10px;font-weight:700;background:var(--gn);color:var(--bg);border:1px solid var(--gn)">ONLINE</span></td>
                 </tr>
             `;

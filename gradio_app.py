@@ -534,7 +534,7 @@ def build_comparison_tab():
 def build_dashboard_tab():
     with gr.Tab("📊 Evaluation Dashboard"):
         gr.HTML('''
-            <iframe src="/ui/index.html?page=dashboard&embed=true&v=9" 
+            <iframe src="/ui/index.html?page=dashboard&embed=true&v=10" 
                     width="100%" height="900" 
                     style="border:none; border-radius: 12px; overflow: hidden; background: #0f1118;">
             </iframe>
@@ -543,16 +543,16 @@ def build_dashboard_tab():
 def build_modelbench_tab():
     with gr.Tab("🏆 ModelBench"):
         gr.HTML('''
-            <iframe src="/ui/index.html?page=modelbench&embed=true&v=9" 
+            <iframe src="/ui/index.html?page=modelbench&embed=true&v=10" 
                     width="100%" height="900" 
                     style="border:none; border-radius: 12px; overflow: hidden; background: #0f1118;">
             </iframe>
         ''')
 
 def build_simulation_tab():
-    with gr.Tab("🌐 Nexus Telemetry Matrix"):
+    with gr.Tab("🌐 Live Signal Matrix"):
         gr.HTML('''
-            <iframe src="/ui/index.html?page=visualizer&embed=true&v=9" 
+            <iframe src="/ui/index.html?page=visualizer&embed=true&v=10" 
                     width="100%" height="900" 
                     style="border:none; border-radius: 12px; overflow: hidden; background: #0f1118;">
             </iframe>
@@ -582,12 +582,12 @@ def build_app():
         *Interactive inference, reward visualization, and model comparison for the O-RAN RL agent.*
         """)
 
+        build_simulation_tab()
+        build_interpretability_tab()
         build_inference_tab()
-        build_comparison_tab()
         build_dashboard_tab()
         build_modelbench_tab()
-        build_interpretability_tab()
-        build_simulation_tab()
+        build_comparison_tab()
 
     return demo
 
