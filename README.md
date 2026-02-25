@@ -609,18 +609,22 @@ python3 scripts/evaluate_all.py
 
 ## 🎥 Video Demo & Images
 
+### 🎬 System Walkthrough Video
 https://youtu.be/ZvtCA4xGShE
 
+### 📉 Evaluation Dashboard
 ![Signal Matrix](docs/image1.png)
 
+### 🧠 BDH Interpretability Dashboard
 ![Interpretability](docs/image2.png)
 
+### 📊 ModelBench Tradeoff Analysis
 ![ModelBench](docs/image3.png)
 
 
-## 👥 Team Members & Contributions
+## 👥 Team Members
 
-*   Shreyansh Kumar, Sarthak Sharma, Nikhil Agnihotri, Sarvesh Joshi, Tanush Dhiman, Siddharth Bohra, Yatharth Kabra
+Shreyansh Kumar, Sarthak Sharma, Nikhil Agnihotri, Sarvesh Joshi, Tanush Dhiman, Siddharth Bohra, Yatharth Kabra
 
 ## ⚠️ Limitations & Future Scope
 
