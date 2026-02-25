@@ -57,10 +57,12 @@ def _load_scores_csv():
 
 
 def _list_analysis_updates():
+    files = []
     if INTERP_DIR.exists():
-        files = sorted(glob.glob(str(INTERP_DIR / "update_*.json")))
-        return [os.path.basename(f) for f in files]
-    return []
+        files.extend(glob.glob(str(INTERP_DIR / "update_*.json")))
+    if LOGS_DIR.exists():
+        files.extend(glob.glob(str(LOGS_DIR / "interp_loop_*.json")))
+    return [os.path.basename(f) for f in files]
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -561,15 +563,23 @@ def build_interpretability_tab():
                 latest_update = None
                 updates = _list_analysis_updates()
                 if updates:
-                    # Sort numerically (e.g. handle 'update_5.json' vs 'update_10.json')
+                    # Sort numerically (e.g. handle 'update_5.json' vs 'interp_loop_10.json')
                     def _get_num(name):
                         try:
-                            return int(name.split('_')[1].split('.')[0])
+                            # handle update_N.json and interp_loop_N.json
+                            if 'update_' in name:
+                                return int(name.split('_')[1].split('.')[0])
+                            elif 'interp_loop_' in name:
+                                return int(name.split('_')[2].split('.')[0])
                         except:
                             return -1
                     updates.sort(key=_get_num)
                     latest = updates[-1]
+                    
                     latest_path = INTERP_DIR / latest
+                    if not latest_path.exists():
+                        latest_path = LOGS_DIR / latest
+                        
                     if latest_path.exists():
                         with open(latest_path) as f:
                             latest_update = json.load(f)
@@ -580,18 +590,24 @@ def build_interpretability_tab():
                     scale_free = latest_update.get('scale_free')
                     hebbian = latest_update.get('hebbian')
                 else:
-                    # Fallback to offline bdh_results/
-                    mono = _load_json('monosemanticity.json')
-                    sparsity = _load_json('sparsity.json')
-                    scale_free = _load_json('scale_free.json')
-                    hebbian = _load_json('hebbian.json')
+                    mono = None
+                    sparsity = None
+                    scale_free = None
+                    hebbian = None
+                    
+                # Fallbacks to offline bdh_results/ if any is missing
+                if not mono: mono = _load_json('monosemanticity.json')
+                if not sparsity: sparsity = _load_json('sparsity.json')
+                if not scale_free: scale_free = _load_json('scale_free.json')
+                if not hebbian: hebbian = _load_json('hebbian.json')
 
                 scores_df = _load_scores_csv()
 
                 found = sum(1 for x in [mono, sparsity, scale_free, hebbian] if x)
                 if found == 0:
-                    return ("⚠️ No results found in bdh_results/. Run analysis first:\n"
-                            "  python -m interpretability.run_analysis --checkpoint YOUR.pt --synthetic 200",
+                    return ("⚠️ No interpretability telemetry found. Please run an analysis script first:\n\n"
+                            "  [Live Engine] python3 -m interpretability.run_analysis --checkpoint YOUR.pt --focus-duration 15.0\n"
+                            "  [Static Engine]   python3 -m interpretability.run_analysis --checkpoint YOUR.pt --generate-states 500",
                             "", None, None, None, None, None)
 
                 # Score cards
@@ -621,6 +637,8 @@ def build_interpretability_tab():
             p = BDH_RESULTS / name
             if not p.exists():
                 p = INTERP_DIR / name
+            if not p.exists():
+                p = LOGS_DIR / name
             if p.exists():
                 with open(p) as f:
                     return json.load(f)

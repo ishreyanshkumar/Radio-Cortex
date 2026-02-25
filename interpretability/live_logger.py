@@ -153,9 +153,8 @@ class InterpretabilityLogger:
         try:
             # Lazy imports to avoid circular deps and keep startup fast
             from .bdh_interpretability_solo import (
-                BDHMonosemanticity, BDHSparsity, BDHHebbian, BDHScaleFree
+                BDHMonosemanticity, BDHSparsity, BDHHebbian, BDHScaleFree, BDHSaliency
             )
-            from .saliency import BDHSaliency
 
             states_np = np.array(self._collected_states)
             e2_list = list(self._collected_e2_metrics)

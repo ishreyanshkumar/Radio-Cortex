@@ -19,9 +19,10 @@ from .bdh_interpretability_solo import (
     BDHHebbian,
     BDHScaleFree,
     run_full_analysis,
+    BDHSaliency,
+    NeuronLogger, 
+    BDHNetworkGraph
 )
-from .saliency import BDHSaliency
-from .neuron_logger import NeuronLogger, BDHNetworkGraph
 from .live_logger import InterpretabilityLogger
 
 __all__ = [

@@ -91,16 +91,20 @@
   function loadFile(file) {
     const reader = new FileReader();
     reader.onload = (e) => {
-      allData = parseCSV(e.target.result);
-      if (!allData.length) return alert("No data found in CSV");
-      filteredData = [...allData];
-      uploadZone.classList.add("hidden");
-      document.getElementById("dashContent").classList.remove("hidden");
-      selectedIndices.clear();
-      populateFilters();
-      render();
+      processCsvText(e.target.result);
     };
     reader.readAsText(file);
+  }
+
+  function processCsvText(text) {
+    allData = parseCSV(text);
+    if (!allData.length) return alert("No data found in CSV");
+    filteredData = [...allData];
+    uploadZone.classList.add("hidden");
+    document.getElementById("dashContent").classList.remove("hidden");
+    selectedIndices.clear();
+    populateFilters();
+    render();
   }
 
   // Expose for button bindings
@@ -532,4 +536,51 @@
     a.download = "filtered_results.csv";
     a.click();
   }
+  // Auto-fetch data from backend
+  async function fetchAvailableFiles() {
+    try {
+      const res = await fetch("/api/results", { cache: "no-store" });
+      const data = await res.json();
+
+      const select = document.getElementById("dashFileSelect");
+      if (!select) return;
+
+      if (data.csvs && data.csvs.length > 0) {
+        select.innerHTML = data.csvs
+          .map((c) => `<option value="${c}">${c}</option>`)
+          .join("");
+        let targetCsv = data.csvs.includes("experiment_results.csv")
+          ? "experiment_results.csv"
+          : data.csvs[data.csvs.length - 1];
+        select.value = targetCsv;
+
+        loadSelectedFile(targetCsv);
+
+        select.addEventListener("change", (e) => {
+          if (e.target.value) loadSelectedFile(e.target.value);
+        });
+      } else {
+        select.innerHTML = `<option value="">No CSVs found</option>`;
+      }
+    } catch (e) {
+      console.log("[Dashboard] Auto-load failed or API unavailable", e);
+      const select = document.getElementById("dashFileSelect");
+      if (select) select.innerHTML = `<option value="">API Offline</option>`;
+    }
+  }
+
+  async function loadSelectedFile(filename) {
+    try {
+      const res = await fetch("/results/" + filename, { cache: "no-store" });
+      if (!res.ok) throw new Error("Failed to load");
+      const text = await res.text();
+      processCsvText(text);
+      console.log("[Dashboard] Loaded:", filename);
+    } catch (e) {
+      console.error("[Dashboard] Error loading file:", e);
+      alert("Failed to load " + filename);
+    }
+  }
+
+  fetchAvailableFiles();
 })();

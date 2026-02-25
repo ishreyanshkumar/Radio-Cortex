@@ -532,9 +532,9 @@ def build_comparison_tab():
 # ─────────────────────────────────────────────────────────────────────────────
 
 def build_dashboard_tab():
-    with gr.Tab("📊 Dashboard"):
+    with gr.Tab("📊 Evaluation Dashboard"):
         gr.HTML('''
-            <iframe src="/ui/index.html?page=dashboard&embed=true" 
+            <iframe src="/ui/index.html?page=dashboard&embed=true&v=9" 
                     width="100%" height="900" 
                     style="border:none; border-radius: 12px; overflow: hidden; background: #0f1118;">
             </iframe>
@@ -543,16 +543,16 @@ def build_dashboard_tab():
 def build_modelbench_tab():
     with gr.Tab("🏆 ModelBench"):
         gr.HTML('''
-            <iframe src="/ui/index.html?page=modelbench&embed=true" 
+            <iframe src="/ui/index.html?page=modelbench&embed=true&v=9" 
                     width="100%" height="900" 
                     style="border:none; border-radius: 12px; overflow: hidden; background: #0f1118;">
             </iframe>
         ''')
 
 def build_simulation_tab():
-    with gr.Tab("📡 Simulation Visualizer"):
+    with gr.Tab("🌐 Nexus Telemetry Matrix"):
         gr.HTML('''
-            <iframe src="/ui/index.html?page=visualizer&embed=true" 
+            <iframe src="/ui/index.html?page=visualizer&embed=true&v=9" 
                     width="100%" height="900" 
                     style="border:none; border-radius: 12px; overflow: hidden; background: #0f1118;">
             </iframe>
@@ -604,10 +604,16 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     warnings.filterwarnings("ignore")
-    
     # Create custom FastAPI backend to reliably serve HTML/CSS/JS without Gradio /file= query sync issues
     app = FastAPI()
     app.mount("/ui", StaticFiles(directory=str(ROOT / "ui")), name="ui")
+    app.mount("/results", StaticFiles(directory=str(RESULTS_DIR)), name="results")
+
+    @app.get("/api/results")
+    def list_results_api():
+        csvs = [os.path.basename(p) for p in sorted(glob.glob(str(RESULTS_DIR / "*.csv")))]
+        dbs = [os.path.basename(p) for p in sorted(glob.glob(str(RESULTS_DIR / "*.db")))]
+        return {"csvs": csvs, "dbs": dbs}
     
     demo = build_app()
     app = gr.mount_gradio_app(app, demo, path="/")

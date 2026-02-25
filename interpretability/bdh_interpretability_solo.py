@@ -55,13 +55,13 @@ class BDHMonosemanticity:
         self.activations = []   # List of 1D numpy arrays (flattened sparse acts)
         self.concepts = []      # List of List[str] per timestep
 
-    def collect(self, state: np.ndarray, e2_metrics: Dict):
+    def collect(self, state: np.ndarray, e2_metrics: Dict = None):
         """
         Collect one timestep of activations + concept labels.
 
         Args:
             state:      Raw state vector, shape (state_dim,)
-            e2_metrics: Dict with 'cell_metrics' and 'ue_metrics' from E2 interface
+            e2_metrics: (Legacy / Ignored)
         """
         captured = []
 
@@ -94,103 +94,63 @@ class BDHMonosemanticity:
             flat = torch.cat([c.flatten() for c in captured]).numpy()
             self.activations.append(flat)
 
-        # Extract and store concepts
-        concepts = self._extract_concepts(e2_metrics)
+        # Extract concepts purely from the state array (mathematically guaranteed no external fallback)
+        concepts = self._extract_concepts_from_state(state)
         self.concepts.append(concepts)
 
-    def _extract_concepts(self, e2_metrics: Dict) -> List[str]:
+    def _extract_concepts_from_state(self, state: np.ndarray) -> List[str]:
         """
-        Extract human-readable network concepts from E2 KPM metrics.
+        Extract human-readable network concepts natively from the raw evaluation state tensor.
+        This provides authentic, mathematically rigorous concept alignment without requiring external tracking logs.
         
-        These become the labels we correlate with neuron activations.
-        Maps directly to O-RAN conditions an operator would care about.
+        The BDH State is: num_cells * 16 features * 3 frames = 144
+        We look at the latest frame (the last 48 values).
         """
         concepts = []
+        num_cells = 3
+        features_per_cell = 16
+        frame_size = num_cells * features_per_cell
+        
+        # Get the latest frame values (end of the stacked state)
+        latest_frame = state[-frame_size:]
 
-        if not e2_metrics:
-            return ["normal_operation"]
+        for c in range(num_cells):
+            idx = c * features_per_cell
+            
+            # Normalization inverse mapping based on oran_ns3_env.py
+            queue = latest_frame[idx + 0] * 1000.0
+            rb_util = latest_frame[idx + 1]
+            power = (latest_frame[idx + 2] * 36.0) + 10.0
+            
+            # UE aggregation metrics
+            tput = latest_frame[idx + 5] * 10.0
+            delay = latest_frame[idx + 6] * 100.0
+            loss = latest_frame[idx + 7]
 
-        # ── Cell-level concepts ──
-        cell_metrics = e2_metrics.get('cell_metrics', {})
-        for cell_id, metrics in cell_metrics.items():
-            if isinstance(metrics, dict):
-                queue = metrics.get('queue_length', 0)
-                rb_util = metrics.get('rb_utilization', 0)
-                power = metrics.get('tx_power', 23)
-                load = metrics.get('cell_load', 0)
+            if queue > 500:
+                concepts.append(f"high_queue_c{c}")
+            if queue > 800:
+                concepts.append("severe_congestion")
+            if rb_util > 0.8:
+                concepts.append(f"rb_saturated_c{c}")
+            if rb_util < 0.3:
+                concepts.append(f"underloaded_c{c}")
+            if power > 35:
+                concepts.append(f"high_power_c{c}")
+            if power < 15:
+                concepts.append(f"low_power_c{c}")
+                
+            if loss > 0.05:
+                concepts.append("packet_loss_event")
+            if delay > 50:
+                concepts.append("high_delay")
+            if tput < 1.0:
+                concepts.append("low_throughput")
 
-                if queue > 500:
-                    concepts.append(f"high_queue_c{cell_id}")
-                if queue > 800:
-                    concepts.append("severe_congestion")
-                if rb_util > 0.8:
-                    concepts.append(f"rb_saturated_c{cell_id}")
-                if rb_util < 0.3:
-                    concepts.append(f"underloaded_c{cell_id}")
-                if power > 35:
-                    concepts.append(f"high_power_c{cell_id}")
-                if power < 15:
-                    concepts.append(f"low_power_c{cell_id}")
+        if not concepts:
+            concepts.append("normal_operation")
 
-        # ── UE-level concepts (aggregated) ──
-        ue_metrics = e2_metrics.get('ue_metrics', {})
-        losses, delays, sinrs, tputs = [], [], [], []
-
-        for ue_id, metrics in ue_metrics.items():
-            if isinstance(metrics, dict):
-                loss = metrics.get('packet_loss', 0)
-                sinr = metrics.get('sinr', 10)
-                delay = metrics.get('delay', 0)
-                tput = metrics.get('throughput', 0)
-
-                losses.append(loss)
-                delays.append(delay)
-                sinrs.append(sinr)
-                tputs.append(tput)
-
-                if loss > 0.05:
-                    concepts.append("packet_loss_event")
-                if sinr < 5:
-                    concepts.append("poor_sinr")
-                if sinr > 20:
-                    concepts.append("excellent_sinr")
-                if delay > 50:
-                    concepts.append("high_delay")
-                if tput < 1.0:
-                    concepts.append("low_throughput")
-
-        # ── Network-wide concepts ──
-        if losses:
-            if np.mean(losses) > 0.1:
-                concepts.append("network_degraded")
-            if np.mean(losses) < 0.01:
-                concepts.append("network_healthy")
-        if delays:
-            if np.mean(delays) > 100:
-                concepts.append("network_congested")
-            if np.mean(delays) < 10:
-                concepts.append("low_latency")
-        if tputs:
-            if np.mean(tputs) > 10:
-                concepts.append("high_throughput")
-            tput_arr = np.array(tputs)
-            if len(tput_arr) > 1 and tput_arr.sum() > 0:
-                sq_sum = np.sum(tput_arr ** 2)
-                jains = (tput_arr.sum() ** 2) / (len(tput_arr) * sq_sum) if sq_sum > 0 else 1
-                if jains > 0.8:
-                    concepts.append("fair_allocation")
-                elif jains < 0.5:
-                    concepts.append("unfair_allocation")
-
-        # Deduplicate but preserve order
-        seen = set()
-        unique = []
-        for c in concepts:
-            if c not in seen:
-                seen.add(c)
-                unique.append(c)
-
-        return unique if unique else ["normal_operation"]
+        return list(set(concepts))
 
     def analyze(self, min_samples: int = 5, correlation_threshold: float = 0.5) -> Dict:
         """
@@ -699,11 +659,690 @@ def run_full_analysis(
     print(f"    Hub neurons: {sf_results['num_hubs']}")
     print(f"    Network size: {sf_results['network_size']} neurons")
 
+    # ── 5. Saliency ──
+    print("\n" + "=" * 60)
+    print("  [5/5] SALIENCY MAPPING ANALYSIS")
+    print("=" * 60)
+    
+    saliency = BDHSaliency(policy)
+    sal_states = states[:min(20, len(states))]
+    sal_results = saliency.analyze_batch(sal_states, max_samples=20)
+    results['saliency'] = sal_results
+    
+    with open(out / 'saliency.json', 'w') as f:
+        json.dump(sal_results, f, indent=2)
+    print(f"  ✓ Saliency processed {len(sal_states)} states")
+
     # ── Summary ──
     print("\n" + "=" * 60)
     print("  ALL ANALYSES COMPLETE")
     print("=" * 60)
     print(f"  Results saved to: {out}/")
-    print(f"  Files: monosemanticity.json, sparsity.json, hebbian.json, scale_free.json")
+    print(f"  Files: monosemanticity.json, sparsity.json, hebbian.json, scale_free.json, saliency.json")
 
     return results
+
+"""
+BDH Saliency Analysis
+=======================
+
+Gradient × Input feature attribution for BDH policy decisions.
+
+Breaks down saliency into:
+- Per-feature importance  (which of the 16 cell features matter most?)
+- Per-cell importance     (which cell drives each action?)
+- Temporal importance     (which of the 3 stacked frames matters?)
+- Per-action maps         (what drives TxPower vs CIO vs TTT?)
+
+Designed for the Cell-Centric state space:
+    State = num_cells × 16 features × 3 temporal frames
+
+Author: Radio-Cortex Team / KRITI 2026
+"""
+
+import torch
+import numpy as np
+from typing import Dict, List, Optional
+import json
+from pathlib import Path
+
+
+# ── Feature names matching oran_ns3_env.py state extraction ──
+CELL_FEATURE_NAMES = [
+    'queue',        # Queue length (normalized)
+    'rb_util',      # RB utilization
+    'tx_power',     # Transmit power (normalized)
+    'load',         # Cell load
+    'avg_req',      # Average RB request
+    'avg_tput',     # Average throughput (UEs)
+    'avg_delay',    # Average delay (UEs)
+    'avg_loss',     # Average packet loss (UEs)
+    'max_delay',    # Max delay (UEs)
+    'max_loss',     # Max packet loss (UEs)
+    'jains',        # Jain's fairness index
+    'n_ues',        # Number of connected UEs
+    'sinr_mean',    # Mean SINR
+    'ho_count',     # Handover count
+    'cqi_mean',     # Mean CQI
+    'stationary',   # Stationary flag
+]
+
+ACTION_NAMES = ['TxPower', 'CIO', 'TTT']
+
+FRAME_LABELS = ['t-2 (oldest)', 't-1 (previous)', 't-0 (current)']
+
+
+class BDHSaliency:
+    """
+    Comprehensive saliency analysis for BDH policy.
+
+    For each action dimension, computes gradient × input and then
+    reshapes into the (frames, cells, features) structure so we can
+    answer questions like:
+    - "Which features drive the TxPower decision for Cell 0?"
+    - "Does the agent use historical frames or only the current one?"
+    - "Which cell's metrics matter for Cell 2's CIO action?"
+    """
+
+    def __init__(self, policy, num_cells: int = 3):
+        """
+        Args:
+            policy:    Trained BDHPolicy (must support .forward(state) → (mean, logstd, value))
+            num_cells: Number of cells in the environment
+        """
+        self.policy = policy
+        self.policy.eval()
+        self.num_cells = num_cells
+        self.num_features = 16       # Features per cell per frame
+        self.num_frames = 3          # Temporal frame stacking
+        self.state_dim = num_cells * self.num_features * self.num_frames
+        self.action_dim = num_cells * 3  # TxPower, CIO, TTT per cell
+
+    def _compute_raw_saliency(self, state: np.ndarray, action_index: int) -> np.ndarray:
+        """
+        Compute gradient × input for a single state and action.
+
+        Returns:
+            saliency vector of shape (state_dim,)
+        """
+        state_t = torch.tensor(state, dtype=torch.float32).unsqueeze(0)
+        state_t.requires_grad_(True)
+
+        action_mean, _, _ = self.policy(state_t)
+        target = action_mean[0, action_index]
+        target.backward()
+
+        grad = state_t.grad[0].detach().numpy()
+        return grad * state
+
+    def analyze_single_state(self, state: np.ndarray) -> Dict:
+        """
+        Full saliency analysis for one state vector.
+
+        Returns a dict with per-action breakdowns, feature rankings,
+        temporal attribution, and cell attribution.
+        """
+        assert len(state) == self.state_dim, \
+            f"Expected state_dim={self.state_dim}, got {len(state)}"
+
+        per_action = {}
+
+        for a_idx in range(self.action_dim):
+            saliency = self._compute_raw_saliency(state, a_idx)
+
+            # ── Reshape to (frames, cells, features) ──
+            sal_3d = saliency.reshape(self.num_frames, self.num_cells, self.num_features)
+            abs_3d = np.abs(sal_3d)
+
+            # ── Feature importance (average across frames and cells) ──
+            feature_imp = abs_3d.mean(axis=(0, 1))  # (16,)
+            feature_total = feature_imp.sum()
+            if feature_total > 0:
+                feature_imp_norm = feature_imp / feature_total
+            else:
+                feature_imp_norm = feature_imp
+
+            # ── Temporal importance (which frame matters?) ──
+            frame_imp = abs_3d.sum(axis=(1, 2))  # (3,)
+            frame_total = frame_imp.sum()
+            if frame_total > 0:
+                frame_imp_norm = frame_imp / frame_total
+            else:
+                frame_imp_norm = frame_imp
+
+            # ── Cell importance (which cell drives this action?) ──
+            cell_imp = abs_3d.sum(axis=(0, 2))  # (num_cells,)
+            cell_total = cell_imp.sum()
+            if cell_total > 0:
+                cell_imp_norm = cell_imp / cell_total
+            else:
+                cell_imp_norm = cell_imp
+
+            # ── Top-10 individual features ──
+            flat_abs = np.abs(saliency)
+            top_indices = np.argsort(flat_abs)[::-1][:10]
+            top_features = []
+            for idx in top_indices:
+                frame = idx // (self.num_cells * self.num_features)
+                rem = idx % (self.num_cells * self.num_features)
+                cell = rem // self.num_features
+                feat = rem % self.num_features
+
+                feat_name = CELL_FEATURE_NAMES[feat] if feat < len(CELL_FEATURE_NAMES) else f'feat_{feat}'
+
+                top_features.append({
+                    'name': f"{FRAME_LABELS[frame]}_cell{cell}_{feat_name}",
+                    'frame': int(frame),
+                    'cell': int(cell),
+                    'feature': feat_name,
+                    'saliency': float(saliency[idx]),
+                    'abs_saliency': float(flat_abs[idx]),
+                    'state_value': float(state[idx]),
+                })
+
+            # ── Label this action ──
+            cell_id = a_idx // 3
+            action_name = ACTION_NAMES[a_idx % 3]
+            label = f"cell{cell_id}_{action_name}"
+
+            per_action[label] = {
+                'action_index': int(a_idx),
+                'cell_id': int(cell_id),
+                'action_name': action_name,
+                'feature_importance': {
+                    CELL_FEATURE_NAMES[i]: float(feature_imp_norm[i])
+                    for i in range(min(len(CELL_FEATURE_NAMES), len(feature_imp_norm)))
+                },
+                'frame_importance': [float(x) for x in frame_imp_norm],
+                'cell_importance': [float(x) for x in cell_imp_norm],
+                'top_features': top_features,
+                'total_saliency': float(flat_abs.sum()),
+            }
+
+        return per_action
+
+    def analyze_batch(
+        self,
+        states: np.ndarray,
+        max_samples: int = 100,
+    ) -> Dict:
+        """
+        Run saliency over multiple states and compute averaged importance.
+
+        Args:
+            states:      Array of shape (N, state_dim)
+            max_samples: Cap to avoid slow runtimes
+
+        Returns:
+            Aggregated results with averaged feature/frame/cell importance
+        """
+        n = min(len(states), max_samples)
+        print(f"    Running saliency on {n} states × {self.action_dim} actions...")
+
+        # Accumulators per action
+        accum = {}
+        for a_idx in range(self.action_dim):
+            cell_id = a_idx // 3
+            action_name = ACTION_NAMES[a_idx % 3]
+            label = f"cell{cell_id}_{action_name}"
+            accum[label] = {
+                'feature_imp': np.zeros(self.num_features),
+                'frame_imp': np.zeros(self.num_frames),
+                'cell_imp': np.zeros(self.num_cells),
+                'count': 0,
+            }
+
+        # Also accumulate global averages
+        global_feature_imp = np.zeros(self.num_features)
+        global_frame_imp = np.zeros(self.num_frames)
+        global_cell_imp = np.zeros(self.num_cells)
+        global_count = 0
+
+        for i in range(n):
+            if (i + 1) % 25 == 0:
+                print(f"      {i+1}/{n}...")
+
+            per_action = self.analyze_single_state(states[i])
+
+            for label, data in per_action.items():
+                a = accum[label]
+                feat_vals = [data['feature_importance'].get(fn, 0)
+                             for fn in CELL_FEATURE_NAMES]
+                a['feature_imp'] += np.array(feat_vals)
+                a['frame_imp'] += np.array(data['frame_importance'])
+                a['cell_imp'] += np.array(data['cell_importance'])
+                a['count'] += 1
+
+                global_feature_imp += np.array(feat_vals)
+                global_frame_imp += np.array(data['frame_importance'])
+                global_cell_imp += np.array(data['cell_importance'])
+                global_count += 1
+
+        # ── Build results ──
+        per_action_results = {}
+        for label, a in accum.items():
+            c = max(a['count'], 1)
+            per_action_results[label] = {
+                'feature_importance': {
+                    CELL_FEATURE_NAMES[j]: float(a['feature_imp'][j] / c)
+                    for j in range(self.num_features)
+                },
+                'frame_importance': (a['frame_imp'] / c).tolist(),
+                'cell_importance': (a['cell_imp'] / c).tolist(),
+            }
+
+        gc = max(global_count, 1)
+        results = {
+            'num_samples': n,
+            'num_actions': self.action_dim,
+            'avg_feature_importance': {
+                CELL_FEATURE_NAMES[j]: float(global_feature_imp[j] / gc)
+                for j in range(self.num_features)
+            },
+            'avg_frame_importance': (global_frame_imp / gc).tolist(),
+            'avg_cell_importance': (global_cell_imp / gc).tolist(),
+            'per_action': per_action_results,
+        }
+
+        return results
+
+    def save(self, results: Dict, output_dir: str):
+        """Save saliency results to JSON."""
+        out = Path(output_dir)
+        out.mkdir(parents=True, exist_ok=True)
+        fpath = out / 'saliency.json'
+        with open(fpath, 'w') as f:
+            json.dump(results, f, indent=2)
+        print(f"    ✓ Saved: {fpath}")
+
+"""
+BDH Neuron Decision Logger + Network Graph Exporter
+=====================================================
+
+NeuronLogger:  Hooks into BDH sparse ReLU activations during inference.
+               Records which neurons fire per step, tagged with actions.
+               Outputs JSONL log file.
+
+BDHNetworkGraph: Extracts encoder/decoder weight matrices as a JSON
+                 node-edge graph (input features → latent neurons → actions).
+
+Author: Radio-Cortex Team / KRITI 2026
+"""
+
+import torch
+import torch.nn as nn
+import numpy as np
+import json
+from pathlib import Path
+from typing import Dict, List, Optional
+
+ACTION_NAMES = ['TxPower', 'CIO', 'TTT']
+CELL_FEATURE_NAMES = [
+    'queue', 'rb_util', 'tx_power', 'load', 'avg_req',
+    'avg_tput', 'avg_delay', 'avg_loss', 'max_delay', 'max_loss',
+    'jains', 'n_ues', 'sinr_mean', 'ho_count', 'cqi_mean', 'stationary',
+]
+
+
+# ═══════════════════════════════════════════════════════════════════
+# 6. NEURON DECISION LOGGER
+# ═══════════════════════════════════════════════════════════════════
+
+class NeuronLogger:
+    """
+    Records per-step neuron activations from BDH's sparse codes.
+
+    Hooks into the BDH module's leaf modules and captures:
+    - x_sparse (post-encoder ReLU)
+    - y_sparse (post-value ReLU)
+    - gate outputs
+
+    Each logged step contains: action taken, state summary, per-layer
+    activation indices/values, hub neuron activity, and decision neurons.
+    """
+
+    def __init__(self, policy: nn.Module, num_cells: int = 3,
+                 hub_neurons: Optional[List[int]] = None,
+                 activation_threshold: float = 0.01, top_k_per_action: int = 10):
+        """
+        Args:
+            policy:                Trained BDHPolicy instance
+            num_cells:             Number of cells in the environment
+            hub_neurons:           Optional list of known hub neuron indices
+                                   (from scale-free analysis)
+            activation_threshold:  Minimum magnitude to consider a neuron "active"
+            top_k_per_action:      Number of top neurons to record per action
+        """
+        self.policy = policy
+        self.policy.eval()
+        self.num_cells = num_cells
+        self.hub_neurons = set(hub_neurons or [])
+        self.threshold = activation_threshold
+        self.top_k = top_k_per_action
+        self.log = []
+        self.step_count = 0
+
+        # Detect BDH config
+        bdh = policy.bdh if hasattr(policy, 'bdh') else policy
+        self.n_layers = bdh.config.n_layer if hasattr(bdh, 'config') else 4
+        self.n_heads = bdh.config.n_head if hasattr(bdh, 'config') else 4
+
+    def step(self, state: np.ndarray) -> Dict:
+        """
+        Run one inference step, capture all neuron activations.
+
+        Args:
+            state: Raw state vector, shape (state_dim,)
+
+        Returns:
+            Dict with 'action' (np.ndarray) and 'log_entry' (Dict)
+        """
+        all_acts = []
+        hooks = []
+
+        def global_hook(module, input, output):
+            if isinstance(output, torch.Tensor) and output.dim() >= 2:
+                all_acts.append(output.detach().cpu())
+
+        bdh = self.policy.bdh if hasattr(self.policy, 'bdh') else self.policy
+        for name, module in bdh.named_modules():
+            if len(list(module.children())) == 0:
+                hooks.append(module.register_forward_hook(global_hook))
+
+        with torch.no_grad():
+            state_t = torch.FloatTensor(state).unsqueeze(0)
+            action_mean, log_std, value = self.policy(state_t)
+            action = action_mean.squeeze(0).numpy()
+
+        for h in hooks:
+            h.remove()
+
+        # ── Parse activations into layers ──
+        layers_data = {}
+        acts_per_layer = max(1, len(all_acts) // max(self.n_layers, 1))
+
+        for layer_idx in range(self.n_layers):
+            start = layer_idx * acts_per_layer
+            end = start + acts_per_layer
+            layer_acts = all_acts[start:end]
+            layer_data = {}
+            act_names = ['x_sparse', 'y_sparse', 'gate']
+
+            for j, act_tensor in enumerate(layer_acts[:3]):
+                flat = act_tensor.flatten().numpy()
+                active_mask = np.abs(flat) > self.threshold
+                active_indices = np.where(active_mask)[0]
+                active_values = flat[active_mask]
+
+                name = act_names[j] if j < len(act_names) else f'act_{j}'
+                layer_data[name] = {
+                    'active_neuron_indices': active_indices.tolist(),
+                    'activations': active_values.tolist(),
+                    'total_neurons': int(len(flat)),
+                    'num_active': int(active_mask.sum()),
+                    'sparsity': float(1.0 - active_mask.mean()),
+                    'mean_activation': float(flat[active_mask].mean()) if active_mask.any() else 0.0,
+                    'max_activation': float(flat[active_mask].max()) if active_mask.any() else 0.0,
+                }
+
+            layers_data[f'layer_{layer_idx}'] = layer_data
+
+        # ── Hub neuron tracking ──
+        all_active = set()
+        for layer_data in layers_data.values():
+            for act_data in layer_data.values():
+                all_active.update(act_data['active_neuron_indices'])
+
+        hub_active = sorted(list(self.hub_neurons & all_active))
+
+        # ── Decision neurons (top-k by activation magnitude per action) ──
+        decision_neurons = {}
+        if all_acts:
+            all_flat = torch.cat([a.flatten() for a in all_acts]).numpy()
+            abs_acts = np.abs(all_flat)
+
+            for a_idx in range(self.num_cells * 3):
+                cell_id = a_idx // 3
+                act_name = ACTION_NAMES[a_idx % 3]
+                label = f"cell{cell_id}_{act_name}"
+
+                top_idx = np.argsort(abs_acts)[::-1][:self.top_k]
+                decision_neurons[label] = [
+                    {'neuron': int(idx), 'activation': float(all_flat[idx])}
+                    for idx in top_idx if abs_acts[idx] > self.threshold
+                ]
+
+        # ── State summary (latest frame only) ──
+        state_summary = {}
+        frame_start = 2 * self.num_cells * 16  # t-0 frame offset
+        for c in range(self.num_cells):
+            offset = frame_start + c * 16
+            for j in range(min(16, len(CELL_FEATURE_NAMES))):
+                if offset + j < len(state):
+                    state_summary[f"cell{c}_{CELL_FEATURE_NAMES[j]}"] = float(state[offset + j])
+
+        # ── Action labels ──
+        action_labels = {}
+        for i in range(len(action)):
+            action_labels[f"cell{i // 3}_{ACTION_NAMES[i % 3]}"] = float(action[i])
+
+        entry = {
+            'step': self.step_count,
+            'action': action.tolist(),
+            'action_labels': action_labels,
+            'value': float(value.item()) if value.dim() == 0 else float(value.squeeze().item()),
+            'state_summary': state_summary,
+            'layers': layers_data,
+            'hub_neurons_active': hub_active,
+            'total_active_neurons': len(all_active),
+            'decision_neurons': decision_neurons,
+        }
+
+        self.log.append(entry)
+        self.step_count += 1
+        return {'action': action, 'log_entry': entry}
+
+    def save(self, output_path: str):
+        """Save neuron log as JSONL file."""
+        out = Path(output_path)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        with open(out, 'w') as f:
+            for entry in self.log:
+                f.write(json.dumps(entry) + '\n')
+        print(f"  ✓ Neuron log saved: {out} ({len(self.log)} steps)")
+
+    def get_summary(self) -> Dict:
+        """Aggregate statistics across all logged steps."""
+        if not self.log:
+            return {'num_steps': 0}
+
+        neuron_fire_count = {}
+        total_active_per_step = []
+        sparsities = []
+
+        for entry in self.log:
+            total_active_per_step.append(entry.get('total_active_neurons', 0))
+            for layer_data in entry.get('layers', {}).values():
+                for act_data in layer_data.values():
+                    for idx in act_data.get('active_neuron_indices', []):
+                        key = str(idx)
+                        neuron_fire_count[key] = neuron_fire_count.get(key, 0) + 1
+                    sparsities.append(act_data.get('sparsity', 0))
+
+        sorted_neurons = sorted(
+            neuron_fire_count.items(), key=lambda x: x[1], reverse=True
+        )
+
+        # Hub activation rates
+        hub_rates = {}
+        if self.hub_neurons:
+            hub_counts = {h: 0 for h in self.hub_neurons}
+            for entry in self.log:
+                for h in entry.get('hub_neurons_active', []):
+                    if h in hub_counts:
+                        hub_counts[h] += 1
+            n = len(self.log)
+            hub_rates = {str(h): float(count / n) for h, count in hub_counts.items()}
+
+        return {
+            'num_steps': len(self.log),
+            'avg_active_neurons': float(np.mean(total_active_per_step)),
+            'avg_sparsity': float(np.mean(sparsities)) if sparsities else 0,
+            'most_active_neurons': [
+                {'neuron': name, 'fire_count': count}
+                for name, count in sorted_neurons[:20]
+            ],
+            'hub_activation_rate': hub_rates,
+        }
+
+
+# ═══════════════════════════════════════════════════════════════════
+# 7. NETWORK GRAPH EXPORTER
+# ═══════════════════════════════════════════════════════════════════
+
+class BDHNetworkGraph:
+    """
+    Extract BDH as a node-edge graph for visualization.
+
+    Nodes: input features (48) → latent neurons (4 heads × N) → output actions (9)
+    Edges: encoder weights (input→latent), decoder weights (latent→output)
+
+    The graph can be loaded into D3.js, Cytoscape, or NetworkX for
+    interactive visualization of the BDH architecture.
+    """
+
+    def __init__(self, policy: nn.Module, num_cells: int = 3):
+        self.policy = policy
+        self.num_cells = num_cells
+
+    def extract(self, weight_threshold_percentile: float = 80.0) -> Dict:
+        """
+        Extract the BDH architecture as a node-edge graph.
+
+        Args:
+            weight_threshold_percentile: Only include edges with weight
+                                          magnitude above this percentile
+
+        Returns:
+            Dict with 'nodes', 'edges', and 'metadata'
+        """
+        bdh = self.policy.bdh if hasattr(self.policy, 'bdh') else self.policy
+        nodes = []
+        edges = []
+
+        # ── Input nodes (one per cell × feature in current frame) ──
+        for c in range(self.num_cells):
+            for j, fname in enumerate(CELL_FEATURE_NAMES):
+                nodes.append({
+                    'id': f'input_c{c}_{fname}',
+                    'type': 'input',
+                    'cell': c,
+                    'feature': fname,
+                    'label': f'C{c}:{fname}',
+                    'group': f'cell_{c}',
+                })
+
+        # ── Latent nodes + encoder edges ──
+        if hasattr(bdh, 'encoder') and isinstance(bdh.encoder, nn.Parameter):
+            encoder = bdh.encoder.detach().cpu().numpy()
+            nh, D, N = encoder.shape
+            threshold = np.percentile(np.abs(encoder), weight_threshold_percentile)
+
+            # Create latent neuron nodes
+            for head in range(nh):
+                for n_idx in range(N):
+                    col = np.abs(encoder[head, :, n_idx])
+                    degree = int((col > threshold).sum())
+                    nodes.append({
+                        'id': f'latent_h{head}_n{n_idx}',
+                        'type': 'latent',
+                        'head': head,
+                        'neuron_index': n_idx,
+                        'label': f'H{head}:N{n_idx}',
+                        'group': f'head_{head}',
+                        'degree': degree,
+                        'is_hub': degree > np.percentile(
+                            [np.abs(encoder[head, :, k]).sum() for k in range(N)], 90
+                        ),
+                    })
+
+            # Create encoder edges (input → latent)
+            for head in range(nh):
+                for d_idx in range(min(D, self.num_cells * 16)):
+                    for n_idx in range(N):
+                        w = float(encoder[head, d_idx, n_idx])
+                        if abs(w) > threshold:
+                            cell = d_idx // 16
+                            feat_idx = d_idx % 16
+                            if cell < self.num_cells and feat_idx < len(CELL_FEATURE_NAMES):
+                                edges.append({
+                                    'source': f'input_c{cell}_{CELL_FEATURE_NAMES[feat_idx]}',
+                                    'target': f'latent_h{head}_n{n_idx}',
+                                    'weight': abs(w),
+                                    'raw_weight': w,
+                                    'type': 'encoder',
+                                    'head': head,
+                                })
+
+        # ── Output nodes ──
+        for c in range(self.num_cells):
+            for a_name in ACTION_NAMES:
+                nodes.append({
+                    'id': f'output_c{c}_{a_name}',
+                    'type': 'output',
+                    'cell': c,
+                    'action': a_name,
+                    'label': f'C{c}:{a_name}',
+                    'group': f'action_{a_name}',
+                })
+
+        # ── Decoder edges (latent → output) ──
+        if hasattr(bdh, 'decoder') and isinstance(bdh.decoder, nn.Parameter):
+            decoder = bdh.decoder.detach().cpu().numpy()
+            d_thresh = np.percentile(np.abs(decoder), weight_threshold_percentile)
+            nh_N, D_dec = decoder.shape
+            nh_val = bdh.config.n_head if hasattr(bdh, 'config') else 4
+            N_val = nh_N // nh_val if nh_val > 0 else nh_N
+
+            for row in range(nh_N):
+                head = row // N_val if N_val > 0 else 0
+                n_idx = row % N_val if N_val > 0 else row
+                for d_idx in range(min(D_dec, self.num_cells * 16)):
+                    w = float(decoder[row, d_idx])
+                    if abs(w) > d_thresh:
+                        cell = d_idx // 16
+                        if cell < self.num_cells:
+                            for a_name in ACTION_NAMES:
+                                edges.append({
+                                    'source': f'latent_h{head}_n{n_idx}',
+                                    'target': f'output_c{cell}_{a_name}',
+                                    'weight': abs(w),
+                                    'raw_weight': w,
+                                    'type': 'decoder',
+                                    'head': head,
+                                })
+
+        return {
+            'nodes': nodes,
+            'edges': edges,
+            'metadata': {
+                'num_nodes': len(nodes),
+                'num_edges': len(edges),
+                'num_input': sum(1 for n in nodes if n['type'] == 'input'),
+                'num_latent': sum(1 for n in nodes if n['type'] == 'latent'),
+                'num_output': sum(1 for n in nodes if n['type'] == 'output'),
+                'num_hubs': sum(1 for n in nodes if n.get('is_hub', False)),
+                'encoder_shape': list(bdh.encoder.shape) if hasattr(bdh, 'encoder') else [],
+                'decoder_shape': list(bdh.decoder.shape) if hasattr(bdh, 'decoder') else [],
+            },
+        }
+
+    def save(self, graph: Dict, output_path: str):
+        """Save graph as JSON file."""
+        out = Path(output_path)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        with open(out, 'w') as f:
+            json.dump(graph, f, indent=2)
+        print(f"  ✓ Network graph saved: {out}")
+        print(f"    {graph['metadata']['num_nodes']} nodes, "
+              f"{graph['metadata']['num_edges']} edges")

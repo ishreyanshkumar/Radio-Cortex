@@ -749,4 +749,51 @@
     raw = [];
     A = {};
   }
+  // Auto-fetch data from backend
+  async function fetchAvailableFiles() {
+    try {
+      const res = await fetch("/api/results", { cache: "no-store" });
+      const data = await res.json();
+
+      const select = document.getElementById("mbFileSelect");
+      if (!select) return;
+
+      if (data.csvs && data.csvs.length > 0) {
+        select.innerHTML = data.csvs
+          .map((c) => `<option value="${c}">${c}</option>`)
+          .join("");
+        let targetCsv = data.csvs.includes("experiment_results.csv")
+          ? "experiment_results.csv"
+          : data.csvs[data.csvs.length - 1];
+        select.value = targetCsv;
+
+        loadSelectedFile(targetCsv);
+
+        select.addEventListener("change", (e) => {
+          if (e.target.value) loadSelectedFile(e.target.value);
+        });
+      } else {
+        select.innerHTML = `<option value="">No CSVs found</option>`;
+      }
+    } catch (e) {
+      console.log("[ModelBench] Auto-load failed or API unavailable", e);
+      const select = document.getElementById("mbFileSelect");
+      if (select) select.innerHTML = `<option value="">API Offline</option>`;
+    }
+  }
+
+  async function loadSelectedFile(filename) {
+    try {
+      const res = await fetch("/results/" + filename, { cache: "no-store" });
+      if (!res.ok) throw new Error("Failed to load");
+      const text = await res.text();
+      go(text);
+      console.log("[ModelBench] Loaded:", filename);
+    } catch (e) {
+      console.error("[ModelBench] Error loading file:", e);
+      alert("Failed to load " + filename);
+    }
+  }
+
+  fetchAvailableFiles();
 })();

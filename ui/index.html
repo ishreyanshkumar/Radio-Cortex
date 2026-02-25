@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Radio-Cortex — Control Center</title>
-    <link rel="stylesheet" href="styles.css">
+    <link rel="stylesheet" href="styles.css?v=9">
 
     <!-- CDN Dependencies -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
@@ -38,8 +38,8 @@
                 ModelBench
             </a>
             <a data-page="visualizer" onclick="switchPage('visualizer')">
-                <span class="icon">📡</span>
-                Sim Visualizer
+                <span class="icon">🌐</span>
+                Nexus Matrix
             </a>
             <a href="http://localhost:7860" target="_blank" rel="noopener">
                 <span class="icon">🧠</span>
@@ -63,7 +63,12 @@
                 <p>Load <code>experiment_results.csv</code> to explore evaluation metrics across models & scenarios</p>
             </div>
 
-            <!-- Upload -->
+            <!-- File Auto-Loader / Upload -->
+            <div style="display:flex; justify-content:flex-end; gap:12px; margin-bottom: 24px;">
+                <select id="dashFileSelect" class="controls select" style="width:250px;">
+                    <option value="">Loading files...</option>
+                </select>
+            </div>
             <div class="upload-zone" id="dashUploadZone">
                 <div class="upload-icon">📂</div>
                 <div class="upload-text">Drop <b>experiment_results.csv</b> here or click to browse</div>
@@ -138,11 +143,14 @@
             <div id="mbContent" class="hidden">
                 <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:28px;flex-wrap:wrap;gap:12px;">
                     <div style="display:flex;gap:20px;">
+                        <select id="mbFileSelect" class="controls select" style="width:250px;">
+                            <option value="">Loading files...</option>
+                        </select>
                         <div class="stat-badge"><div class="stat-value" id="mbStatModels">-</div><div class="stat-label">Models</div></div>
                         <div class="stat-badge"><div class="stat-value" id="mbStatScenarios">-</div><div class="stat-label">Scenarios</div></div>
                         <div class="stat-badge"><div class="stat-value" id="mbStatRows">-</div><div class="stat-label">Rows</div></div>
                     </div>
-                    <button class="btn btn-sm" id="mbNewFileBtn">← New file</button>
+                    <button class="btn btn-sm" id="mbNewFileBtn">← Clear & Upload new</button>
                 </div>
 
                 <!-- 1. Top Performers -->
@@ -201,11 +209,16 @@
         <!-- ─── Visualizer Page ────────────────── -->
         <section id="page-visualizer" class="page-section">
             <div class="page-header">
-                <h1>📡 Simulation <span>Visualizer</span></h1>
-                <p>Load a <code>simulation_data_*.db</code> file to replay step-by-step simulation traces</p>
+                <h1>🌐 Nexus <span>Telemetry Matrix</span></h1>
+                <p>Load a <code>simulation_data_*.db</code> file to replay step-by-step live O-RAN simulation traces</p>
             </div>
 
-            <!-- Upload -->
+            <!-- File Auto-Loader / Upload -->
+            <div style="display:flex; justify-content:flex-end; gap:12px; margin-bottom: 24px;">
+                <select id="vizFileSelect" class="controls select" style="width:300px;">
+                    <option value="">Loading DBs...</option>
+                </select>
+            </div>
             <div class="upload-zone" id="vizUploadZone">
                 <div class="upload-icon">📡</div>
                 <div class="upload-text">Drop <b>simulation_data_*.db</b> here or click to browse</div>
@@ -303,9 +316,21 @@
                             </div>
                         </div>
 
+                        <!-- Secondary Metrics Grid (NEW) -->
+                        <div class="grid-2">
+                            <div class="card stats-card">
+                                <div class="card-title">ACTIVE UEs PER CELL</div>
+                                <div class="chart-wrap" style="height:220px"><canvas id="vizChartUEs"></canvas></div>
+                            </div>
+                            <div class="card stats-card">
+                                <div class="card-title">RB UTILIZATION (%)</div>
+                                <div class="chart-wrap" style="height:220px"><canvas id="vizChartRB"></canvas></div>
+                            </div>
+                        </div>
+
                         <!-- Cell Status Console -->
                         <div class="card">
-                            <div class="card-title">📶 MULTI-CELL COMMAND CENTER</div>
+                            <div class="card-title">📶 NEXUS CELL COMMAND</div>
                             <div style="overflow-x:auto;">
                                 <table class="data-table">
                                     <thead>
@@ -341,9 +366,9 @@
     </div>
 
     <!-- ═══════════════ Page Scripts ═══════════════ -->
-    <script src="pages/dashboard.js"></script>
-    <script src="pages/modelbench.js"></script>
-    <script src="pages/visualizer.js"></script>
+    <script src="pages/dashboard.js?v=9"></script>
+    <script src="pages/modelbench.js?v=9"></script>
+    <script src="pages/visualizer.js?v=9"></script>
 
     <script>
         // ── Tab Navigation ──

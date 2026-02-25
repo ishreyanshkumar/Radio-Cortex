@@ -48,11 +48,15 @@
   function loadDBFile(file) {
     const reader = new FileReader();
     reader.onload = function () {
-      const Uints = new Uint8Array(reader.result);
-      db = new SQL.Database(Uints);
-      loadSimulationData();
+      processDBBuffer(reader.result);
     };
     reader.readAsArrayBuffer(file);
+  }
+
+  function processDBBuffer(buffer) {
+    const Uints = new Uint8Array(buffer);
+    db = new SQL.Database(Uints);
+    loadSimulationData();
   }
 
   function loadSimulationData() {
@@ -292,28 +296,61 @@
     tbody.innerHTML = "";
     const cellMetrics = m.e2_data?.cell_metrics || {};
     const actions =
-      m.actions_applied?.cell || m.e2_data?.actions_applied?.cell || [];
+      m.actions_applied?.cell ||
+      m.e2_data?.actions_applied?.cell ||
+      m.actions_applied ||
+      step.action ||
+      [];
 
-    Object.keys(cellMetrics).forEach((cid) => {
-      const cm = cellMetrics[cid];
-      const act = actions.find((a) => a.cell_id == cid) || {};
-      const load = (cm.rb_utilization || 0) * 100;
+    Object.keys(cellMetrics).forEach((cidStr) => {
+      const cid = parseInt(cidStr);
+      const cm = cellMetrics[cidStr];
+
+      let tx = 46.0,
+        cio = 0.0,
+        ttt = 192;
+      // Handle flat array from python list
+      if (Array.isArray(actions) && typeof actions[0] === "number") {
+        if (actions.length >= cid * 3 + 3) {
+          tx = 28.0 + actions[cid * 3 + 0] * 18.0;
+          cio = actions[cid * 3 + 1] * 6.0;
+          ttt = 640.0 * (1.1 - actions[cid * 3 + 2]);
+        }
+      } else if (Array.isArray(actions) && typeof actions[0] === "object") {
+        const act = actions.find((a) => a.cell_id == cid) || {};
+        tx = act.tx_power_dbm || cm.tx_power || 46;
+        cio = act.cell_individual_offset_db || 0;
+        ttt = act.time_to_trigger_ms || 192;
+      }
+
+      // Calculate real cell throughput from UE metrics
+      let cellTput = cm.throughput_mbps || 0;
+      if (m.e2_data && m.e2_data.ue_metrics) {
+        const ues = Object.values(m.e2_data.ue_metrics).filter(
+          (u) => u.serving_cell == cid,
+        );
+        if (ues.length > 0) {
+          cellTput = ues.reduce((sum, u) => sum + (u.throughput || 0), 0);
+        }
+      }
+
+      const rbPercent = (cm.rb_utilization || 0) * 100;
       const loadColor =
-        load > 80
+        rbPercent > 80
           ? "color:var(--rd)"
-          : load > 50
+          : rbPercent > 50
             ? "color:var(--or)"
             : "color:var(--gn)";
 
       tbody.innerHTML += `
                 <tr class="${cid == 0 ? "highlight" : ""}">
                     <td style="color:var(--blue);font-weight:700;font-family:'IBM Plex Mono',monospace">#${cid}</td>
-                    <td style="font-weight:600;color:var(--cy)">${(act.tx_power_dbm || 46).toFixed(1)} <span style="font-size:9px;opacity:0.5">dBm</span></td>
-                    <td>${(act.cell_individual_offset_db || 0).toFixed(1)}</td>
-                    <td style="color:var(--tx2)">${Math.round(act.time_to_trigger_ms || 192)}</td>
+                    <td style="font-weight:600;color:var(--cy)">${tx.toFixed(1)} <span style="font-size:9px;opacity:0.5">dBm</span></td>
+                    <td>${cio.toFixed(1)}</td>
+                    <td style="color:var(--tx2)">${Math.round(ttt)}</td>
                     <td>${cm.num_connected_ues || 0}</td>
-                    <td style="font-weight:700;${loadColor}">${load.toFixed(1)}%</td>
-                    <td style="font-weight:600">${(cm.throughput_mbps || 0).toFixed(2)}</td>
+                    <td style="font-weight:700;${loadColor}">${rbPercent.toFixed(1)}%</td>
+                    <td style="font-weight:600">${cellTput.toFixed(2)}</td>
                     <td><span style="padding:2px 8px;border-radius:999px;font-size:10px;font-weight:700;background:var(--gn);color:var(--bg);border:1px solid var(--gn)">ONLINE</span></td>
                 </tr>
             `;
@@ -400,9 +437,12 @@
         .join("");
     }
 
-    // Raw JSON Detail (now in collapsible)
+    // Raw JSON Detail (now in collapsible/detailed view)
     const jsonEl = document.getElementById("vizStepJson");
-    if (jsonEl) jsonEl.innerText = JSON.stringify(step.metrics, null, 2);
+    if (jsonEl) {
+      // Pretty print raw metrics including edge weights, topics, e2 metrics
+      jsonEl.innerHTML = `<pre style="white-space: pre-wrap; word-wrap: break-word;">${JSON.stringify(step.metrics, null, 2)}</pre>`;
+    }
     updateCharts(idx);
   }
 
@@ -418,7 +458,7 @@
         datasets: [
           {
             label: "Throughput",
-            data: simulationSteps.map((s) => s.metrics?.avg_throughput || 0),
+            data: [],
             borderColor: "#3b82f6",
             borderWidth: 2,
             backgroundColor: "rgba(59, 130, 246, 0.1)",
@@ -429,7 +469,7 @@
           },
           {
             label: "Loss",
-            data: simulationSteps.map((s) => (s.metrics?.avg_loss || 0) * 100),
+            data: [],
             borderColor: "#f43f5e",
             borderWidth: 2,
             tension: 0.4,
@@ -504,7 +544,7 @@
         datasets: [
           {
             label: "Fairness",
-            data: simulationSteps.map((s) => s.metrics?.jains || 0),
+            data: [],
             borderColor: "#10b981",
             fill: true,
             backgroundColor: "rgba(16,185,129,0.1)",
@@ -530,13 +570,7 @@
         datasets: [
           {
             label: "HO Success",
-            data: simulationSteps.map((s) => {
-              const ue_m = s.metrics?.e2_data?.ue_metrics || {};
-              return Object.values(ue_m).reduce(
-                (a, b) => a + (b.handover_successes || 0),
-                0,
-              );
-            }),
+            data: [],
             backgroundColor: "#9580ff",
           },
         ],
@@ -548,6 +582,115 @@
         scales: {
           x: { display: false },
           y: { beginAtZero: true, grid: { color: "rgba(255,255,255,0.05)" } },
+        },
+      },
+    });
+
+    charts.ues = new Chart(document.getElementById("vizChartUEs"), {
+      type: "line",
+      data: {
+        labels: simulationSteps.map((s) => s.step),
+        datasets: [
+          {
+            label: "Cell 0",
+            data: [],
+            borderColor: "#00d4ff",
+            backgroundColor: "rgba(0, 212, 255, 0.1)",
+            fill: false,
+            tension: 0.4,
+            pointRadius: 0,
+          },
+          {
+            label: "Cell 1",
+            data: [],
+            borderColor: "#f472b6",
+            backgroundColor: "rgba(244, 114, 182, 0.1)",
+            fill: false,
+            tension: 0.4,
+            pointRadius: 0,
+          },
+          {
+            label: "Cell 2",
+            data: [],
+            borderColor: "#34d399",
+            backgroundColor: "rgba(52, 211, 153, 0.1)",
+            fill: false,
+            tension: 0.4,
+            pointRadius: 0,
+          },
+        ],
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: {
+          legend: {
+            position: "top",
+            labels: { color: "#8891ab", boxWidth: 10, font: { size: 10 } },
+          },
+        },
+        scales: {
+          x: { display: false },
+          y: {
+            min: 0,
+            grid: { color: "rgba(255,255,255,0.05)" },
+            ticks: { color: "#5a6280" },
+          },
+        },
+      },
+    });
+
+    charts.rb = new Chart(document.getElementById("vizChartRB"), {
+      type: "line",
+      data: {
+        labels: simulationSteps.map((s) => s.step),
+        datasets: [
+          {
+            label: "Cell 0",
+            data: [],
+            borderColor: "#00d4ff",
+            backgroundColor: "rgba(0, 212, 255, 0.1)",
+            fill: false,
+            tension: 0.4,
+            pointRadius: 0,
+          },
+          {
+            label: "Cell 1",
+            data: [],
+            borderColor: "#f472b6",
+            backgroundColor: "rgba(244, 114, 182, 0.1)",
+            fill: false,
+            tension: 0.4,
+            pointRadius: 0,
+          },
+          {
+            label: "Cell 2",
+            data: [],
+            borderColor: "#34d399",
+            backgroundColor: "rgba(52, 211, 153, 0.1)",
+            fill: false,
+            tension: 0.4,
+            pointRadius: 0,
+          },
+        ],
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: {
+          legend: {
+            position: "top",
+            labels: { color: "#8891ab", boxWidth: 10, font: { size: 10 } },
+          },
+        },
+        scales: {
+          x: { display: false },
+          y: {
+            min: 0,
+            max: 100,
+            grid: { color: "rgba(255,255,255,0.05)" },
+            ticks: { color: "#5a6280" },
+          },
         },
       },
     });
@@ -568,6 +711,83 @@
     ];
     charts.radar.data.datasets[0].data = radarData;
     charts.radar.update("none");
+
+    // Progressive Real-time Timeline drawing
+    const getVal = (i, extractFn) =>
+      i <= idx ? extractFn(simulationSteps[i]) : null;
+
+    if (charts.perf) {
+      charts.perf.data.datasets[0].data = simulationSteps.map((s, i) =>
+        getVal(i, (st) => st.metrics?.avg_throughput || 0),
+      );
+      charts.perf.data.datasets[1].data = simulationSteps.map((s, i) =>
+        getVal(i, (st) => (st.metrics?.avg_loss || 0) * 100),
+      );
+      charts.perf.update("none");
+    }
+
+    if (charts.fairness) {
+      charts.fairness.data.datasets[0].data = simulationSteps.map((s, i) =>
+        getVal(i, (st) => st.metrics?.jains || 0),
+      );
+      charts.fairness.update("none");
+    }
+
+    if (charts.ho) {
+      charts.ho.data.datasets[0].data = simulationSteps.map((s, i) =>
+        getVal(i, (st) => {
+          const ue_m = st.metrics?.e2_data?.ue_metrics || {};
+          return Object.values(ue_m).reduce(
+            (a, b) => a + (b.handover_successes || 0),
+            0,
+          );
+        }),
+      );
+      charts.ho.update("none");
+    }
+
+    if (charts.ues) {
+      function getMetricsArray(st, keyStr, transformFn) {
+        if (
+          !st.metrics ||
+          !st.metrics.e2_data ||
+          !st.metrics.e2_data.cell_metrics
+        )
+          return [0, 0, 0];
+        const cm = st.metrics.e2_data.cell_metrics;
+        return [0, 1, 2].map((cid) =>
+          transformFn(cm[String(cid)]?.[keyStr] || 0),
+        );
+      }
+
+      charts.ues.data.datasets.forEach((ds, cid) => {
+        ds.data = simulationSteps.map((s, i) =>
+          getVal(
+            i,
+            (st) => getMetricsArray(st, "num_connected_ues", (v) => v)[cid],
+          ),
+        );
+      });
+      charts.ues.update("none");
+    }
+
+    if (charts.rb) {
+      charts.rb.data.datasets.forEach((ds, cid) => {
+        ds.data = simulationSteps.map((s, i) =>
+          getVal(i, (st) => {
+            if (
+              !st.metrics ||
+              !st.metrics.e2_data ||
+              !st.metrics.e2_data.cell_metrics
+            )
+              return 0;
+            const cm = st.metrics.e2_data.cell_metrics;
+            return (cm[String(cid)]?.rb_utilization || 0) * 100;
+          }),
+        );
+      });
+      charts.rb.update("none");
+    }
   }
 
   function updateKPI(valId, trendId, val, lastVal, unit) {
@@ -633,4 +853,53 @@
       }, parseInt(speedSlider.value));
     }
   }
+  // Auto-fetch DB from backend
+  async function fetchAvailableDBs() {
+    try {
+      const res = await fetch("/api/results", { cache: "no-store" });
+      const data = await res.json();
+
+      const select = document.getElementById("vizFileSelect");
+      if (!select) return;
+
+      if (data.dbs && data.dbs.length > 0) {
+        select.innerHTML = data.dbs
+          .map((d) => `<option value="${d}">${d}</option>`)
+          .join("");
+        let targetDb = data.dbs[data.dbs.length - 1]; // Load Latest
+        select.value = targetDb;
+
+        loadSelectedDB(targetDb);
+
+        select.addEventListener("change", (e) => {
+          if (e.target.value) loadSelectedDB(e.target.value);
+        });
+      } else {
+        select.innerHTML = `<option value="">No DBs found</option>`;
+      }
+    } catch (e) {
+      console.log("[Visualizer] Auto-load failed or API unavailable", e);
+      const select = document.getElementById("vizFileSelect");
+      if (select) select.innerHTML = `<option value="">API Offline</option>`;
+    }
+  }
+
+  async function loadSelectedDB(filename) {
+    try {
+      if (!SQL) {
+        SQL = await initSqlJs(config);
+      }
+      const dbRes = await fetch("/results/" + filename, { cache: "no-store" });
+      if (!dbRes.ok) throw new Error("Failed to load");
+      const buffer = await dbRes.arrayBuffer();
+      processDBBuffer(buffer);
+      console.log("[Visualizer] Loaded DB:", filename);
+    } catch (e) {
+      console.error("[Visualizer] Error loading DB:", e);
+      alert("Failed to load " + filename);
+    }
+  }
+
+  // Trigger auto-fetch attempt after initializations
+  setTimeout(fetchAvailableDBs, 500);
 })();
