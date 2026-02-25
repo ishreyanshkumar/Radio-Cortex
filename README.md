@@ -1,6 +1,6 @@
 # Radio-Cortex: O-RAN RL Congestion Control
 
-Radio-Cortex is a closed-loop control system that uses Reinforcement Learning (RL) to optimize network parameters (Tx Power, CIO, TTT) in an O-RAN compliant ns-3 simulation. It features a real-time feedback loop where an RL agent (PPO) receives KPM (Key Performance Metrics) from ns-3 via Kafka and sends back RC (RAN Control) actions, with a live Rich TUI dashboard and per-step KPM verification logging.
+Radio-Cortex is a closed-loop control system that uses Reinforcement Learning (RL) to optimize network parameters (Tx Power, CIO, TTT) in an O-RAN compliant ns-3 simulation. It features a real-time feedback loop where an RL agent (PPO) receives KPM (Key Performance Metrics) from ns-3 via Kafka and sends back RC (RAN Control) actions, with a live unified Gradio web dashboard for real-time visualization, interpretability, and benchmarking.
 
 ### 🏆 Key Innovations & Solved Challenges
 Radio-Cortex pushes the boundary of O-RAN intelligence by solving three fundamental problems in applying RL to wireless networks:
@@ -78,36 +78,6 @@ The `scripts/` directory contains a curated set of tools to automate the Radio-C
 ### **🧹 Maintenance**
 - **Deep Cleanup**: `bash scripts/cleanup.sh` - Efficiently purges logs, residuals, CSVs, and `__pycache__` to reclaim storage and keep the project snappy.
 - **Log Analyzer (Go)**: `go run scripts/log_analyzer.go` - High-performance log parser for raw ns-3 trace analysis.
-
----
-
-## 🌐 Unified Radio-Cortex Web Suite (Integrated into Gradio)
-
-We have unified our specialized analysis tools into a single, high-performance web interface now served **natively inside the Gradio application (`python gradio_app.py`)**. 
-
-**🔥 Auto-Fetch Features:** The UI components automatically query the `/api/results` backend endpoint to instantly load the latest `.csv` and `.db` files from the `results/` folder without requiring manual drag-and-drop.
-
-### **1. Eval Dashboard (`ui/pages/dashboard.js`)**
-- **Role:** High-level performance tracking.
-- **Data:** Auto-loads `results/experiment_results.csv`.
-- **Features:** Radar charts for composite health, bar charts for scenario comparison, and live table filtering.
-
-### **2. ModelBench (`ui/pages/modelbench.js`)**
-- **Role:** Deep-dive model comparison.
-- **Data:** Auto-loads `results/experiment_results.csv`.
-- **Features:** Bubble charts for Pareto analysis (Accuracy vs Inference Speed), Parameter-to-Reward mapping, and ranking logic to identify the true "State of the Art" model in your directory.
-
-### **3. Simulation Visualizer (`ui/pages/visualizer.js`)**
-- **Role:** Step-by-step playback of agent behavior.
-- **Data:** Auto-loads the latest **SQLite Database** (`results/simulation_data_*.db`).
-- **Features:** 
-  - Interactive timeline and per-cell control action visualization (TxPower/CIO/TTT).
-  - Real-time performance curves (Throughput/Delay/Loss).
-  - **Deep JSON Inspector:** A fully expanded view of the raw metric payload per step, allowing deep inspection into real-time **Edge Weights**, **Topics**, **UE states**, and **E2 Telemetry arrays**.
-
-### **4. Integrated Control**
-- Unified sidebar navigation allows seamless switching between monitoring and analysis without reloading data.
-- Direct links to the **Gradio Controller** (running on `localhost:7860`).
 
 ---
 
@@ -246,11 +216,16 @@ python3 radio_cortex_complete.py --mode eval --model nn --scenario flash_crowd
 ```
 
 #### 4. Interaction & Results Visualization
-View metrics, radar charts, and comparison tables.
+Radio-Cortex features a unified, native Gradio application that hosts all the interactive visualizations:
+- Evaluation Dashboard (Radar & Bar charts)
+- ModelBench (Performance vs Params tradeoff curves)
+- Simulation Visualizer (SQL playback with real-time graphs)
+- Live BDH Interpretability Dashboard
+
+Run the app locally to view all results:
 ```bash
-# Standalone HTML
-python3 -m http.server 8080
-# Open http://localhost:8080/dashboard.html
+python3 gradio_app.py
+# Open http://localhost:7860
 ```
 
 
@@ -492,19 +467,11 @@ Extracts metrics and evaluates trained models against the static baseline, compu
 **Role:** 8-Stage "Lean Power Suite" Curriculum.
 Automates the progressive training of the RL agent from simple to complex congestion scenarios, managing storage and preventing catastrophic forgetting.
 
-### 10. Unified Web Suite (`ui/`)
+### 10. Unified Web Suite (`gradio_app.py` & `ui/`)
 **Role:** Integrated visualization and command interface.
-- **`ui/index.html`**: The unified single-page shell with sidebar navigation.
-- **`ui/pages/`**: Modularized JavaScript logic:
-    - `dashboard.js`: Logic for the Evaluation Dashboard.
-    - `modelbench.js`: Logic for ranking and comparing weights.
-    - `visualizer.js`: SQL.js powered simulation playback logic.
-- **`ui/styles.css`**: Shared premium dark-theme design system.
-- **`ui/gradio_app.py`**: Python-based interactive controller for manual overrides.
-
-### 11. Infrastructure & Deployment
-- **`Dockerfile`** & **`docker-compose.yml`**: Full containerized deployment for Kafka, Zookeeper, and the compiled ns-3 Agent environment.
-
+- **`gradio_app.py`**: The unified Python web application. Run `python3 gradio_app.py` to access all dashboards, evaluation benchmarks, and the simulation visualizer seamlessly in your browser.
+- **`ui/`**: Directory containing the underlying frontend HTML/JS/CSS templates and logic served automatically by the Gradio backend.
+``
 ---
 
 ## 🔄 System Architecture
@@ -587,8 +554,6 @@ This section provides a comprehensive analysis of the reinforcement learning mod
 | **TRXL** | 36.62 | 3,195,155 | 1,000,000 | 256 | Transformer-XL |
 | **UNIVERSAL** | 9.73 | 851,475 | 1,000,000 | 256 | Universal Transformer |
 | **NN** | 1.62 | 140,563 | 1,000,000 | 256 | 2-layer MLP Baseline |
-
-
 
 ---
 
