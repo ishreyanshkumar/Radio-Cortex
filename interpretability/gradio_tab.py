@@ -68,8 +68,16 @@ def _list_analysis_updates():
 # ═══════════════════════════════════════════════════════════════════
 # Network Graph (Plotly-based — works natively in Gradio)
 # ═══════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════
 # Saliency Heatmap (Feature Attributions)
 # ═══════════════════════════════════════════════════════════════════
+
+def _empty_fig(title="No Data"):
+    fig = go.Figure()
+    fig.add_annotation(text=title, xref="paper", yref="paper", x=0.5, y=0.5, showarrow=False, font=dict(size=14, color="#64748b"))
+    _style(fig, title)
+    fig.update_layout(height=300, xaxis=dict(showgrid=False, zeroline=False, showticklabels=False), yaxis=dict(showgrid=False, zeroline=False, showticklabels=False))
+    return fig
 
 def _build_saliency_heatmap(saliency):
     if not saliency or 'per_action' not in saliency:
@@ -554,6 +562,48 @@ def _build_concepts_chart(mono):
     return fig
 
 
+def _build_monosemantic_table(mono):
+    """Build a DataFrame for top monosemantic neurons."""
+    if not mono or 'neurons' not in mono:
+        return pd.DataFrame(columns=["Neuron ID", "Concept", "Correlation Score"])
+
+    rows = []
+    for nid, concepts in mono.get('neurons', {}).items():
+        for c in concepts:
+            rows.append({
+                "Neuron ID": f"N{nid}",
+                "Concept": c.get('concept', ''),
+                "Correlation Score": round(c.get('correlation', 0.0), 4)
+            })
+    
+    df = pd.DataFrame(rows)
+    if not df.empty:
+        df = df.sort_values(by="Correlation Score", ascending=False).head(50)
+    else:
+        df = pd.DataFrame(columns=["Neuron ID", "Concept", "Correlation Score"])
+    return df
+
+
+def _build_temporal_cell_saliency(saliency):
+    """Build bar charts for average cell and frame importance."""
+    if not saliency or 'avg_cell_importance' not in saliency:
+        return _empty_fig("No Cell Data"), _empty_fig("No Frame Data")
+
+    cell_vals = saliency.get('avg_cell_importance', [])
+    cells = [f"Cell {i}" for i in range(len(cell_vals))]
+    fig_cell = go.Figure(data=go.Bar(x=cells, y=cell_vals, marker_color='#f472b6'))
+    _style(fig_cell, 'Average Cell Influence (Which cell drives actions?)')
+    fig_cell.update_layout(height=350)
+
+    frame_vals = saliency.get('avg_frame_importance', [])
+    frames = ['t-2 (oldest)', 't-1 (prev)', 't-0 (current)'][:len(frame_vals)]
+    fig_frame = go.Figure(data=go.Bar(x=frames, y=frame_vals, marker_color='#34d399'))
+    _style(fig_frame, 'Average Temporal Influence (Which frames matter?)')
+    fig_frame.update_layout(height=350)
+
+    return fig_cell, fig_frame
+
+
 # ═══════════════════════════════════════════════════════════════════
 # Main Tab Builder
 # ═══════════════════════════════════════════════════════════════════
@@ -586,6 +636,16 @@ def build_interpretability_tab():
         concepts_plot = gr.Plot(label="O-RAN Concepts")
         
         saliency_plot = gr.Plot(label="Feature Saliency Attention")
+        
+        with gr.Row():
+            with gr.Column():
+                cell_saliency_plot = gr.Plot(label="Cell Influence")
+            with gr.Column():
+                frame_saliency_plot = gr.Plot(label="Temporal Influence")
+                
+        gr.Markdown("### Top Monosemantic Neurons & Concepts")
+        monosemantic_table = gr.Dataframe(label="Monosemanticity Correlations", interactive=False)
+        
         evolution_plot = gr.Plot(label="Training Evolution")
 
         # Detail viewer
@@ -662,16 +722,18 @@ def build_interpretability_tab():
                 deg_fig = _build_degree_chart(scale_free)
                 con_fig = _build_concepts_chart(mono)
                 sal_fig = _build_saliency_heatmap(saliency)
+                cell_sal_fig, frame_sal_fig = _build_temporal_cell_saliency(saliency)
+                mono_df = _build_monosemantic_table(mono)
                 evo_fig = _build_evolution_chart(scores_df)
 
                 status = f"✅ Loaded {found}/5 analyses"
                 if scores_df is not None:
                     status += f" + {len(scores_df)} training snapshots"
 
-                return status, cards, net_fig, sp_fig, deg_fig, con_fig, sal_fig, evo_fig
+                return status, cards, net_fig, sp_fig, deg_fig, con_fig, sal_fig, cell_sal_fig, frame_sal_fig, mono_df, evo_fig
 
             except Exception as e:
-                return f"❌ Error: {e}\n{traceback.format_exc()}", "", None, None, None, None, None
+                return f"❌ Error: {e}\n{traceback.format_exc()}", "", None, None, None, None, None, None, None, None, None
 
         def load_detail(name):
             if not name:
@@ -689,7 +751,8 @@ def build_interpretability_tab():
         load_btn.click(
             load_results,
             outputs=[status_box, score_html, network_plot,
-                     sparsity_plot, degree_plot, concepts_plot, saliency_plot, evolution_plot],
+                     sparsity_plot, degree_plot, concepts_plot, saliency_plot,
+                     cell_saliency_plot, frame_saliency_plot, monosemantic_table, evolution_plot],
         )
         detail_dd.change(load_detail, inputs=[detail_dd], outputs=[detail_json])
 
@@ -698,5 +761,6 @@ def build_interpretability_tab():
         timer.tick(
             load_results,
             outputs=[status_box, score_html, network_plot,
-                     sparsity_plot, degree_plot, concepts_plot, saliency_plot, evolution_plot],
+                     sparsity_plot, degree_plot, concepts_plot, saliency_plot,
+                     cell_saliency_plot, frame_saliency_plot, monosemantic_table, evolution_plot],
         )
