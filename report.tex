@@ -1,0 +1,278 @@
+\documentclass[12pt,a4paper]{article}
+
+% --------------------------------------------------
+% Packages
+% --------------------------------------------------
+\usepackage{amsmath,amssymb}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{float}
+\usepackage{geometry}
+\usepackage{setspace}
+\usepackage{caption}
+\usepackage{hyperref}
+\usepackage{fancyhdr}
+\usepackage{titlesec}
+\usepackage{tikz}
+\usetikzlibrary{arrows.meta, positioning, shapes.geometric}
+
+\geometry{margin=1in}
+\setstretch{1.2}
+
+% --------------------------------------------------
+% Header Style
+% --------------------------------------------------
+\pagestyle{fancy}
+\fancyhf{}
+\fancyhead[L]{Radio-Cortex: RL-Based O-RAN Congestion Control}
+\fancyhead[R]{\thepage}
+
+% --------------------------------------------------
+% Section Formatting
+% --------------------------------------------------
+\titleformat{\section}{\large\bfseries}{\thesection}{1em}{}
+\titleformat{\subsection}{\normalsize\bfseries}{\thesubsection}{1em}{}
+
+% --------------------------------------------------
+% Title Page
+% --------------------------------------------------
+\title{
+\textbf{Radio-Cortex: Reinforcement Learning-Based Congestion Control for O-RAN Systems}
+}
+
+\author{}
+\date{25 February 2026}
+
+\begin{document}
+
+\maketitle
+\thispagestyle{empty}
+
+% ============================================================
+\begin{abstract}
+Modern Radio Access Networks (RAN) face escalating congestion challenges due to dynamic user mobility, fluctuating traffic demand, heterogeneous service requirements, and cross-cell interference coupling. Static configuration strategies and traditional heuristic algorithms are highly insufficient for maintaining stable throughput, low latency, fairness, and reliability under real-time operating conditions. This report presents \textbf{Radio-Cortex}, a closed-loop reinforcement learning framework designed for O-RAN compliant congestion control within a high-fidelity ns-3 simulated cellular environment. The system integrates Proximal Policy Optimization (PPO) with a novel Scale-Free Transformer architecture termed the \textbf{Baby Dragon Hatchling (BDH)}. Radio-Cortex dynamically optimizes Transmit Power, Cell Individual Offset (CIO), and Time-To-Trigger (TTT) through physics-bounded, continuous control actions. A stationary, flat multi-objective reward engine ensures distributed training stability, while Kafka-based asynchronous messaging enables real-time bidirectional communication acting as an E2 interface proxy. Extensive benchmarking across twelve distinct stress-test scenarios demonstrates that BDH achieves the highest composite performance score (0.76), improves network throughput by 120.37\%, and effectively reduces packet loss by 54.28\% compared to static baselines. Integrated interpretability analysis reveals sparse neural activation (up to 85\% sparsity), monosemantic specialization, real-time Hebbian consolidation, and the emergence of scale-free topologies. Radio-Cortex represents a highly scalable, robust, and interpretable AI-native framework tailored for next-generation autonomous RAN optimization.
+\end{abstract}
+
+\noindent \textbf{Keywords:} O-RAN, Reinforcement Learning, PPO, Congestion Control, Transformer, Scale-Free Networks, ns-3
+
+\newpage
+\tableofcontents
+\newpage
+
+% ============================================================
+\section{Introduction}
+
+The rapid expansion of 5G and the architectural foundations of emerging 6G networks have significantly increased the complexity of cellular systems. User density fluctuates dynamically across time and geography, high-speed mobility patterns introduce rapid signal variations, and heterogeneous applications (e.g., ultra-reliable low-latency communications alongside enhanced mobile broadband) impose deeply diverse Quality of Service (QoS) requirements. In this hyper-dynamic context, static RAN parameter configuration is fundamentally insufficient for maintaining optimal performance.
+
+Network congestion arises when load becomes unevenly distributed across structural boundaries, leading to degraded throughput, immense queue delays, high packet drop rates, and fairness imbalances among User Equipments (UEs). Traditional Self-Organizing Network (SON) mechanisms rely heavily on heuristic rules, manual engineering, and reactive threshold-based parameter tuning of Tx Power, Cell Individual Offset (CIO), and Time-to-Trigger (TTT). Because these approaches lack adaptive intelligence and predictive foresight, they inherently fail under complex multi-objective trade-offs.
+
+\textbf{Radio-Cortex} introduces an advanced reinforcement learning-based congestion control framework capable of autonomously learning optimal, forward-looking RAN control strategies. By utilizing a closed-loop interaction scheme with a realistic ns-3 simulation environment via a Kafka-based E2 proxy, Radio-Cortex leverages state-of-the-art policy architectures to resolve complex spectral crunches in real time.
+
+% ============================================================
+\section{System Architecture}
+
+Radio-Cortex follows a decoupled, three-layer architecture consisting of a simulation layer, a messaging layer, and an intelligent controller layer. This architecture strictly adheres to the paradigm of the O-RAN Near-Real-Time RAN Intelligent Controller (RIC).
+
+\subsection{Simulation Layer (ns-3)}
+The simulation layer is implemented in ns-3 (version 3.46.1), accurately modeling LTE/5G PHY, MAC, RLC, PDCP, and RRC layers. A custom \texttt{MetricCollector} aggregates per-UE and per-cell statistics including throughput, delay, packet loss, SINR, RSRP, resource block utilization, queue metrics, and handover statistics. 
+
+\subsection{Messaging Layer (Kafka E2 Proxy)}
+The messaging layer utilizes Apache Kafka for asynchronous bidirectional streaming, bridging the C++ simulation environment to the Python-based AI controller. Two primary topics are defined: \texttt{e2\_kpm\_stream} for high-frequency Key Performance Metrics (KPM) reports, and \texttt{e2\_rc\_control} for RAN Control (RC) commands. This modular, decoupled design mirrors a production E2SM interface and ensures distributed SubprocVecEnv training scalability.
+
+\subsection{Intelligent Controller Layer (PPO Agent)}
+The intelligent controller layer is implemented in Python and orchestrates the Proximal Policy Optimization (PPO) agent. The \texttt{ORANns3Env} wrapper provides an OpenAI Gym-compatible boundary. The environment emits a complex \textbf{State Space}: 48 features per cell (12 base + 3 delta + 1 stationary flag), frame-stacked across three discrete intervals, producing 144 inputs per cell for transformer-based temporal processing.
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[
+    box/.style={rectangle, draw, thick, minimum width=3.5cm, minimum height=1.2cm, align=center},
+    arrow/.style={->, thick}
+]
+
+\node[box] (ns3) {ns-3 RAN Simulation \\ PHY/MAC/RLC/RRC \\ MetricCollector};
+\node[box, right=6cm of ns3] (rl) {RL Controller \\ PPO + BDH \\ Reward Engine};
+
+\draw[arrow] (ns3) -- node[above]{Kafka: KPM Stream} (rl);
+\draw[arrow] (rl) -- node[below]{Kafka: Control Actions} (ns3);
+
+\end{tikzpicture}
+\caption{Closed-loop architecture of Radio-Cortex showing bidirectional communication between ns-3 and the RL controller.}
+\label{fig:closed_loop}
+\end{figure}
+
+% ============================================================
+\section{Key Innovations}
+
+\subsection{Baby Dragon Hatchling (BDH): Scale-Free Transformer}
+The flagship model of Radio-Cortex is the \textbf{Baby Dragon Hatchling (BDH)} network. At 6.4 million parameters, BDH represents a specialized scale-free transformer topology. Traditional models like GPT-2 enforce strict causal masking, which destroys the symmetric relational reasoning required to balance load across adjacent Base Stations. BDH entirely removes causal masking, enabling full bidirectional attention across varying numbers of cell tokens without requiring structural retraining. During prolonged training, BDH's internal topology organically evolves toward a scale-free structure, forming highly active \textit{Hub Neurons} that efficiently aggregate global congestion signals while pruning up to 85\% of extraneous connections, reducing latency to under the 10ms O-RAN boundary.
+
+\subsection{Cell-Centric Physics-Bounded Action Space}
+RL agents frequently output erratic, unbounded control actions that shatter simulation integrity. To counter this, Radio-Cortex maps continuous $[-1, 1]$ agent outputs to a rigid 9-dimensional physical action space (3 parameters $\times$ 3 cells):
+\begin{itemize}
+    \item \textbf{Tx Power:} Absolute mapping to $[10, 46]$ dBm for direct energy and interference control.
+    \item \textbf{Cell Individual Offset (CIO):} Absolute mapping to $[-6, 6]$ dB for immediate boundary adjustment and UE load balancing.
+    \item \textbf{Time-To-Trigger (TTT):} Inverse mapping to $[1280, 0]$ ms to control handover agility versus stability.
+\end{itemize}
+
+\subsection{Stationary Single-Stage Reward Engine}
+Multi-stage curriculum rewards historically create non-stationary Markov Decision Processes (MDPs) that destabilize distributed SubprocVecEnv training. Radio-Cortex resolves this via a flat, stationary reward function combining 7 active components with bounded linear clipping (to prevent gradient explosions):
+\begin{equation}
+R_{total} = \text{clip}(r_{tput} + r_{delay} + r_{loss} + r_{load} + r_{energy} + r_{sla} + r_{cio} + 1.0, [-100, 50])
+\end{equation}
+
+Where the components are rigorously engineered:
+\begin{itemize}
+    \item \textbf{Throughput:} Logarithmic fairness $12 \cdot \log(1 + T/T_{max})$.
+    \item \textbf{Delay:} Linear penalty $-2 \cdot \min(D/D_{max}, 1)$.
+    \item \textbf{Loss:} Amplified linear penalty $-5L$.
+    \item \textbf{Load Balance:} Standard deviation regularizer $-2 \cdot \text{std}(\text{loads})$.
+    \item \textbf{Energy Efficiency:} Base station power tax $-0.1 \cdot \text{mean}(P_{tx}^{norm})$.
+    \item \textbf{SLA Bonus:} $+0.5$ per UE satisfying SLA ($>$1Mbps, $<$100ms).
+    \item \textbf{Survival Bias:} $+1.0$ constant to prevent premature localized collapse during early exploration.
+\end{itemize}
+
+% ============================================================
+\section{Learning Framework and Curriculum}
+
+The congestion control problem operates as a continuous state-space MDP optimized via PPO with a clipped objective function:
+\begin{equation}
+L^{CLIP}(\theta) = \mathbb{E}\left[ \min\left(r_t(\theta)\hat{A}_t,\text{clip}(r_t(\theta),1-\epsilon,1+\epsilon)\hat{A}_t\right) \right]
+\end{equation}
+Training leverages a generalized advantage estimator (GAE $\lambda=0.95$), heavily annealed entropy from 0.03 to 0.005, and strict KL divergence monitoring ($D_{KL} < 0.05$) to dynamically halt epoch updates before catastrophic policy shifts occur.
+
+To safely guide the model, Radio-Cortex utilizes the \textbf{Lean Power Suite}, an 8-stage progressive curriculum. Instead of naive environment swapping, the curriculum relies on weighted contextual mixing. It begins with simple uniform traffic (\textit{Flash Crowd}), and gradually intertwines \textit{Sleepy Campus} (energy optimization), \textit{Mobility Storm} (fast handovers), and \textit{Mixed Reality} (network slicing). By maintaining a fractional "maintenance dose" of previous scenarios, BDH strictly avoids catastrophic forgetting over its 1-million step training lifecycle.
+
+% ============================================================
+\section{Model Analysis and Architectural Selection}
+
+To validate BDH's hegemony, seven distinct architectures were designed and evaluated against the RAN paradigm:
+
+\begin{table}[H]
+\centering
+\caption{Detailed Architectural Comparison for O-RAN Control}
+\resizebox{\columnwidth}{!}{%
+\begin{tabular}{lrcl}
+\toprule
+\textbf{Model} & \textbf{Parameters} & \textbf{Size (MB)} & \textbf{Architectural Constraints \& Limitations} \\ 
+\midrule
+\textbf{MLP Baseline} & 140,563 & 1.62 & Fails to model cross-cell interference due to lack of dense relational mapping. \\
+\textbf{Universal Transformer} & 851,475 & 9.73 & Weight-tied iterative blocks restrict expressive depth on diverse state vectors. \\
+\textbf{Transformer-XL (TRXL)} & 3,195,155 & 36.62 & Segment recurrence introduces significant memory overhead and mobility jitter. \\
+\textbf{Linear Transformer} & 3,217,939 & 36.89 & Highly approximate $O(T)$ attention kernel degrades physical routing fidelity. \\
+\textbf{Reformer} & 3,232,019 & 37.05 & Locality-sensitive hashing (LSH) grouping injects stochastic routing variations. \\
+\textbf{GPT2 (Causal)} & 3,234,323 & 36.96 & Causal masking strictly prohibits equal bidirectional reasoning between adjacent cells. \\
+\textbf{BDH (Scale-Free)} & \textbf{6,418,451} & \textbf{72.94} & \textbf{Full bidirectional, causal-free graph routing; largest parameter footprint.} \\
+\bottomrule
+\end{tabular}
+}
+\end{table}
+
+The MLP demonstrated stable control due to its shallow parameter space, but lacked the capability to handle edge-case interference. GPT2-based policies explicitly suffered because their causal masks artificially forced Cell 3 to attend to Cell 1, but prevented Cell 1 from attending to Cell 3's context. Only BDH completely solved the state-symmetry problem inherently required for inter-eNodeB load balancing.
+
+% ============================================================
+\section{Evaluation Results and Composite Metrics}
+
+Extensive benchmarking was performed across the 12 scenarios. We aggregated highly granular PHY/MAC/RLC logs into six primary health indices (QoS, Reliability, Resource, Buffer, PHY, and Architecture). 
+
+BDH achieved the highest overall \textbf{Composite Score} (0.76), utterly dominating the Static Baseline (0.34). Notably, BDH improved total aggregate throughput by \textbf{120.37\%} and reduced max peak packet loss by \textbf{54.28\%}. 
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.8\textwidth]{Composite.jpeg}
+\caption{Composite radar health chart comparing the various AI controllers.}
+\label{fig:Composite}
+\end{figure}
+
+In mobility-heavy scenarios such as \textit{Mobility Storm}, Transformer-XL achieved the highest raw nominal throughput (1.69 Mbps) but displayed frequent handover failures, reflecting weak reliability consistency compared to BDH. 
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.8\textwidth]{Throughput.jpeg}
+\caption{Aggregate throughput comparisons across architectural baselines.}
+\label{fig:Throughput}
+\end{figure}
+
+BDH achieved a QoS Score of 64.09 and a Reliability Score of 78.10, proving its supreme multi-objective optimization capability—it balances energy efficiency and strict SLAs without inducing cell-edge starvation.
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.8\textwidth]{QoS.jpeg}
+\caption{QoS capability mapping demonstrating UE satisfaction ratios.}
+\label{fig:QoS}
+\end{figure}
+
+The MLP baseline demonstrated the highest nominal control stability (\textbf{98.40\%}) due to its minimal parameter variance, making it excellent for predictable linear environments but deeply vulnerable to sudden spatial spikes.
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.8\textwidth]{Controllers.jpeg}
+\caption{Performance degradation analysis mapping stability vs. dynamic inference capabilities.}
+\label{fig:Controllers}
+\end{figure}
+
+% ============================================================
+\section{Interpretability and Neural Analysis}
+
+Deploying black-box RL models onto billion-dollar telecommunication infrastructures introduces immense liability. Radio-Cortex solves this via a live semantic interpretability suite directly interfacing with BDH's continuous tensor graph.
+
+\subsection{Monosemanticity}
+Using correlation Saliency mathematics, we map uninterpretable neurons to human network concepts. The analysis securely proves that distinct neurons explicitly track features such as 'Congestion Spikes' or 'Cell 2 Overload', entirely divorcing feature entanglement.
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.6\textwidth]{Monosemantic.png}
+\caption{Monosemantic tracking matching neurons to discrete O-RAN physical conditions.}
+\label{fig:Monosemantic}
+\end{figure}
+
+\subsection{Sparse Network Activation}
+Our activation histograms demonstrate that BDH natively enforces extreme structural sparsity, leaving up to 85\% of its connections functionally dead at any given timestep. It calculates highly efficient pathways that drastically lower MAC computations within the hardware.
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.6\textwidth]{Sparsity.png}
+\caption{Histogram mapping sparse token activation across the transformer depth.}
+\label{fig:Sparsity}
+\end{figure}
+
+\subsection{Hebbian Synaptic Consolidation}
+Live analysis tracks Long-Term Potentiation (LTP). "Neurons that fire together, wire together." We map massive simultaneous weight updates during the curriculum phases to visually confirm that the model physically carves out new congestion-routing pathways.
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.6\textwidth]{Hebbian.png}
+\caption{Hebbian gradient consolidation mapping over chronological steps.}
+\label{fig:Hebbian}
+\end{figure}
+
+\subsection{Scale-Free Hub Emergence}
+Following power-law topological evaluations, we verify that BDH self-organizes its 6.4 million parameters around a fractional core of 'Hub Neurons'—mirroring both biological brains and the infrastructure of the Internet itself.
+
+\begin{figure}[H]
+\centering
+\begin{minipage}{0.48\textwidth}
+\centering
+\includegraphics[width=\linewidth]{Neuron.png}
+\caption{Scale-free topology visualization highlighting dense centralized hub routers.}
+\label{fig:Neuron}
+\end{minipage}\hfill
+\begin{minipage}{0.48\textwidth}
+\centering
+\includegraphics[width=\linewidth]{Synaptic.png}
+\caption{Synaptic connection matrices mapping parameter correlations.}
+\label{fig:Synaptic}
+\end{minipage}
+\end{figure}
+
+% ============================================================
+\section{Limitations and Future Scope}
+
+The current Radio-Cortex system operates within an ns-3 digital twin simulation using a high-fidelity continuous Kafka proxy. True deployment would necessitate formal structural compliance with the ASN.1 / E2AP encodings of a production Near-Real-Time RIC.
+
+BDH's 6.4 million parameter count borders the maximum feasible limit for real-time 10ms boundary constraints. Further optimizations spanning int8-quantization and speculative execution are actively being researched.
+
+Future initiatives include Multi-Agent Reinforcement Learning (MARL) for genuinely distributed localized instances per-eNodeB, Hardware-in-the-Loop (HIL) testing atop physical SDRs (e.g., srsRAN / OpenAirInterface), and expanding the action space to command deep MIMO antenna blanking for 6G Green-RAN zero-emission capabilities.
+
+% ============================================================
+\section{Conclusion}
+
+Radio-Cortex systematically demonstrates that scale-free transformer architectures, unified with stationary flat-reward MDP design and causally bounded physical action mapping, yield extraordinarily robust and vastly superior congestion control in massive, dynamic O-RAN environments. Specifically, the BDH model emerges as the preeminent comprehensive generalist controller—overcoming traditional heuristic ceilings across throughput, reliability, fairness, energy efficiency, and latency. The integration of advanced real-time semantic interpretability directly addresses the liability constraints of enterprise telecom, providing unparalleled trust in AI-driven network optimization and representing a definitive leap toward genuinely autonomous, AI-native cellular infrastructures.
+
+\end{document}
