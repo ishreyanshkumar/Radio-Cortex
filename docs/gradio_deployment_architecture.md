@@ -24,5 +24,5 @@ This document explains what folders and files are needed to run `gradio_app.py`.
 
 ## 5. Other Important Python Files
 To run without crashing, `gradio_app.py` relies on these scripts being present:
--   `policies.py`: Rebuilds the Neural Network architecture when a model is selected.
+-   `policies/` folder: Rebuilds the Neural Network architecture when a model is selected.
 -   `oran_ns3_env.py`: Provides the environment configuration (like the number of users) the models expect to see.
