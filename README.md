@@ -6,7 +6,7 @@ Radio-Cortex is a closed-loop control system that uses Reinforcement Learning (R
 The Baby Dragon Hatchling (BDH) architecture demonstrates that **Scale-Free Network Topology** and **Sparse Hebbian Routing** are highly effective for distributed multi-agent control environments like O-RAN. By eliminating fixed causal masking, BDH allows Base Stations to contextually attend to varying numbers of User Equipments (UEs) without retraining. The live interpretability analysis explicitly proves that BDH naturally prunes up to 85% of its connections per timestep, relying on a small subset of "Hub Neurons" to integrate critical state information (e.g., congestion spikes)—mirroring the energy-efficient routing found in biological brains and preventing catastrophic forgetting during curriculum learning.
 
 ## 💾 Model Weights
-**Pre-trained weights are available on Hugging Face:** `[Insert Hugging Face Link Here]`
+**Pre-trained weights are available on Hugging Face:** `https://huggingface.co/niksixus/Radio-Cortex-ORAN/tree/main`
 
 ## How to run locally
 
@@ -603,6 +603,8 @@ bash scripts/train_curriculum.sh --start 5
 
 ### Batch Experiments (Terminal)
 Run multiple evaluations on different models efficiently:
+```bash
+python3 scripts/evaluate_all.py
 ```
 
 ## 🎥 Video Demo & Images
