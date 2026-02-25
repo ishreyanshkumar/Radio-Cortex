@@ -6,7 +6,7 @@ Radio-Cortex is a closed-loop control system that uses Reinforcement Learning (R
 The Baby Dragon Hatchling (BDH) architecture demonstrates that **Scale-Free Network Topology** and **Sparse Hebbian Routing** are highly effective for distributed multi-agent control environments like O-RAN. By eliminating fixed causal masking, BDH allows Base Stations to contextually attend to varying numbers of User Equipments (UEs) without retraining. The live interpretability analysis explicitly proves that BDH naturally prunes up to 85% of its connections per timestep, relying on a small subset of "Hub Neurons" to integrate critical state information (e.g., congestion spikes)—mirroring the energy-efficient routing found in biological brains and preventing catastrophic forgetting during curriculum learning.
 
 ## 💾 Model Weights
-**Pre-trained weights are available on Hugging Face:** `https://huggingface.co/niksixus/Radio-Cortex-ORAN/tree/main`
+**Pre-trained weights are available on Hugging Face:** https://huggingface.co/niksixus/Radio-Cortex-ORAN/tree/main
 
 ## How to run locally
 
@@ -337,24 +337,11 @@ python3 -m interpretability.run_analysis --checkpoint models/radiocortex_bdh.pt 
 **Role:** Main Entry Point & Orchestrator.
 This script manages the lifecycle of the training process, initializes the agent, and runs the main loop.
 
-*   **`main()`**: Entry point. Parses arguments (`--mode train/eval/demo`) and routes execution.
-*   **`train_radio_cortex(config, ...)`**: The core training loop.
-    *   Creates the environment (`create_oran_env`).
-    *   Initializes the `PPOTrainer`.
-    *   Executes the training steps (rollout collection -> policy update).
-    *   Saves the model to `models/radio_cortex.pt`.
-*   **`RadioCortexAgent`**: High-level agent class.
-    *   `get_rl_action()`: Queries the neural network for an action.
-    *   `_heuristic_action()`: Fallback logic rule if RL is disabled.
-
 ### 2. `oran_ns3_env.py`
 **Role:** Gymnasium Environment Wrapper.
 converts ns-3 simulation into a standard OpenAI Gym interface (observation, action, reward).
 
 *   **`ORANns3Env`**: The Gym Environment class.
-    *   `step(action)`: Takes an RL action (9 dims = 3 per cell), sends it to ns-3, waits for the next KPM report, and returns (state, reward, done).
-    *   `reset()`: Restarts the ns-3 simulation subprocess.
-    *   `_compute_reward(e2_msg)`: Delegates to `RewardEngine`.
     *   **`RewardEngine`**: Stationary single-stage reward engine. Combines 6 components (Throughput, Delay, Loss, Load, Energy, SLA Bonus) with Survival Bias.
     *   **State Space**: `num_cells × 48` (3-frame stacked Enriched Cell Tokens). Features strictly normalized to [-1, 1]. Includes a stationary flag instead of curriculum level.
     *   **Action Space**: `num_cells × 3` = 9 dimensions. All [-1,1]-normalized.
@@ -370,11 +357,6 @@ converts ns-3 simulation into a standard OpenAI Gym interface (observation, acti
 **Role:** Reinforcement Learning Algorithms (PPO).
 Implements the PPO algorithm from scratch using PyTorch.
 
-*   **`PPOTrainer`**: Implementation of PPO logic.
-    *   `collect_rollout()`: Interacts with the env to gather a batch of experiences.
-    *   `compute_gae()`: Calculates Generalized Advantage Estimation for stable learning.
-    *   `update_policy()`: Performs the Gradient Descent update steps on the Actor and Critic networks.
-
 ### 4. Policy Architectures Supported:
 All policies use **state-dependent exploration** (learned log-std heads) for adaptive exploration.
 
@@ -386,28 +368,15 @@ All policies use **state-dependent exploration** (learned log-std heads) for ada
 *   **Reformer** (`reformer`): Bucketed Attention
 *   **MLP** (`nn`): Simple Feed-Forward Baseline
 
-### 5. `scripts/train_quick.sh`
-**Role:** Fast Verification.
-Runs `radio_cortex_complete.py` with minimal steps (100 timesteps) to verify the pipeline implementation quickly.
-
-### 6. `oran-congestion-scenario.cc`
+### 5. `oran-congestion-scenario.cc`
 **Role:** ns-3 Simulation Scenario (C++).
 The "Digital Twin" of the RAN. Implements the LTE/5G network, traffic generation, and E2 interface.
 
-*   **`E2InterfaceManager`**: Manages the Kafka bridge.
-    *   `SetupKafka()`: Configures `librdkafka` producer/consumer.
-    *   `SendKpmReport()`: Collects metrics from all UEs, formats as JSON, and produces to Kafka.
-    *   `ProcessRcCommand()`: Parses JSON control messages and applies changes (e.g., `SetTxPower`) to eNodeBs.
-*   **`MetricCollector`**: Aggregates simulation traces.
-    *   `ReportDlScheduling()`: Callback for DL MAC activity (estimates RB usage).
-    *   `ReportAppRx()`: Callback for packet reception (calculates Delay).
-    *   `GetAndResetUeMetrics()`: Returns accumulated stats and resets counters.
-
-### 7. `evaluation_baseline.py`
+### 6. `evaluation_baseline.py`
 **Role:** High-Fidelity Evaluation Framework.
 Extracts metrics and evaluates trained models against the static baseline, computing the Composite Health Scores and Advanced Metrics.
 
-### 8. Unified Web Suite (`gradio_app.py` & `ui/`)
+### 7. Unified Web Suite (`gradio_app.py` & `ui/`)
 **Role:** Integrated visualization and command interface.
 - **`gradio_app.py`**: The unified Python web application. Run `python3 gradio_app.py` to access all dashboards, evaluation benchmarks, and the simulation visualizer seamlessly in your browser.
 - **`ui/`**: Directory containing the underlying frontend HTML/JS/CSS templates and logic served automatically by the Gradio backend.

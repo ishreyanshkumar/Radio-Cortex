@@ -1,5 +1,5 @@
 #!/bin/bash
-set -euo pipefail # Foolproof mode: Exit on error, undefined var, or pipe failure
+set -euo pipefail 
 
 # Export JAVA_HOME if not already set, commonly needed for Kafka/Zookeeper
 export JAVA_HOME=${JAVA_HOME:-/usr/lib/jvm/default-java}

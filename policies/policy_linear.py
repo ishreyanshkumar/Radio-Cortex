@@ -198,20 +198,8 @@ class LinearAttention(nn.Module):
         
         # Causal Linear Attention
         # Output_i = (Sum_j<=i Q_i K_j^T V_j) / (Sum_j<=i Q_i K_j^T)
-        # This implementation computes strictly causal.
-        # For speed O(T) we utilize the cumulative sum property:
-        # S_i = S_{i-1} + K_i^T V_i
-        # Z_i = Z_{i-1} + K_i^T
-        # Out_i = (Q_i @ S_i) / (Q_i @ Z_i)
         
         # (B, H, T, D) -> (B, H, T, D)
-        # We can use torch.cumsum if we do (K * V)
-        
-        # KV = K^T * V -> (B, H, T, D, D) outer product? No, that's D^2 per step.
-        # Correct efficient form: K is (B, H, T, D). V is (B, H, T, D).
-        # We want S_t = \sum_{j=1}^t K_j V_j^T (matrix DxD)
-        # Wait, DxD matrix is large if hidden_dim is large.
-        # But Head Dim is small (256/4 = 64). 64x64 is tiny.
         
         # Compute K * V^T for each step: (B, H, T, D, 1) * (B, H, T, 1, D) -> (B, H, T, D, D)
         KV = torch.einsum("bhtd,bhte->bhtde", K, v)

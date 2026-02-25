@@ -233,18 +233,8 @@ class LSHSelfAttention(nn.Module):
         scores = torch.matmul(qb_t, kb_t.transpose(-1, -2)) * self.scale
         
         # Masking
-        # We need to mask:
-        # 1. Causal mask within current bucket (top right of BS x BS block)
-        # 2. Prevent attending to future in 'prev' bucket? No, prev bucket is all past.
-        # But we must mask 'invalid' parts of prev bucket if it was padded? (Assumed handled by 0s)
-        
         # Causal mask for the 2*BS size
-        # The query i (in range 0..BS) attends to key j (in range 0..2*BS).
-        # key indices 0..BS are 'prev', BS..2*BS are 'curr'.
-        # key index j corresponding to 'curr' must be <= i + BS.
-        
         # Create mask (BS, 2*BS)
-        # ones where col <= row + BS
         
         i_idx = torch.arange(self.bucket_size, device=x.device).unsqueeze(1) # (BS, 1)
         j_idx = torch.arange(2 * self.bucket_size, device=x.device).unsqueeze(0) # (1, 2*BS)
