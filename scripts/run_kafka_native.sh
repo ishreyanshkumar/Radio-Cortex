@@ -54,16 +54,21 @@ fi
 echo "Cleaning up temporary logs..."
 rm -rf /tmp/kafka-logs /tmp/zookeeper
 
+# Create a symlink without spaces to avoid bash path expansion issues with Kafka scripts
+KAFKA_LINK="/tmp/rc_kafka_link"
+rm -f "$KAFKA_LINK"
+ln -s "$KAFKA_PATH" "$KAFKA_LINK"
+
 # 4. Start Zookeeper
 echo "Starting Zookeeper..."
 mkdir -p "$PROJECT_ROOT/logs"
-"$KAFKA_PATH/bin/zookeeper-server-start.sh" "$KAFKA_PATH/config/zookeeper.properties" > "$PROJECT_ROOT/logs/zookeeper.log" 2>&1 &
+"$KAFKA_LINK/bin/zookeeper-server-start.sh" "$KAFKA_LINK/config/zookeeper.properties" > "$PROJECT_ROOT/logs/zookeeper.log" 2>&1 &
 ZOOKEEPER_PID=$!
 sleep 5
 
 # 5. Start Kafka Broker
 echo "Starting Kafka Broker..."
-"$KAFKA_PATH/bin/kafka-server-start.sh" "$KAFKA_PATH/config/server.properties" > "$PROJECT_ROOT/logs/kafka.log" 2>&1 &
+"$KAFKA_LINK/bin/kafka-server-start.sh" "$KAFKA_LINK/config/server.properties" > "$PROJECT_ROOT/logs/kafka.log" 2>&1 &
 KAFKA_PID=$!
 sleep 5
 
@@ -73,8 +78,4 @@ echo "Project Root:  $PROJECT_ROOT"
 echo "Zookeeper PID: $ZOOKEEPER_PID"
 echo "Kafka     PID: $KAFKA_PID"
 echo "==================================================="
-echo "Press Ctrl+C to stop"
-
-trap "kill $KAFKA_PID $ZOOKEEPER_PID; exit" INT TERM
-
-wait
+echo "Use 'pkill -f kafka' to stop"

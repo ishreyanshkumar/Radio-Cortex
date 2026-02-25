@@ -316,10 +316,12 @@ class PPOTrainer:
             if step_i % 10 == 0:
                 e2_metrics = info.get('e2_metrics')
                 avg_tput = 0.0
-                if e2_metrics and e2_metrics.ue_metrics:
-                    avg_tput = np.mean([m['throughput'] for m in e2_metrics.ue_metrics.values()])
-                    avg_delay = np.mean([m['delay'] for m in e2_metrics.ue_metrics.values()])
-                    avg_loss = np.mean([m['packet_loss'] for m in e2_metrics.ue_metrics.values()])
+                if e2_metrics:
+                    ue_metrics = e2_metrics['ue_metrics'] if isinstance(e2_metrics, dict) else e2_metrics.ue_metrics
+                    if ue_metrics:
+                        avg_tput = np.mean([m['throughput'] for m in ue_metrics.values()])
+                        avg_delay = np.mean([m['delay'] for m in ue_metrics.values()])
+                        avg_loss = np.mean([m['packet_loss'] for m in ue_metrics.values()])
                 else:
                     avg_tput, avg_delay, avg_loss = 0.0, 0.0, 0.0
                 
@@ -341,8 +343,8 @@ class PPOTrainer:
                     'reward': float(reward),
                     'action': [float(x) for x in action_denorm.tolist()],
                     'metrics': {
-                        'ue': e2_metrics.ue_metrics if e2_metrics else {},
-                        'cell': e2_metrics.cell_metrics if e2_metrics else {}
+                        'ue': (e2_metrics['ue_metrics'] if isinstance(e2_metrics, dict) else e2_metrics.ue_metrics) if e2_metrics else {},
+                        'cell': (e2_metrics['cell_metrics'] if isinstance(e2_metrics, dict) else e2_metrics.cell_metrics) if e2_metrics else {}
                     }
                 }
                 # Use custom default to handle numpy/torch types

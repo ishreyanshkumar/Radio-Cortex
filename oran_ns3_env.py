@@ -367,6 +367,15 @@ class NS3Interface:
 
         if not self.kafka_consumer:
             self._connect_kafka()
+        else:
+            # Drain any stale messages from the previous run
+            try:
+                while True:
+                    records = self.kafka_consumer.poll(timeout_ms=100)
+                    if not records:
+                        break
+            except Exception:
+                pass
         
         self.ns3_process = subprocess.Popen(
             ns3_cmd, cwd=ns3_dir, stdout=self.log_file_out, stderr=self.log_file_err,
