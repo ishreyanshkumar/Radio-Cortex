@@ -25,81 +25,30 @@ All actions are absolute and physics-bounded, restoring causality and ensuring t
 
 ## 🚀 End-to-End Installation Guide
 
-For a complete, automated setup on Linux:
+Radio-Cortex includes a fully automated, bulletproof setup script that handles all dependencies, building, and Kafka configurations.
+
+For a complete setup on Linux (Ubuntu/Debian):
 ```bash
-# 1. Clone the Repositories
+# 1. Clone the Repository
 git clone https://github.com/ishreyanshkumar/Radio-Cortex.git
 cd Radio-Cortex
  
 # 2. Run the End-to-End Setup Script
-# This will:
-# - Create a virtual environment (.venv)
-# - Install dependencies
-# - Clone and Build ns-3 (Optimized)
-# - Link scenarios
-# - Start Kafka
+# This will automatically:
+# - Create a Python virtual environment (.venv)
+# - Install all required apt packages (Java, g++, cmake, librdkafka-dev)
+# - Clone ns-3 (v3.46.1) and compile it
+# - Link the custom O-RAN scenarios
+# - Download and start the Kafka & Zookeeper services locally
 bash scripts/setup.sh
 ```
- 
----
- 
-### Manual Installation Steps (Alternative)
- 
-If the script fails or you prefer manual control, follow these steps:
- 
-### 1. Clone the Repositories
-```bash
-# Clone the main project
-git clone https://github.com/ishreyanshkumar/Radio-Cortex.git
-cd Radio-Cortex
- 
-# Clone ns-allinone (Official Gitlab Repository)
-git clone https://gitlab.com/nsnam/ns-3-allinone.git
-cd ns-3-allinone
-./download.py ns-3.46.1
-cd ..
-```
- 
-### 2. Set up Python Virtual Environment
-```bash
-# Create venv in the parent directory (or project root)
-python3 -m venv .venv
- 
-# Activate the virtual environment
-source .venv/bin/activate
- 
-# Install dependencies
-pip install -r requirements.txt
-```
- 
-### 3. Build ns-3 & Link Scenario
-ns-3 requires specific libraries (like `librdkafka`) for the O-RAN interface to work.
-```bash
-# 1. Install librdkafka (system-level)
-sudo apt-get install librdkafka-dev
- 
-# 2. Link the Radio-Cortex scenario into ns-3 scratch (MUST be done before build)
-cd ns-3-allinone/ns-3.46.1/scratch
-rm -rf *  # CLEANUP: Remove default examples to avoid build conflicts
-ln -sf ../../../oran-congestion-scenario.cc .
-ln -sf ../../../CMakeLists.txt .  # Link CMakeLists to register the scenario
-cd ..
 
-# 3. Configure and Build ns-3
-./ns3 configure -d optimized --enable-examples --enable-tests
-./ns3 build
-```
- 
+*(Note: The `ns-3` build phase uses all CPU cores and may take 10-20 minutes depending on your machine. Any simulations run during this time will execute very slowly due to CPU starvation.)*
+
 ### 4. Running the Training
  
-#### A. Bootstrap & Start Kafka
-Kafka and Zookeeper must be running for the E2 interface to function. If this is a fresh setup, use the bootstrap script:
-```bash
-bash scripts/run_kafka_native.sh
-```
-*Note: This will download Kafka binaries, install `librdkafka-dev`, and start the services.*
-
-For subsequent starts, you can use:
+#### A. Start Kafka
+The `setup.sh` script starts Kafka automatically. For subsequent starts after rebooting, use:
 ```bash
 ./scripts/start_kafka.sh
 ```
@@ -108,6 +57,9 @@ For subsequent starts, you can use:
 ```bash
 # Ensure venv is active
 source .venv/bin/activate
+
+# Run a quick training smoke test
+bash scripts/train_quick.sh
 ```
 
 ## 🛠️ Utilities
