@@ -11,13 +11,13 @@
 
 Radio-Cortex is a closed-loop O-RAN congestion control system that uses Reinforcement Learning (RL) to dynamically optimize Radio Access Network (RAN) parameters. The system couples a high-fidelity ns-3 network simulation with a PPO-based RL controller via Apache Kafka, providing a complete digital twin environment for training and evaluating intelligent RAN optimization policies.
 
-**Pre-trained weights available on Hugging Face:** [Radio-Cortex-ORAN](https://huggingface.co/niksixus/Radio-Cortex-ORAN/tree/main)
+**Pre-trained weights available on Hugging Face:** [huggingface.co/niksixus/Radio-Cortex-ORAN](https://huggingface.co/niksixus/Radio-Cortex-ORAN/tree/main)
 
-**Project Video:** [Radio-Cortex](https://youtu.be/ZvtCA4xGShE)
+**Project Video:** [youtu.be/ZvtCA4xGShE](https://youtu.be/ZvtCA4xGShE)
 
 **Project Report:** [Report.pdf](./Report.pdf)
 
-**Deployed at:** [Radio-Cortex](https://huggingface.co/spaces/niksixus/Radio-Cortex)
+**Deployed at:** [huggingface.co/spaces/niksixus/Radio-Cortex](https://huggingface.co/spaces/niksixus/Radio-Cortex)
 
 ---
 
@@ -127,12 +127,12 @@ flowchart TB
     O3 --> V3
     V2 -.-> R3
 
-    style BOOT fill:#e8f5e9,stroke:#43a047,color:#1b5e20
-    style SIM fill:#e3f2fd,stroke:#1e88e5,color:#0d47a1
-    style BUS fill:#fff3e0,stroke:#fb8c00,color:#e65100
-    style RL fill:#f3e5f5,stroke:#8e24aa,color:#4a148c
-    style ORC fill:#fce4ec,stroke:#e53935,color:#b71c1c
-    style OBS fill:#e0f7fa,stroke:#00acc1,color:#006064
+    style BOOT fill:#43a047,fill-opacity:0.1,stroke:#43a047,stroke-width:2px
+    style SIM fill:#1e88e5,fill-opacity:0.1,stroke:#1e88e5,stroke-width:2px
+    style BUS fill:#fb8c00,fill-opacity:0.1,stroke:#fb8c00,stroke-width:2px
+    style RL fill:#8e24aa,fill-opacity:0.1,stroke:#8e24aa,stroke-width:2px
+    style ORC fill:#e53935,fill-opacity:0.1,stroke:#e53935,stroke-width:2px
+    style OBS fill:#00acc1,fill-opacity:0.1,stroke:#00acc1,stroke-width:2px
 ```
 
 ### Key Components and Code Mapping
@@ -290,13 +290,13 @@ flowchart LR
     E --> F["☕ Start\nKafka"]
     F --> G["✅ Verify\ntrain_quick.sh"]
 
-    style A fill:#e8f5e9,stroke:#43a047,color:#1b5e20
-    style B fill:#e3f2fd,stroke:#1e88e5,color:#0d47a1
-    style C fill:#f3e5f5,stroke:#8e24aa,color:#4a148c
-    style D fill:#e3f2fd,stroke:#1e88e5,color:#0d47a1
-    style E fill:#fff3e0,stroke:#fb8c00,color:#e65100
-    style F fill:#fff3e0,stroke:#fb8c00,color:#e65100
-    style G fill:#e8f5e9,stroke:#43a047,color:#1b5e20
+    style A fill:#43a047,fill-opacity:0.15,stroke:#43a047,stroke-width:2px
+    style B fill:#1e88e5,fill-opacity:0.15,stroke:#1e88e5,stroke-width:2px
+    style C fill:#8e24aa,fill-opacity:0.15,stroke:#8e24aa,stroke-width:2px
+    style D fill:#1e88e5,fill-opacity:0.15,stroke:#1e88e5,stroke-width:2px
+    style E fill:#fb8c00,fill-opacity:0.15,stroke:#fb8c00,stroke-width:2px
+    style F fill:#fb8c00,fill-opacity:0.15,stroke:#fb8c00,stroke-width:2px
+    style G fill:#43a047,fill-opacity:0.15,stroke:#43a047,stroke-width:2px
 ```
 
 > **Note:** The ns-3 build phase uses all CPU cores and may take 10–20 minutes. Any simulations run during this time will execute very slowly due to CPU starvation.
@@ -426,9 +426,9 @@ flowchart TB
     K2 --> N4
     N4 -- "SetTxPower / SetCio / SetTtt" --> N1
 
-    style SIM fill:#e3f2fd,stroke:#1e88e5,color:#0d47a1
-    style BUS fill:#fff3e0,stroke:#fb8c00,color:#e65100
-    style PY fill:#f3e5f5,stroke:#8e24aa,color:#4a148c
+    style SIM fill:#1e88e5,fill-opacity:0.1,stroke:#1e88e5,stroke-width:2px
+    style BUS fill:#fb8c00,fill-opacity:0.1,stroke:#fb8c00,stroke-width:2px
+    style PY fill:#8e24aa,fill-opacity:0.1,stroke:#8e24aa,stroke-width:2px
 ```
 
 ### ns-3 Simulation Layer
@@ -535,7 +535,7 @@ sequenceDiagram
     K-->>IF: KPM JSON
     Env-->>PPO: obs [num_cells × 48]
 
-    rect rgb(232, 245, 233)
+    rect rgba(0, 255, 0, 0.05)
     loop 512 Rollout Steps
         PPO->>PPO: policy.forward(state)
         PPO->>Env: step(action)
@@ -550,7 +550,7 @@ sequenceDiagram
     end
     end
 
-    rect rgb(243, 229, 245)
+    rect rgba(255, 0, 255, 0.05)
     loop 10 PPO Epochs
         PPO->>PPO: GAE advantages
         PPO->>PPO: policy + value + entropy loss
