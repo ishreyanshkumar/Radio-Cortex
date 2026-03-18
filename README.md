@@ -3,20 +3,21 @@
 ![PyTorch](https://img.shields.io/badge/PyTorch-2.0%2B-EE4C2C?style=flat-square&logo=pytorch)
 ![ns-3](https://img.shields.io/badge/ns--3-Simulation-00599C?style=flat-square)
 ![Kafka](https://img.shields.io/badge/Apache%20Kafka-Streaming-231F20?style=flat-square&logo=apachekafka)
-![O-RAN](https://img.shields.io/badge/O--RAN-Compliant-green?style=flat-square)
 ![Trained](https://img.shields.io/badge/Status-Trained-brightgreen?style=flat-square)
 ![Deployed](https://img.shields.io/badge/Status-Deployed-blue?style=flat-square)
-![License](https://img.shields.io/badge/License-MIT-yellow?style=flat-square)
 ![HuggingFace](https://img.shields.io/badge/%F0%9F%A4%97-Weights_Available-orange?style=flat-square)
 
 # Radio-Cortex: O-RAN Reinforcement Learning Congestion Control
 
 Radio-Cortex is a closed-loop O-RAN congestion control system that uses Reinforcement Learning (RL) to dynamically optimize Radio Access Network (RAN) parameters. The system couples a high-fidelity ns-3 network simulation with a PPO-based RL controller via Apache Kafka, providing a complete digital twin environment for training and evaluating intelligent RAN optimization policies.
 
-> **Pre-trained weights available on Hugging Face:** https://huggingface.co/niksixus/Radio-Cortex-ORAN/tree/main
-> **Project Video:** https://youtu.be/ZvtCA4xGShE
-> **Project Report:** [Report.pdf](./Report.pdf)
-> **Deployed at:** https://huggingface.co/spaces/niksixus/Radio-Cortex
+**Pre-trained weights available on Hugging Face:** [Radio-Cortex-ORAN](https://huggingface.co/niksixus/Radio-Cortex-ORAN/tree/main)
+
+**Project Video:** [Radio-Cortex](https://youtu.be/ZvtCA4xGShE)
+
+**Project Report:** [Report.pdf](./Report.pdf)
+
+**Deployed at:** [Radio-Cortex](https://huggingface.co/spaces/niksixus/Radio-Cortex)
 
 ---
 
@@ -143,13 +144,6 @@ flowchart TB
 | **NS3 Interface** | `oran_ns3_env.py::NS3Interface` | Low-level Kafka communication: `send_rc_control()`, `receive_kpm_report()`, `start_simulation()` |
 | **Reward Function** | `oran_ns3_env.py::RewardEngine` | 7-component weighted reward: throughput, delay, loss, load, energy, SLA, CIO regularization |
 | **PPO Trainer** | `rl_training_pipeline.py::PPOTrainer` | Rollout collection, GAE advantage computation, multi-epoch policy updates |
-| **BDH Policy** | `policies/bdh.py::BDHPolicy` | 4-layer transformer with sparse Hebbian routing, scale-free topology |
-| **GPT-2 Policy** | `policies/policy_gpt2.py::GPT2Policy` | Causal decoder-only transformer |
-| **Transformer-XL Policy** | `policies/policy_trxl.py::TrXLPolicy` | Segment-level recurrence |
-| **Linear Transformer Policy** | `policies/policy_linear.py::LinearPolicy` | O(T) kernel attention |
-| **Universal Transformer Policy** | `policies/policy_universal.py::UniversalPolicy` | Weight-shared depth |
-| **Reformer Policy** | `policies/policy_reformer.py::ReformerPolicy` | Bucketed LSH attention |
-| **MLP Baseline** | `policies/neural_networks.py::ActorCritic` | 2-layer feedforward network for comparison |
 | **ns-3 Simulation** | `oran-congestion-scenario.cc` | C++ simulation entry point, scenario initialization |
 | **Scenario Manager** | `oran-congestion-scenario.cc::ScenarioManager` | Loads and configures 12 congestion scenarios |
 | **E2 Interface** | `oran-congestion-scenario.cc::E2InterfaceManager` | Generates KPM JSON, parses RC JSON, applies actions |
@@ -588,7 +582,6 @@ This section provides a comprehensive analysis of the reinforcement learning mod
 ### 🔬 Per-Model Detailed Metadata
 
 #### 1. BDH 
-- **File Size:** 72.94 MB
 - **Total Parameters:** 6,418,451
 - **Timesteps Trained:** 983,040
 - **Hyperparameters:**
@@ -602,7 +595,6 @@ This section provides a comprehensive analysis of the reinforcement learning mod
   - Scale-free slot-based memory mapping inside the `encoder`: [4, 128, 4096] (4 heads, 128 dim, 4096 keys) and `decoder`: [16384, 128].
 
 #### 2. GPT2
-- **File Size:** 36.96 MB
 - **Total Parameters:** 3,234,323
 - **Timesteps Trained:** 1,000,000 
 - **Hyperparameters:** `hidden_dim`: 256, `lr`: 0.0005, `batch_size`: 512, `rollout_steps`: 512, `n_envs`: 48
@@ -611,7 +603,6 @@ This section provides a comprehensive analysis of the reinforcement learning mod
   - State projection block utilizes an initialized size of `state_embed.weight` [256, 144].
 
 #### 3. LINEAR (Linear Attention Transformer)
-- **File Size:** 36.89 MB
 - **Total Parameters:** 3,217,939
 - **Timesteps Trained:** 1,000,000 
 - **Hyperparameters:** `hidden_dim`: 256, `lr`: 0.0005, `batch_size`: 512, `rollout_steps`: 512, `n_envs`: 48
@@ -619,7 +610,6 @@ This section provides a comprehensive analysis of the reinforcement learning mod
   - Standard autoregressive linear attention mechanisms. Identical input mapping block to the GPT2 backbone via `pos_embed`: [1, 64, 256] and `state_embed.weight`: [256, 144]. 
 
 #### 4. REFORMER
-- **File Size:** 37.05 MB
 - **Total Parameters:** 3,232,019
 - **Timesteps Trained:** 1,000,000 
 - **Hyperparameters:** `hidden_dim`: 256, `lr`: 0.0005, `batch_size`: 512, `rollout_steps`: 512, `n_envs`: 48
@@ -629,7 +619,6 @@ This section provides a comprehensive analysis of the reinforcement learning mod
   - Also utilizes independent `actor_logstd`: [1, 9] for log-based standard deviation bounding.
 
 #### 5. TRXL (Transformer-XL)
-- **File Size:** 36.62 MB
 - **Total Parameters:** 3,195,155
 - **Timesteps Trained:** 1,000,000 
 - **Hyperparameters:** `hidden_dim`: 256, `lr`: 0.0005, `batch_size`: 512, `rollout_steps`: 512, `n_envs`: 48
@@ -637,7 +626,6 @@ This section provides a comprehensive analysis of the reinforcement learning mod
   - Standard TrXL blocks without hardcoded positional embeddings natively printed, but features the standard projection mappings such as `state_embed.weight`: [256, 144] and independent `actor_logstd`: [1, 9]. 
 
 #### 6. UNIVERSAL (Universal Transformer)
-- **File Size:** 9.73 MB
 - **Total Parameters:** 851,475
 - **Timesteps Trained:** 1,000,000 
 - **Hyperparameters:** `hidden_dim`: 256, `lr`: 0.0005, `batch_size`: 512, `rollout_steps`: 512, `n_envs`: 48
@@ -646,7 +634,6 @@ This section provides a comprehensive analysis of the reinforcement learning mod
   - Implements recurrent depth embeddings (`step_embed.weight`: [4, 256]) for depth conditioning. Uses standard `pos_embed`: [1, 64, 256].
 
 #### 7. NN (MLP Baseline)
-- **File Size:** 1.62 MB
 - **Total Parameters:** 140,563
 - **Timesteps Trained:** 1,000,000
 - **Hyperparameters:** `hidden_dim`: 256, `lr`: 0.0005, `batch_size`: 512, `rollout_steps`: 512, `n_envs`: 48
@@ -688,12 +675,6 @@ bash scripts/train_curriculum.sh --start 5
 | 8 | Generalization Mix | 1000k | Multi-goal Mastery |
 
 **Total: ~1M timesteps** to full multi-domain mastery. *(Note: Test `ping_pong` and `iot_tsunami` for zero-shot generalization after training)*
-
-### Batch Experiments (Terminal)
-Run multiple evaluations on different models efficiently:
-```bash
-bash scripts/eval_bdh_all_scenarios.sh
-```
 
 ---
 
