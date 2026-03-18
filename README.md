@@ -1,458 +1,579 @@
-# Radio-Cortex: O-RAN RL Congestion Control
 
-Radio-Cortex is a closed-loop control system that uses Reinforcement Learning (RL) to optimize network parameters (Tx Power, CIO, TTT) in an O-RAN compliant ns-3 simulation. It features a real-time feedback loop where an RL agent (PPO) receives KPM (Key Performance Metrics) from ns-3 via Kafka and sends back RC (RAN Control) actions, with a live unified Gradio web dashboard for real-time visualization, interpretability, and benchmarking.
+![Python](https://img.shields.io/badge/Python-3.8%2B-blue?style=flat-square&logo=python)
+![PyTorch](https://img.shields.io/badge/PyTorch-2.0%2B-EE4C2C?style=flat-square&logo=pytorch)
+![ns-3](https://img.shields.io/badge/ns--3-Simulation-00599C?style=flat-square)
+![Kafka](https://img.shields.io/badge/Apache%20Kafka-Streaming-231F20?style=flat-square&logo=apachekafka)
+![O-RAN](https://img.shields.io/badge/O--RAN-Compliant-green?style=flat-square)
+![Trained](https://img.shields.io/badge/Status-Trained-brightgreen?style=flat-square)
+![Deployed](https://img.shields.io/badge/Status-Deployed-blue?style=flat-square)
+![License](https://img.shields.io/badge/License-MIT-yellow?style=flat-square)
+![HuggingFace](https://img.shields.io/badge/%F0%9F%A4%97-Weights_Available-orange?style=flat-square)
 
-### What insight it reveals about BDH
-The Baby Dragon Hatchling (BDH) architecture demonstrates that **Scale-Free Network Topology** and **Sparse Hebbian Routing** are highly effective for distributed multi-agent control environments like O-RAN. By eliminating fixed causal masking, BDH allows Base Stations to contextually attend to varying numbers of User Equipments (UEs) without retraining. The live interpretability analysis explicitly proves that BDH naturally prunes up to 85% of its connections per timestep, relying on a small subset of "Hub Neurons" to integrate critical state information (e.g., congestion spikes)—mirroring the energy-efficient routing found in biological brains and preventing catastrophic forgetting during curriculum learning.
+# Radio-Cortex: O-RAN Reinforcement Learning Congestion Control
 
-## 💾 Model Weights
-**Pre-trained weights are available on Hugging Face:** https://huggingface.co/niksixus/Radio-Cortex-ORAN/tree/main
+Radio-Cortex is a closed-loop O-RAN congestion control system that uses Reinforcement Learning (RL) to dynamically optimize Radio Access Network (RAN) parameters. The system couples a high-fidelity ns-3 network simulation with a PPO-based RL controller via Apache Kafka, providing a complete digital twin environment for training and evaluating intelligent RAN optimization policies.
 
-## How to run locally
+> **Pre-trained weights available on Hugging Face:** https://huggingface.co/niksixus/Radio-Cortex-ORAN/tree/main
+> **Project Video:** https://youtu.be/ZvtCA4xGShE
+> **Project Report:** [Report.pdf](./Report.pdf)
+> **Deployed at:** https://huggingface.co/spaces/niksixus/Radio-Cortex
 
-Radio-Cortex includes a fully automated, bulletproof setup script that handles all dependencies, building, and Kafka configurations.
+---
 
-For a complete setup on Linux (Ubuntu/Debian):
+## Table of Contents
+
+1. [Overview](#1-overview)
+2. [Getting Started](#2-getting-started)
+3. [Core Components](#3-core-components)
+4. [Training System](#4-training-system)
+5. [Evaluation & Benchmarking](#5-evaluation--benchmarking)
+6. [Interpretability & Visualization](#6-interpretability--visualization)
+7. [Advanced Topics](#7-advanced-topics)
+8. [Complete Model Analysis](#8-complete-model-analysis)
+9. [Advanced Workflows](#9-advanced-workflows)
+10. [Demo & Screenshots](#10-demo--screenshots)
+11. [Limitations & Future Scope](#11-limitations--future-scope)
+
+---
+
+## 1. Overview
+
+### System Purpose and Design Goals
+
+Radio-Cortex addresses the challenge of real-time RAN optimization under diverse congestion scenarios. Traditional static parameter configurations cannot adapt to dynamic network conditions such as flash crowds, mobility storms, or spectrum scarcity. Radio-Cortex trains RL agents to continuously adjust three critical parameters per cell:
+
+| Parameter | Range | Purpose |
+|-----------|-------|---------|
+| **TxPower** | 10–46 dBm | Transmission power control for interference management |
+| **CIO** (Cell Individual Offset) | −6 to +6 dB | Handover bias tuning for load balancing |
+| **TTT** (Time-to-Trigger) | 0–1280 ms | Mobility robustness parameter to prevent ping-pong handovers |
+
+The system is designed around four key principles:
+
+1. **Lock-Step Synchronization** — The ns-3 simulation blocks waiting for RL actions, ensuring deterministic state transitions critical for stable training.
+2. **E2 Interface Compliance** — Uses O-RAN E2 service models (E2SM-KPM for metrics, E2SM-RC for control) over Kafka for realistic message passing.
+3. **Curriculum Learning** — Progressive introduction of 12 stress-test scenarios to build robust policies that generalize across congestion patterns.
+4. **Interpretability** — The flagship BDH (Baby Dragon Hatchling) architecture exposes scale-free topology, sparse activation patterns, and concept-neuron correlations for explainable decision-making.
+
+### What Insight BDH Reveals
+
+The Baby Dragon Hatchling (BDH) architecture demonstrates that **Scale-Free Network Topology** and **Sparse Hebbian Routing** are highly effective for distributed multi-agent control environments like O-RAN. By eliminating fixed causal masking, BDH allows Base Stations to contextually attend to varying numbers of UEs without retraining. Live interpretability analysis proves that BDH naturally prunes up to 85% of its connections per timestep, relying on a small subset of "Hub Neurons" to integrate critical state information (e.g., congestion spikes) — mirroring the energy-efficient routing found in biological brains and preventing catastrophic forgetting during curriculum learning.
+
+### High-Level System Architecture
+
+```mermaid
+flowchart TB
+    subgraph BOOT["Bootstrap"]
+        S1["scripts/setup.sh"]
+        S2["ns-3-allinone Build"]
+        S3["Kafka + Zookeeper"]
+        S4["Python .venv"]
+        S1 --> S2
+        S1 --> S3
+        S1 --> S4
+    end
+
+    subgraph SIM["Simulation Layer C++"]
+        N1["oran-congestion-scenario.cc\nMain Simulation Entry"]
+        N2["ScenarioManager\n12 Congestion Scenarios"]
+        N3["E2InterfaceManager\nKPM Reports + RC Commands"]
+        N4["MetricCollector\nTrace Source Aggregation"]
+        N1 --> N2
+        N1 --> N3
+        N3 --> N4
+    end
+
+    subgraph BUS["Kafka Message Bus"]
+        K1["e2_kpm_stream\n100ms Metric Reports"]
+        K2["e2_rc_control\nAction Commands"]
+    end
+
+    subgraph RL["RL Controller Python"]
+        R1["ORANns3Env\nGymnasium Interface"]
+        R2["PPOTrainer\nPolicy Optimization"]
+        R3["BDHPolicy\n6.4M Params 4-Layer Transformer"]
+        R4["RewardEngine\n7-Component Weighted Reward"]
+        R1 --> R2
+        R2 --> R3
+        R1 --> R4
+    end
+
+    subgraph ORC["Orchestration"]
+        O1["radio_cortex_complete.py\nMain Entry Point"]
+        O2["train_curriculum.sh\n8-Stage Training"]
+        O3["EvaluationRunner\n67 Metrics Benchmarking"]
+        O2 --> O1
+    end
+
+    subgraph OBS["Observability"]
+        V1["Gradio Dashboard\nPort 7860"]
+        V2["BDH Interpretability\nNeural Analysis"]
+        V3["experiment_results.csv\n67 Metrics x Controllers"]
+        V4["training.log\nPPO Loss and Rewards"]
+        V1 --> V2
+        V1 --> V3
+    end
+
+    BOOT --> SIM
+    N3 -- "JSON KPM" --> K1
+    K2 -- "JSON Actions" --> N3
+    K1 --> R1
+    R1 --> K2
+    O1 --> R1
+    O1 --> R2
+    O3 --> R1
+    R2 --> V4
+    O3 --> V3
+    V2 -.-> R3
+
+    style BOOT fill:#e8f5e9,stroke:#43a047,color:#1b5e20
+    style SIM fill:#e3f2fd,stroke:#1e88e5,color:#0d47a1
+    style BUS fill:#fff3e0,stroke:#fb8c00,color:#e65100
+    style RL fill:#f3e5f5,stroke:#8e24aa,color:#4a148c
+    style ORC fill:#fce4ec,stroke:#e53935,color:#b71c1c
+    style OBS fill:#e0f7fa,stroke:#00acc1,color:#006064
+```
+
+### Key Components and Code Mapping
+
+| Component | File/Class | Description |
+|-----------|------------|-------------|
+| **Main Entry Point** | `radio_cortex_complete.py::main()` | Argument parsing, mode selection (train/eval), orchestration |
+| **Gymnasium Environment** | `oran_ns3_env.py::ORANns3Env` | Wraps ns-3 into OpenAI Gym interface with `reset()`, `step()`, state/action spaces |
+| **NS3 Interface** | `oran_ns3_env.py::NS3Interface` | Low-level Kafka communication: `send_rc_control()`, `receive_kpm_report()`, `start_simulation()` |
+| **Reward Function** | `oran_ns3_env.py::RewardEngine` | 7-component weighted reward: throughput, delay, loss, load, energy, SLA, CIO regularization |
+| **PPO Trainer** | `rl_training_pipeline.py::PPOTrainer` | Rollout collection, GAE advantage computation, multi-epoch policy updates |
+| **BDH Policy** | `policies/bdh.py::BDHPolicy` | 4-layer transformer with sparse Hebbian routing, scale-free topology |
+| **GPT-2 Policy** | `policies/policy_gpt2.py::GPT2Policy` | Causal decoder-only transformer |
+| **Transformer-XL Policy** | `policies/policy_trxl.py::TrXLPolicy` | Segment-level recurrence |
+| **Linear Transformer Policy** | `policies/policy_linear.py::LinearPolicy` | O(T) kernel attention |
+| **Universal Transformer Policy** | `policies/policy_universal.py::UniversalPolicy` | Weight-shared depth |
+| **Reformer Policy** | `policies/policy_reformer.py::ReformerPolicy` | Bucketed LSH attention |
+| **MLP Baseline** | `policies/neural_networks.py::ActorCritic` | 2-layer feedforward network for comparison |
+| **ns-3 Simulation** | `oran-congestion-scenario.cc` | C++ simulation entry point, scenario initialization |
+| **Scenario Manager** | `oran-congestion-scenario.cc::ScenarioManager` | Loads and configures 12 congestion scenarios |
+| **E2 Interface** | `oran-congestion-scenario.cc::E2InterfaceManager` | Generates KPM JSON, parses RC JSON, applies actions |
+| **Metric Collector** | `oran-congestion-scenario.cc::MetricCollector` | Registers ns-3 trace sources, aggregates per-UE and per-cell metrics |
+| **Evaluation Framework** | `evaluation_baseline.py::EvaluationRunner` | Executes episodes, collects 67 metrics, computes 6 composite scores |
+| **Result Logger** | `evaluation_baseline.py::ResultLogger` | Appends results to `results/experiment_results.csv` |
+| **Gradio Dashboard** | `gradio_app.py::create_interface()` | Multi-tab web interface for visualization and benchmarking |
+| **BDH Interpretability** | `interpretability/bdh_interpretability_solo.py` | Scale-free topology, monosemanticity, sparsity, Hebbian plasticity analysis |
+| **Interpretability Logger** | `interpretability/live_logger.py::InterpretabilityLogger` | Live logging during training for interpretability snapshots |
+| **Interpretability Visualizer** | `interpretability/visualize.py` | Visualization utilities for interpretability results |
+| **Interpretability Gradio Tab** | `interpretability/gradio_tab.py` | Gradio dashboard tab for interpretability |
+| **Curriculum Trainer** | `scripts/train_curriculum.sh` | 8-stage progressive scenario introduction with maintenance dose mixing |
+
+### 12 Congestion Scenarios
+
+| Scenario | Code Identifier | Primary Challenge | Key Metric |
+|----------|----------------|-------------------|------------|
+| Flash Crowd | `flash_crowd` | Sudden user influx in one cell | Congestion Intensity |
+| Mobility Storm | `mobility_storm` | High-speed cross-cell movement | Handover Success Rate |
+| Traffic Burst | `traffic_burst` | Periodic application data surges | Peak Burst Loss |
+| Handover Ping-Pong | `handover_ping_pong` | Boundary oscillation | Handover Count per UE |
+| Sleepy Campus | `sleepy_campus` | Day/night traffic variation | Energy Efficiency |
+| Ambulance | `ambulance` | Emergency priority stream | Priority UE Delay |
+| Adversarial | `adversarial` | Rapid signal fluctuation | Stability Score |
+| Commuter Rush | `commuter_rush` | Mass group handover (50+ UEs) | RACH Failure Rate |
+| Mixed Reality | `mixed_reality` | VR + TCP slicing | Slice Isolation |
+| Urban Canyon | `urban_canyon` | Building blockage | Recovery Time |
+| IoT Tsunami | `iot_tsunami` | Massive device count (100+ UEs) | Scheduling Delay |
+| Spectrum Crunch | `spectrum_crunch` | Multi-band carrier aggregation | Aggregate Throughput |
+
+### 7 Policy Architectures
+
+| Architecture | Code Class | Parameters | Key Feature |
+|--------------|-----------|------------|-------------|
+| **BDH** (Default) | `policies/bdh_policy.py::BDHPolicy` | 6.4M | Scale-free sparse Hebbian routing, interpretable |
+| **GPT-2** | `policies/policy_gpt2.py::GPT2Policy` | 3.2M | Causal decoder-only transformer |
+| **Transformer-XL** | `policies/policy_trxl.py::TrXLPolicy` | 3.2M | Segment-level recurrence |
+| **Linear Transformer** | `policies/policy_linear.py::LinearPolicy` | 3.2M | O(T) kernel attention |
+| **Universal Transformer** | `policies/policy_universal.py::UniversalPolicy` | 0.85M | Weight-shared depth |
+| **Reformer** | `policies/policy_reformer.py::ReformerPolicy` | 3.2M | Bucketed LSH attention |
+| **MLP Baseline** | `policies/neural_networks.py::ActorCritic` | 0.14M | 2-layer feedforward |
+
+### File Organization
+
+```
+Radio-Cortex/
+├── radio_cortex_complete.py         # Main orchestration script
+├── oran_ns3_env.py                  # Gymnasium environment wrapper
+├── rl_training_pipeline.py          # PPO trainer implementation
+├── evaluation_baseline.py           # Evaluation runner and metrics
+├── gradio_app.py                    # Web dashboard
+├── vec_env_wrapper.py               # Vectorized environment wrapper
+├── oran-congestion-scenario.cc      # ns-3 C++ simulation source
+├── CMakeLists.txt                   # CMake build configuration
+├── requirements.txt                 # Python dependencies
+├── Report.pdf                       # Project report
+├── scripts/
+│   ├── setup.sh                     # One-shot environment bootstrap
+│   ├── train_quick.sh               # Quick smoke test (100 steps)
+│   ├── train_scenario.sh            # Single scenario training
+│   ├── train_curriculum.sh          # 8-stage curriculum trainer
+│   ├── start_kafka.sh               # Kafka/Zookeeper startup
+│   ├── stop_kafka.sh                # Kafka/Zookeeper shutdown
+│   ├── run_kafka_native.sh          # Native Kafka runner
+│   ├── cleanup.sh                   # Cleanup script
+│   ├── eval_bdh_all_scenarios.sh    # BDH evaluation across all scenarios
+│   └── log_analyzer.go              # Log analysis utility (Go)
+├── policies/
+│   ├── __init__.py                  # Policy factory (get_policy)
+│   ├── bdh.py                       # BDH core module
+│   ├── bdh_policy.py                # Baby Dragon Hatchling policy
+│   ├── policy_gpt2.py               # GPT-2 style transformer policy
+│   ├── policy_trxl.py               # Transformer-XL policy
+│   ├── policy_linear.py             # Linear attention transformer policy
+│   ├── policy_universal.py          # Universal transformer policy
+│   ├── policy_reformer.py           # Reformer policy
+│   └── neural_networks.py           # MLP baseline (ActorCritic)
+├── interpretability/
+│   ├── __init__.py                  # Interpretability package init
+│   ├── bdh_interpretability_solo.py # BDH interpretability analysis
+│   ├── live_logger.py               # Live interpretability logging
+│   ├── visualize.py                 # Visualization utilities
+│   └── gradio_tab.py                # Gradio dashboard tab
+├── ui/
+│   ├── index.html                   # Web UI entry point
+│   ├── styles.css                   # Web UI styles
+│   └── pages/                       # Additional UI pages
+├── docs/                            # Documentation and images
+├── bdh_results/                     # BDH interpretability result data
+├── models/                          # Trained checkpoints (.pt files)
+├── results/                         # Evaluation CSV outputs
+├── logs/                            # Training logs, action logs, ns-3 output
+├── .venv/                           # Python virtual environment
+└── ns-3-allinone/                   # ns-3 simulation framework
+```
+
+### Getting Started (Quick Reference)
+
+1. **Setup:** Run `bash scripts/setup.sh` to install all dependencies
+2. **Quick Test:** Validate installation with `bash scripts/train_quick.sh`
+3. **Training:** Launch full curriculum with `bash scripts/train_curriculum.sh`
+4. **Evaluation:** Benchmark against baseline with `python3 radio_cortex_complete.py --mode eval --model base`
+5. **Visualization:** Launch dashboard with `python3 gradio_app.py` → `http://localhost:7860`
+
+---
+
+## 2. Getting Started
+
+### Prerequisites
+
+Radio-Cortex requires a Linux environment (Ubuntu 20.04+ or Debian-based distributions recommended):
+
+| Component | Requirement | Purpose |
+|:----------|:------------|:--------|
+| **OS** | Ubuntu 20.04+ / Debian | ns-3 build compatibility |
+| **CPU** | 4+ cores recommended | Parallel environment training |
+| **RAM** | 8 GB minimum, 16 GB+ recommended | ns-3 compilation and vectorized envs |
+| **Python** | 3.8+ | RL training pipeline |
+| **Disk Space** | 10 GB free | ns-3 build artifacts, Kafka logs, model checkpoints |
+| **Java** | JRE 11+ | Kafka and Zookeeper runtime |
+| **sudo access** | Optional but recommended | System package installation |
+
+### Setup
+
+Radio-Cortex includes a fully automated setup script that handles all dependencies, building, and Kafka configurations.
+
 ```bash
 # 1. Clone the Repository
 git clone https://github.com/ishreyanshkumar/Radio-Cortex.git
 cd Radio-Cortex
- 
+
 # 2. Run the End-to-End Setup Script
-# This will automatically:
-# - Create a Python virtual environment (.venv)
-# - Install all required apt packages (Java, g++, cmake, librdkafka-dev)
-# - Clone ns-3 (v3.46.1) and compile it
-# - Link the custom O-RAN scenarios
-# - Download and start the Kafka & Zookeeper services locally
 bash scripts/setup.sh
 ```
 
-*(Note: The `ns-3` build phase uses all CPU cores and may take 10-20 minutes depending on your machine. Any simulations run during this time will execute very slowly due to CPU starvation.)*
+The `setup.sh` script orchestrates four sequential phases:
 
-### 4. Running the Training
- 
-#### A. Start Kafka
-The `setup.sh` script starts Kafka automatically. For subsequent starts after rebooting, use:
-```bash
-./scripts/start_kafka.sh
+```mermaid
+flowchart LR
+    A["▶ setup.sh"] --> B["📦 Clone\nns-3-allinone"]
+    B --> C["🐍 Create\n.venv"]
+    C --> D["🔨 Build\nns-3"]
+    D --> E["🔗 Link\nscenario.cc"]
+    E --> F["☕ Start\nKafka"]
+    F --> G["✅ Verify\ntrain_quick.sh"]
+
+    style A fill:#e8f5e9,stroke:#43a047,color:#1b5e20
+    style B fill:#e3f2fd,stroke:#1e88e5,color:#0d47a1
+    style C fill:#f3e5f5,stroke:#8e24aa,color:#4a148c
+    style D fill:#e3f2fd,stroke:#1e88e5,color:#0d47a1
+    style E fill:#fff3e0,stroke:#fb8c00,color:#e65100
+    style F fill:#fff3e0,stroke:#fb8c00,color:#e65100
+    style G fill:#e8f5e9,stroke:#43a047,color:#1b5e20
 ```
 
-#### B. Start Training
-```bash
-# Ensure venv is active
-source .venv/bin/activate
+> **Note:** The ns-3 build phase uses all CPU cores and may take 10–20 minutes. Any simulations run during this time will execute very slowly due to CPU starvation.
 
-# Run a quick training smoke test
+**Critical Configuration Flags for ns-3:**
+- `-d optimized` — Enables O3 optimization, 10–20× faster than default
+- `--disable-modules=lorawan,nr` — Reduces compile time by excluding unused modules
+
+### Kafka Setup Details
+
+Kafka provides asynchronous messaging between ns-3 (E2 Node) and the RL agent (Near-RT RIC):
+- The script checks for existing installation, downloads Kafka 2.13-3.6.1 if missing
+- Cleans `/tmp/kafka-logs` and `/tmp/zookeeper`
+- Starts Zookeeper (port 2181) then Kafka Broker (port 9092)
+- Polls TCP port 9092 for 30 seconds to confirm broker readiness
+
+### Starting Kafka After Reboot
+
+```bash
+bash scripts/start_kafka.sh
+```
+
+### Quick Smoke Test
+
+```bash
+source .venv/bin/activate
 bash scripts/train_quick.sh
 ```
 
-## 🎮 Usage & Workflows
+The smoke test runs 100 timesteps end-to-end. Expected results:
 
-### Advanced Training Configuration
-You can customize the training hyperparameters and environment settings via command-line arguments. Radio-Cortex uses organized argument groups to separate core operations from network settings and advanced tuning.
+| Step | Component | Expected Output |
+|:-----|:----------|:----------------|
+| 1 | ns-3 subprocess spawn | `ns3_out_*.log` appears in `logs/` |
+| 2 | Kafka connection | No connection errors in console |
+| 3 | KPM message reception | `Received KPM report: {...}` in logs |
+| 4 | Policy forward pass | `Action sent: [...]` in console |
+| 5 | Training metrics | `timesteps: 100, reward: ...` printed |
+| 6 | Checkpoint save | `models/radiocortex_bdh.pt` created |
 
-#### 1. Core Operation
-| Argument | Default | Description |
-|:---|:---|:---|
-| `--mode` | `train` | Operation mode: `train` or `eval`. |
-| `--scenario` | `flash_crowd` | ns-3 Scenario (12 available). Use `all` for random rotation. |
-| `--total-timesteps` | 100000 | Total training or evaluation steps. |
-| `--n-envs` | 12 | Number of parallel environments (vectorized). 12-16 recommended for BDH. |
-| `--model` | `bdh` | Policy architecture: `bdh` (Transformer), `nn` (MLP), `t1` (Transformer-1), `t2` (Transformer-2). |
-| `--model-path` | `models/radiocortex_{model}.pt` | Path to save/load model checkpoint. |
-| `--device` | `None` | Compute device (`cpu` or `cuda`). |
-| `--config` | `None` | Path to JSON config file to override any argument. |
+### Directory Structure After Setup
 
-#### 2. Network & Environment
-| Argument | Default | Description |
-|:---|:---|:---|
-| `--num-ues` | 20 | Number of User Equipments (UEs). |
-| `--num-cells` | 3 | Number of cells (eNodeBs). |
-| `--sim-time` | 20.0 | Simulation duration per episode (seconds). |
-| `--kpm-interval` | 100 | KPM Reporting Interval in ms. |
-| `--system-bandwidth-mhz` | 10.0 | System Bandwidth (5.0, 10.0, 20.0). |
-
----
-
-#### 3. Advanced RL Tuning
-| Argument | Default | Description |
-|:---|:---|:---|
-| `--learning-rate` | 3e-5 | PPO Learning rate. |
-| `--batch-size` | 512 | Batch size for optimization updates. |
-| `--rollout-steps` | 512 | Steps per rollout trajectory. |
-| `--gamma` | 0.99 | Discount factor. |
-| `--hidden-dim` | 256 | Network hidden dimension. |
-| `--gae-lambda` | 0.95 | GAE normalization lambda. |
-| `--clip-epsilon` | 0.1 | PPO clipping bound (Conservative). |
-| `--vf-coef` | 0.5 | Value function loss weight. |
-| `--ent-coef` | 0.03 | Entropy regularization weight. |
-| `--max-grad-norm` | 0.5 | Gradient clipping threshold. |
-| `--checkpoint-interval` | 10 | Checkpoint frequency (updates). |
-| `--log-interval` | 10 | Console log frequency (updates). |
-| `--ppo-epochs` | 20 | PPO update epochs per batch. |
-| `--target-kl` | 0.05 | Target KL divergence for early stopping. |
-
-## 🌍 Simulation Scenarios
-
-Radio-Cortex supports 12 diverse scenarios that stress-test different aspects of RAN intelligence.
-
-| Scenario | Type | Description | Key Metric |
-| :--- | :--- | :--- | :--- |
-| `flash_crowd` | Traffic | Sudden influx of users in one cell. | Congestion Intensity |
-| `mobility_storm` | Mobility | High-speed users moving across cells. | HO Success Rate |
-| `traffic_burst` | Traffic | Periodic surges in application data. | Peak Burst Loss |
-| `handover_ping_pong` | Mobility | Users oscillating between cell boundaries. | HO Count per UE |
-| `sleepy_campus` | Energy | Low-traffic night-time vs high-traffic day-time. | Energy Efficiency |
-| `ambulance` | QoS | High-priority emergency stream in congested RAN. | Priority UE Delay |
-| `adversarial` | Reliability | Rapid fluctuation in signal (shadowing). | Stability Score |
-| `commuter_rush` | Scaled Mobility | Mass group handover (50+ UEs moving together). | RACH Failure Rate |
-| `mixed_reality` | Slicing | Concurrent VR (Latent) and TCP (Bulk) users. | Slice Isolation |
-| `urban_canyon` | PHY | Sudden signal blockage behind buildings. | Recovery Time |
-| `iot_tsunami` | Scale | Massive device count (100+ UEs, small packets). | Scheduling Delay |
-| `spectrum_crunch` | Resources | Multi-band management (Carrier Aggregation). | Aggregate Throughput |
-
-
-## 🚀 CLI Training Reference
-
-Train the O-RAN Intelligent Controller using PPO (Proximal Policy Optimization).
-
-#### 1. 8-stage "Lean Power Suite" curriculum
 ```
-bash scripts/train_curriculum.sh
+Radio-Cortex/
+├── .venv/                           # Python virtual environment
+├── ns-3-allinone/
+│   └── ns-3.*/
+│       ├── build/                   # Compiled binaries
+│       └── scratch/                 # Linked scenario files
+├── kafka_2.13-3.6.1/               # Apache Kafka installation
+├── logs/                            # Runtime logs
+├── models/                          # Saved model checkpoints
+└── results/                         # Evaluation CSV outputs
 ```
 
-#### 2. Single Scenario Training
+### Troubleshooting
+
+**ns-3 Build Failures:**
 ```bash
-# General usage
-python3 radio_cortex_complete.py --mode train --scenario <name> --total-timesteps 200000
-
-# Example: Flash Crowd with 50 UEs
-python3 radio_cortex_complete.py --mode train --scenario flash_crowd --num-ues 50 --total-timesteps 200000
+g++ --version         # Requires g++ 9.0+
+sudo apt-get install g++ cmake python3-dev
+cd ns-3-allinone/ns-3.*/
+./ns3 clean && ./ns3 configure -d optimized && ./ns3 build
 ```
 
-#### 3. Parallel & Performance Training
+**Kafka Connection Issues:**
 ```bash
-# Run 16 parallel simulations on BDH (requires optimized build)
-python3 radio_cortex_complete.py --mode train --scenario flash_crowd --model bdh --n-envs 16 \
-    --total-timesteps 200000 --learning-rate 1e-4 --batch-size 512 --rollout-steps 256
+ps aux | grep kafka
+netstat -tuln | grep 9092
+pkill -f kafka && sleep 5 && bash scripts/start_kafka.sh
 ```
 
-#### 4. Advanced Hyperparameter Tuning
+**Python Dependency Conflicts:**
 ```bash
-python3 radio_cortex_complete.py --mode train \
-    --learning-rate 0.0001 \
-    --gamma 0.995 \
-    --batch-size 512 \
-    --model-path models/custom_agent.pt
+rm -rf .venv
+python3 -m venv .venv
+source .venv/bin/activate
+pip install --upgrade pip setuptools wheel
+pip install -r requirements.txt
 ```
 
 ---
 
-## 📊 CLI Evaluation & Benchmarking
+## 3. Core Components
 
-Benchmarking compares the AI agent against the **Static-RAN** baseline. Results are appended to `results/experiment_results.csv`.
+### System Architecture
 
-#### 1. Baseline Benchmark (AI disabled)
-Run this first to establish a "ground truth" performance floor.
-```bash
-python3 radio_cortex_complete.py --mode eval --model base --scenario flash_crowd
-```
-
-#### 2. AI Agent Evaluation
-```bash
-# Evaluate the default BDH model on mobility storm
-python3 radio_cortex_complete.py --mode eval --model bdh --scenario mobility_storm
-
-# After curriculum training — point to the curriculum checkpoint
-python3 radio_cortex_complete.py --mode eval --model bdh --scenario all --n-envs 4 \
-    --model-path models/curriculum/stage_3.pt
-```
-
-#### 3. Comparing Specific Architectures
-```bash
-# Compare BDH vs MLP
-python3 radio_cortex_complete.py --mode eval --model bdh --scenario flash_crowd
-python3 radio_cortex_complete.py --mode eval --model nn --scenario flash_crowd
-```
-
-#### 4. Interaction & Results Visualization
-Radio-Cortex features a unified, native Gradio application that hosts all the interactive visualizations:
-- Evaluation Dashboard (Radar & Bar charts)
-- ModelBench (Performance vs Params tradeoff curves)
-- Simulation Visualizer (SQL playback with real-time graphs)
-- Live BDH Interpretability Dashboard
-
-Run the app locally to view all results:
-```bash
-python3 gradio_app.py
-# Open http://localhost:7860
-```
-
-
-## 📊 Detailed Evaluation Metrics
-
-We categorize metrics based on the network layer they analyze, ensuring a holistic view of performance across the O-RAN stack.
-
-### 🌐 Quality of Service (QoS / Application Layer)
-* **Throughput (Mbps):** Average successful data delivery rate to UEs.
-* **End-to-End Delay (ms):** Average time for a packet to travel from source to destination.
-* **Satisfied User Ratio (%):** Percentage of users meeting the SLA:
-    *   *SLA Criteria:* Throughput > 1 Mbps AND Delay < 100 ms.
-
-### 🛡️ Reliability & Stability
-*   **Packet Loss Ratio (%):** Ratio of lost packets to total sent.
-*   **Handover Success Rate (%):** Successful / Attempted handovers.
-
-### ⚡ Resource Efficiency (Spectrum & Network)
-*   **Spectrum Utilization (%):** Average usage of Resource Blocks (RBs) across all cells.
-*   **Congestion Intensity (%):** Percentage of time where network utilization > 90%.
-*   **Cell Edge Throughput (Mbps):** 5th Percentile throughput. Indicates how well the network serves users with poor coverage (fairness).
-*   **Jain's Fairness Index (0-1):** Measures how equally resources are shared. 1.0 = perfect equality.
-    *   *Formula:* $(\sum x_i)^2 / (n \cdot \sum x_i^2)$ where $x_i$ is UE throughput.
-*   **Energy Efficiency (Mbps/Watt):** System Throughput / Total Power Consumption. Measures the "cost" of transmitting data.
-
-
-### 📶 PHY / Wireless Layer
-*   **Average SINR (dB):** Signal-to-Interference-plus-Noise Ratio.
-*   **Average RSRP (dBm):** Reference Signal Received Power (Signal Strength).
-
-### 🚀 Mobility Metrics
-*   **Handover Count:** Number of cell switches per UE.
-
-### 🖧 RIC / E2 Interface Metrics
-*   **Control Stability (%):** 0-100 score measuring AI "jitter". High score means stable decisions; low score means frequent, large action changes.
-
-### 🧠 Architecture & Compute Metrics
-*   **Inference Time (ms):** Average time taken by the agent to compute an action. Critical for comparing model architectures (e.g., Transformer vs MLP) against O-RAN real-time constraints.
-
----
-
-#### 2. Composite Health Scores (Radar Chart)
-
-To provide a quick "Health Check" of the network, we aggregate metrics into **6 composite scores** (0-100).
-
-### 🏆 1. QoS Score (User Experience)
-Combines how fast, responsive, and consistent the network felt to users. Includes tail-latency (p95) to capture stuttering.
-*   **Formula:** `25% Throughput + 25% Delay + 15% p95 Delay + 35% Satisfied Users`
-
-### 🛡️ 2. Reliability Score (Stability)
-Penalizes both constant loss, sudden outages (Peak/Max Loss), service downtime, unstable mobility, and handover failures. Rewards fast recovery and stable control.
-*   **Formula:** `35% Avg Loss + 15% Max Loss + 20% Downtime + 10% Avg HO Count/UE + 20% HO Success`
-*   *Note:* Control Stability and HO Stability were removed from the composite formula to focus on physical metrics.
-
-### 🏗️ 3. Resource Score (Efficiency & Fairness)
-Rewards high spectrum utilization AND efficiency, while ensuring fairness.
-*   **Formula:** `10% Utilization + 30% Cell Edge + 30% Jain's Fairness + 30% Energy Efficiency`
-*   **Note:** Energy Efficiency acts as a tie-breaker, rewarding agents that achieve similar QoS with lower power.
-
-### 📦 4. Buffer Score (Congestion Health)
-Measures buffer occupancy and congestion spikes.
-*   **Formula:** `60% Norm. Queue Length + 40% Congestion Intensity`
-
-### 📡 5. PHY Score (Signal Quality)
-Combined physical layer conditions.
-*   **Formula:** `60% SINR + 40% RSRP`
-
-
-
-### 🧠 6. Architecture Score (Model Efficiency)
-Measures the "cost of intelligence" - how heavy the model is in terms of latency and sizing.
-*   **Formula:** `50% Normalized Params + 50% Normalized Inference Speed`
-*   **Penalties:** 
-    *   0 score if Params > 1,000,000 (1M)
-    *   0 score if Inference > 10ms (O-RAN SLA boundary)
-    *   Baseline (Static) naturally scores 100 as it has 0 inference cost.
-
-
----
-
-## 🧠 Stationary Reward Engine
-
-Radio-Cortex uses a **single-stage, stationary reward function** optimized for distributed RL training (SubprocVecEnv). A **Survival Bias** of `+1.0` keeps rewards positive during exploration.
-
-#### Active Components
-
-| Component | Weight | Formula | Range |
-|:---|:---:|:---|:---:|
-| **Throughput** | 8.0 | $W \cdot \log(1 + T/T_{max})$ | [-0.5, 50.0] |
-| **Delay** | 4.0 | $-W \cdot \min(D/D_{max}, 1)$ (linear) | [-50.0, 0.0] |
-| **Packet Loss** | 8.0 | $-W \cdot (\text{mean loss} \cdot 4)$ | [-25.0, 0.0] |
-| **Load Balance** | 4.0 | $-\text{std}(\text{cell loads}) \cdot W$ | [-2.0, 0.0] |
-| **Energy Eff.** | 0.1 | $-\text{mean}(\text{norm tx power}) \cdot W$ | [-1.0, 0.0] |
-| **SLA Bonus** | 0.5 | +0.5 per UE meeting SLA (>1Mbps, <100ms) | [0.0, +NumUEs*0.5] |
-| **CIO Regularization**| 0.4 | $-W \cdot \text{mean}(\|\text{CIO}\|/6)$ | [-0.4, 0.0] |
-| **Survival Bias** | — | Constant `+1.0` | — |
-
-$$R_{total} = \text{clip}\left( r_{tput} + r_{delay} + r_{loss} + r_{load} + r_{energy} + r_{sla} + r_{cio} + \text{BIAS}, [-100, 50] \right)$$
-
----
-
-## 🧠 Interpretability & Live Neural Dashboard
-
-Radio-Cortex includes a state-of-the-art **Live Interpretability Dashboard** that peers inside the Baby Dragon Hatchling (BDH) agent while it trains, analyzing its neural architecture and decision-making drivers.
-
-**Access:** Open the **Gradio Controller** at `http://localhost:7860` and navigate to the **🧠 BDH Interpretability** tab.
-
-### The 4 Pillars of BDH Interpretability
-
-1. **🌳 Scale-Free Topology (Network Hubs)**
-   - *What it means:* As the network trains, it naturally prunes useless connections (sparsity) and routes critical logic through a tiny minority of "Hub Neurons". This mimics biological brains and the Internet.
-   - *On the Dashboard:* The visual map highlights Hub Neurons in **Red**. The dashboard calculates the power-law parameter (`α`) to confirm if the network has successfully formed a scale-free structure.
-2. **🎯 Monosemanticity & Concept Correlation (O-RAN Topics)**
-   - *What it means:* Using Saliency analysis, we map individual neurons to human-interpretable O-RAN concepts (e.g., "This neuron only fires when the Cell is overloaded").
-   - *On the Dashboard:* A rich Data Table maps out the exact correlation scores between specific Neurons and Network Topics/Concepts. Bar charts also show how many neurons have specialized for each topic.
-3. **⚡ Sparse Activation (Efficiency)**
-   - *What it means:* Only a fraction of the network's 128 neurons should "fire" for any given decision, preventing feature entanglement and minimizing energy usage.
-   - *On the Dashboard:* Layer-wise histograms show the sparsity percentage of the attention heads and MLP layers.
-4. **🧬 Hebbian Learning (Synaptic Plasticity)**
-   - *What it means:* "Neurons that fire together, wire together." We track the exact changes in synaptic weights across training updates to see how the optimizer physically strengthens important pathways.
-   - *On the Dashboard:* A live counter shows exactly how many thousands of synapses were strengthened in the last training window.
-
-### How to Use Interpretability
-
-#### Option A: Live Training Tracking (Real-time)
-As you run a live training session using `radio_cortex_complete.py --mode train`, the RL agent automatically generates evaluation snapshots in `bdh_results/`. 
-* Just keep the Gradio Interpretability dashboard open. A background timer pulls the newest files automatically, causing the Neural Graph and Scorecards to **update live as the agent trains!**
-
-#### Option B: Continuous Native Evaluation (Real-Time UI Feed for Pre-Trained Models)
-This script runs a continuous loop that mimics an active RL trainer mathematically updating the pre-trained weights by microscopic amounts using PyTorch `.backward()`. This makes it possible for the analyzer to track **real Synaptic Plasticity / LTP** dynamically in real-time without fake logs, feeding live data continuously to the UI.
-```bash
-# Run the continuous continuous tracking loop for 15 minutes natively
-python3 -m interpretability.run_analysis --checkpoint models/radiocortex_bdh.pt --focus-duration 15.0
-```
-
-#### Option C: Single Snapshot Analysis (Offline CLI Native Execution)
-To extract a single point-in-time calculation of a `.pt` model file mathematically and print all 5 Interpretability stats (Sparsity, Hebbian, Scale-Free, Saliency, Monosemanticity) straight to the console:
-```bash
-# Evaluate 1000 tensor states directly through the trained model to build the static neural maps
-python3 -m interpretability.run_analysis --checkpoint models/radiocortex_bdh.pt --generate-states 1000
-```
-
----
-
-## 📂 Codebase Structure & Documentation
-
-### 1. `radio_cortex_complete.py`
-**Role:** Main Entry Point & Orchestrator.
-This script manages the lifecycle of the training process, initializes the agent, and runs the main loop.
-
-### 2. `oran_ns3_env.py`
-**Role:** Gymnasium Environment Wrapper.
-converts ns-3 simulation into a standard OpenAI Gym interface (observation, action, reward).
-
-*   **`ORANns3Env`**: The Gym Environment class.
-    *   **`RewardEngine`**: Stationary single-stage reward engine. Combines 6 components (Throughput, Delay, Loss, Load, Energy, SLA Bonus) with Survival Bias.
-    *   **State Space**: `num_cells × 48` (3-frame stacked Enriched Cell Tokens). Features strictly normalized to [-1, 1]. Includes a stationary flag instead of curriculum level.
-    *   **Action Space**: `num_cells × 3` = 9 dimensions. All [-1,1]-normalized.
-        *   **TxPower**: Absolute mapping to [10, 46] dBm. Allows instant power switching.
-        *   **CIO**: Absolute [-6, 6] dB.
-        *   **TTT**: Absolute [0, 1280] ms.
-*   **`NS3Interface`**: Handles low-level communication.
-    *   `start_simulation()`: Spawns the `./ns3 run ...` subprocess.
-    *   `send_rc_control(actions)`: Serializes actions to JSON and sends via Kafka `e2_rc_control` topic.
-    *   `receive_kpm_report()`: Polls Kafka `e2_kpm_stream` topic for metrics.
-
-### 3. `rl_training_pipeline.py`
-**Role:** Reinforcement Learning Algorithms (PPO).
-Implements the PPO algorithm from scratch using PyTorch.
-
-### 4. Policy Architectures Supported:
-All policies use **state-dependent exploration** (learned log-std heads) for adaptive exploration.
-
-*   **BDH** (Default): Baby Dragon Hatchling
-*   **GPT-2** (`gpt2`): Standard Decoder-Only Transformer — Causal attention over time
-*   **Transformer-XL** (`trxl`): Segment-Level Recurrence
-*   **Linear Transformer** (`linear`): O(T) Kernel Attention (Katharopoulos)
-*   **Universal Transformer** (`universal`): Weight Sharing
-*   **Reformer** (`reformer`): Bucketed Attention
-*   **MLP** (`nn`): Simple Feed-Forward Baseline
-
-### 5. `oran-congestion-scenario.cc`
-**Role:** ns-3 Simulation Scenario (C++).
-The "Digital Twin" of the RAN. Implements the LTE/5G network, traffic generation, and E2 interface.
-
-### 6. `evaluation_baseline.py`
-**Role:** High-Fidelity Evaluation Framework.
-Extracts metrics and evaluates trained models against the static baseline, computing the Composite Health Scores and Advanced Metrics.
-
-### 7. Unified Web Suite (`gradio_app.py` & `ui/`)
-**Role:** Integrated visualization and command interface.
-- **`gradio_app.py`**: The unified Python web application. Run `python3 gradio_app.py` to access all dashboards, evaluation benchmarks, and the simulation visualizer seamlessly in your browser.
-- **`ui/`**: Directory containing the underlying frontend HTML/JS/CSS templates and logic served automatically by the Gradio backend.
-``
----
-
-## 🔄 System Architecture
+Radio-Cortex implements a three-tier architecture: the ns-3 simulation provides ground truth network behavior, Kafka provides asynchronous message passing with lock-step synchronization, and the Python layer implements the RL controller with pluggable policy architectures.
 
 ```mermaid
-graph LR
-    %% Data Flow Labels
-    subgraph SIM ["ns-3 Simulation (C++)"]
-        direction TB
-        subgraph RAN ["RAN Infrastructure"]
-            L12["PHY / MAC / RLC"]
-            STACK["PDCP / RRC"]
-        end
-        
-        subgraph E2 ["E2 Node Interface"]
-            COLL["Metric Collector<br/>(KPM Agreggator)"]
-            PROC["Action Processor<br/>(RC Handler)"]
-        end
+flowchart TB
+    subgraph SIM["Simulation Layer - C++"]
+        N1["oran-congestion-scenario.cc\nMain Simulation Binary"]
+        N2["ScenarioManager\n12 Congestion Patterns"]
+        N3["MetricCollector\nTrace Aggregation"]
+        N4["E2InterfaceManager\nKPM Generator + RC Processor"]
+        N1 --> N2
+        N1 --> N3
+        N3 --> N4
     end
 
-    subgraph BUS ["Message Bus (Kafka)"]
-        direction TB
-        TOPIC_KPM[("e2_kpm_stream<br/>(Reports)")]
-        TOPIC_RC[("e2_rc_control<br/>(Commands)")]
+    subgraph BUS["Kafka Message Bus - Port 9092"]
+        K1["e2_kpm_stream\n100ms Metric Interval"]
+        K2["e2_rc_control\nLock-step Commands"]
     end
 
-    subgraph RIC ["Intelligent Controller (Python)"]
-        direction TB
-        subgraph ENV ["Gym Environment"]
-            GYM["ORANns3Env"]
-        end
-        
-        subgraph AI ["AI Brain (PPO)"]
-            AGENT["PPO Agent"]
-            NET["Neural Network"]
-        end
+    subgraph PY["Python RL Controller"]
+        P0["radio_cortex_complete.py\nEntry Point"]
+        P1["NS3Interface\nKafka Client"]
+        P2["ORANns3Env\nGymnasium Interface"]
+        P3["RewardEngine\n7-Component Reward"]
+        P4["PPOTrainer\nRollout + GAE + Update"]
+        P5["Policy Network\nBDH / GPT2 / TrXL / MLP"]
+        P0 --> P2
+        P0 --> P4
+        P1 --> P2
+        P2 --> P3
+        P2 --> P4
+        P4 --> P5
+        P5 -- "action vector" --> P2
+        P2 --> P1
     end
 
-    %% Connections - Downlink / Metrics
-    L12 --> COLL
-    STACK --> COLL
-    COLL -- "E2SM-KPM<br/>(JSON)" --> TOPIC_KPM
-    TOPIC_KPM --> GYM
-    GYM -- "State Vector" --> AGENT
-    AGENT --> NET
+    N4 -- "JSON KPM\n+ WaitForRcAction" --> K1
+    K1 --> P1
+    P1 -- "JSON RC" --> K2
+    K2 --> N4
+    N4 -- "SetTxPower / SetCio / SetTtt" --> N1
 
-    %% Connections - Uplink / Control
-    NET --> AGENT
-    AGENT -- "Action Vector" --> GYM
-    GYM -- "E2SM-RC<br/>(JSON)" --> TOPIC_RC
-    TOPIC_RC --> PROC
-    PROC -- "SetTxPower / CIO / TTT" --> RAN
+    style SIM fill:#e3f2fd,stroke:#1e88e5,color:#0d47a1
+    style BUS fill:#fff3e0,stroke:#fb8c00,color:#e65100
+    style PY fill:#f3e5f5,stroke:#8e24aa,color:#4a148c
+```
 
-    %% Styling
-    classDef simNode fill:#f8f9fa,stroke:#343a40,stroke-width:2px,color:#212529;
-    classDef kafkaNode fill:#fff9db,stroke:#fcc419,stroke-width:2px,color:#212529;
-    classDef pythonNode fill:#e7f5ff,stroke:#228be6,stroke-width:2px,color:#212529;
-    classDef stackNode fill:#f1f3f5,stroke:#adb5bd,stroke-style:dashed;
+### ns-3 Simulation Layer
 
-    class SIM,RAN,E2,L12,STACK,COLL,PROC simNode;
-    class BUS,TOPIC_KPM,TOPIC_RC kafkaNode;
-    class RIC,ENV,AI,GYM,AGENT,NET pythonNode;
-    class RAN,E2,ENV,AI stackNode;
+The ns-3 simulation (`oran-congestion-scenario.cc`) implements the digital twin of an O-RAN compliant Radio Access Network.
+
+**Key Responsibilities:**
+- **`ScenarioManager`** — Selects and configures one of 12 pre-defined congestion scenarios
+- **`MetricCollector`** — Registers trace sources on ns-3 objects, aggregates per-UE metrics into per-cell statistics
+- **`E2InterfaceManager`** — Implements the O-RAN E2 interface by generating KPM reports at 100ms intervals and processing RC commands
+- **Kafka Integration** — Uses librdkafka C++ bindings to send/receive JSON messages, blocks simulation at `WaitForRcAction()` to enforce lock-step execution
+
+**Critical Synchronization:** The simulation blocks at `WaitForRcAction()` after producing each KPM message, ensuring it does not advance until receiving an RC command. This makes state transitions deterministic and reproducible.
+
+### Message Bus Layer (Kafka)
+
+Two topics implement the bidirectional E2 interface:
+
+| Topic | Direction | Content | Interval |
+|-------|-----------|---------|----------|
+| `e2_kpm_stream` | ns-3 → Python | KPM JSON (per-UE + per-cell metrics) | 100ms |
+| `e2_rc_control` | Python → ns-3 | RC JSON (TxPower, CIO, TTT per cell) | On-demand |
+
+**Topic Isolation for Parallel Environments:** When running vectorized environments (`--n-envs > 1`), each environment appends a `topic_suffix` (e.g., `_1`, `_2`) to the topic names, creating isolated communication channels. This enables parallel simulation instances without message crosstalk.
+
+### Python RL Controller Layer
+
+#### ORANns3Env (`oran_ns3_env.py`)
+
+The `ORANns3Env` class implements the Gymnasium `Env` interface:
+
+- **Observation Space:** `Box(shape=(num_cells, 48), dtype=np.float32)` — 3-frame stacked cell-level features normalized to [−1, 1]
+- **Action Space:** `Box(shape=(num_cells, 3), dtype=np.float32, low=-1, high=1)` — Normalized TxPower, CIO, TTT per cell
+- **`step(action)`** — Sends RC control to ns-3, receives next KPM report, computes reward
+- **`reset()`** — Starts a new episode, returns initial observation
+- **`close()`** — Terminates ns-3 subprocess and Kafka consumers
+
+#### NS3Interface (`oran_ns3_env.py`)
+
+- **`start_simulation(scenario, config)`** — Spawns ns-3 subprocess via `subprocess.Popen()`
+- **`send_rc_control(actions)`** — Serializes action array to JSON, publishes to `e2_rc_control`
+- **`receive_kpm_report(timeout=5000)`** — Polls `e2_kpm_stream`, parses JSON into Python dict, handles frame stacking
+
+#### RewardEngine (`oran_ns3_env.py`)
+
+7-component weighted reward (stationary, single-stage, optimized for SubprocVecEnv):
+
+| Component | Weight | Formula | Range |
+|:----------|:------:|:--------|:-----:|
+| **Throughput** | 8.0 | $W \cdot \log(1 + T/T_{max})$ | [−0.5, 50.0] |
+| **Delay** | 4.0 | $-W \cdot \min(D/D_{max}, 1)$ | [−50.0, 0.0] |
+| **Packet Loss** | 8.0 | $-W \cdot (\text{mean loss} \cdot 4)$ | [−25.0, 0.0] |
+| **Load Balance** | 4.0 | $-\text{std}(\text{cell loads}) \cdot W$ | [−2.0, 0.0] |
+| **Energy Eff.** | 0.1 | $-\text{mean}(\text{norm tx power}) \cdot W$ | [−1.0, 0.0] |
+| **SLA Bonus** | 0.5 | +0.5 per UE meeting SLA (>1 Mbps, <100 ms) | [0.0, +NumUEs×0.5] |
+| **CIO Regularization** | 0.4 | $-W \cdot \text{mean}(\|CIO\|/6)$ | [−0.4, 0.0] |
+| **Survival Bias** | — | Constant +1.0 | — |
+
+$$R_{total} = \text{clip}(r_{tput} + r_{delay} + r_{loss} + r_{load} + r_{energy} + r_{sla} + r_{cio} + 1.0,\ [-100,\ 50])$$
+
+#### PPOTrainer (`rl_training_pipeline.py`)
+
+- **Rollout Collection** — Executes `rollout_steps` (default 512) timesteps across `n_envs` parallel environments
+- **GAE Computation** — Generalized advantage estimates with λ=0.95
+- **Policy Update** — 10 epochs over mini-batches (batch_size=512), optimizing clipped surrogate + value loss + entropy bonus
+- **Gradient Clipping** — `max_grad_norm=0.5`
+- **Mixed Precision** — BFloat16 AMP with `torch.cuda.amp.autocast()` on CUDA
+
+### Policy Network Architectures
+
+All policies share the same actor-critic interface: `forward(state)` → `(action_mean, action_logstd, value)`. All use **state-dependent exploration** (learned log-std heads).
+
+| Model ID | Architecture | Parameters | Hidden Dim | Key Features |
+|:---------|:-------------|:-----------|:-----------|:-------------|
+| `bdh` | Baby Dragon Hatchling | 6.4M | 512 | Scale-free topology, sparse Hebbian routing, 4-layer transformer |
+| `gpt2` | GPT-2 Style Transformer | 3.2M | 256 | Causal attention, positional embeddings |
+| `linear` | Linear Transformer | 3.2M | 256 | O(T) kernel attention (Katharopoulos) |
+| `reformer` | Reformer | 3.2M | 256 | Bucketed attention, 128 token context |
+| `trxl` | Transformer-XL | 3.2M | 256 | Segment-level recurrence |
+| `universal` | Universal Transformer | 851K | 256 | Weight-tied blocks, depth embeddings |
+| `nn` | MLP Baseline (ActorCritic) | 140K | 256 | 2-layer feed-forward network |
+
+**BDH Architecture Specifics:**
+- Frame Encoding: Projects 48-dim cell features to 128-dim embeddings
+- 4-Layer Transformer Stack: Sparse attention (4 heads × 128 dim) + MLP with element-wise multiplication
+- Scale-Free Routing: Hub neurons (15% of neurons) route 85% of information
+- Sparse Activation: 60–85% of neurons inactive per forward pass
+- Independent output heads: actor mean (9-dim), actor log-std (learnable), critic value (1-dim)
+
+### Training Step Sequence
+
+```mermaid
+sequenceDiagram
+    participant PPO as 🧠 PPOTrainer
+    participant Env as 🎮 ORANns3Env
+    participant IF as 🔌 NS3Interface
+    participant K as ☕ Kafka
+    participant NS3 as 📡 ns-3
+
+    PPO->>Env: reset()
+    Env->>IF: start_simulation()
+    IF->>NS3: Popen('./ns3 run ...')
+    NS3->>K: KPM → e2_kpm_stream
+    K-->>IF: KPM JSON
+    Env-->>PPO: obs [num_cells × 48]
+
+    rect rgb(232, 245, 233)
+    loop 512 Rollout Steps
+        PPO->>PPO: policy.forward(state)
+        PPO->>Env: step(action)
+        Env->>IF: send_rc_control()
+        IF->>K: RC → e2_rc_control
+        K-->>NS3: RC JSON
+        NS3->>NS3: Apply TxPower / CIO / TTT
+        NS3->>K: Next KPM
+        K-->>IF: KPM JSON
+        Env->>Env: RewardEngine.compute()
+        Env-->>PPO: obs, reward, done, info
+    end
+    end
+
+    rect rgb(243, 229, 245)
+    loop 10 PPO Epochs
+        PPO->>PPO: GAE advantages
+        PPO->>PPO: policy + value + entropy loss
+        PPO->>PPO: backward() + step()
+    end
+    end
+
+    PPO->>PPO: 💾 Save checkpoint
 ```
 
 ---
 
-# Complete Model Analysis
+## 8. Complete Model Analysis
 
 This section provides a comprehensive analysis of the reinforcement learning models found in the `models/` directory. The metadata (parameter counts, training steps, layer architectures) is extracted **directly from the `.pt` checkpoint files** rather than relying on prior documentation.
 
-## 📊 Summary Table
+### 📊 Summary Table
 
 | Model | File Size (MB) | Total Params | Timesteps Trained | Hidden Dim | Architecture |
 | :--- | :--- | :--- | :--- | :--- | :--- |
@@ -464,11 +585,9 @@ This section provides a comprehensive analysis of the reinforcement learning mod
 | **UNIVERSAL** | 9.73 | 851,475 | 1,000,000 | 256 | Universal Transformer |
 | **NN** | 1.62 | 140,563 | 1,000,000 | 256 | 2-layer MLP Baseline |
 
----
+### 🔬 Per-Model Detailed Metadata
 
-## 🔬 Per-Model Detailed Metadata
-
-### 1. BDH 
+#### 1. BDH 
 - **File Size:** 72.94 MB
 - **Total Parameters:** 6,418,451
 - **Timesteps Trained:** 983,040
@@ -482,7 +601,7 @@ This section provides a comprehensive analysis of the reinforcement learning mod
   - Uses an independent `logstd_head`: [1, 9] mapped to 9 action spaces.
   - Scale-free slot-based memory mapping inside the `encoder`: [4, 128, 4096] (4 heads, 128 dim, 4096 keys) and `decoder`: [16384, 128].
 
-### 2. GPT2
+#### 2. GPT2
 - **File Size:** 36.96 MB
 - **Total Parameters:** 3,234,323
 - **Timesteps Trained:** 1,000,000 
@@ -491,7 +610,7 @@ This section provides a comprehensive analysis of the reinforcement learning mod
   - `pos_embed`: [1, 64, 256] contextual sequence embedding for sequential state representations.
   - State projection block utilizes an initialized size of `state_embed.weight` [256, 144].
 
-### 3. LINEAR (Linear Attention Transformer)
+#### 3. LINEAR (Linear Attention Transformer)
 - **File Size:** 36.89 MB
 - **Total Parameters:** 3,217,939
 - **Timesteps Trained:** 1,000,000 
@@ -499,7 +618,7 @@ This section provides a comprehensive analysis of the reinforcement learning mod
 - **Key Architecture Characteristics:**
   - Standard autoregressive linear attention mechanisms. Identical input mapping block to the GPT2 backbone via `pos_embed`: [1, 64, 256] and `state_embed.weight`: [256, 144]. 
 
-### 4. REFORMER
+#### 4. REFORMER
 - **File Size:** 37.05 MB
 - **Total Parameters:** 3,232,019
 - **Timesteps Trained:** 1,000,000 
@@ -509,7 +628,7 @@ This section provides a comprehensive analysis of the reinforcement learning mod
   - Notable distinction in position embedding sequence length - `pos_embed`: [1, 128, 256] (128 context tokens compared to 64 for GPT2/Linear)
   - Also utilizes independent `actor_logstd`: [1, 9] for log-based standard deviation bounding.
 
-### 5. TRXL (Transformer-XL)
+#### 5. TRXL (Transformer-XL)
 - **File Size:** 36.62 MB
 - **Total Parameters:** 3,195,155
 - **Timesteps Trained:** 1,000,000 
@@ -517,7 +636,7 @@ This section provides a comprehensive analysis of the reinforcement learning mod
 - **Key Architecture Characteristics:**
   - Standard TrXL blocks without hardcoded positional embeddings natively printed, but features the standard projection mappings such as `state_embed.weight`: [256, 144] and independent `actor_logstd`: [1, 9]. 
 
-### 6. UNIVERSAL (Universal Transformer)
+#### 6. UNIVERSAL (Universal Transformer)
 - **File Size:** 9.73 MB
 - **Total Parameters:** 851,475
 - **Timesteps Trained:** 1,000,000 
@@ -526,7 +645,7 @@ This section provides a comprehensive analysis of the reinforcement learning mod
   - Uniquely features a fraction of the parameter count relative to other Transformer variants due to **weight-tied blocks** across depth.
   - Implements recurrent depth embeddings (`step_embed.weight`: [4, 256]) for depth conditioning. Uses standard `pos_embed`: [1, 64, 256].
 
-### 7. NN (MLP Baseline)
+#### 7. NN (MLP Baseline)
 - **File Size:** 1.62 MB
 - **Total Parameters:** 140,563
 - **Timesteps Trained:** 1,000,000
@@ -534,9 +653,9 @@ This section provides a comprehensive analysis of the reinforcement learning mod
 - **Key Architecture Characteristics:**
   - The lightest model mapping observations using simple dense mappings (`feature_net.0.weight`: [256, 144] and `feature_net.2.weight`: [256, 256]) then linearly mapped independently to an `actor_mean` [9, 256] vector.
 
+---
 
-
-# 🔬 Advanced Workflows
+## 9. Advanced Workflows
 
 ### Scenario Curriculum (8-Stage "Lean Power Suite")
 The curriculum script trains on progressively harder scenarios with automated inter-stage storage cleanup.
@@ -573,10 +692,12 @@ bash scripts/train_curriculum.sh --start 5
 ### Batch Experiments (Terminal)
 Run multiple evaluations on different models efficiently:
 ```bash
-python3 scripts/evaluate_all.py
+bash scripts/eval_bdh_all_scenarios.sh
 ```
 
-## 🎥 Video Demo & Images
+---
+
+## 10. Demo & Screenshots
 
 ### 🎬 System Walkthrough Video
 https://youtu.be/ZvtCA4xGShE
@@ -590,12 +711,9 @@ https://youtu.be/ZvtCA4xGShE
 ### 📊 ModelBench Tradeoff Analysis
 ![ModelBench](docs/image3.png)
 
+---
 
-## 👥 Team Members
-
-Shreyansh Kumar, Sarthak Sharma, Nikhil Agnihotri, Sarvesh Joshi, Tanush Dhiman, Siddharth Bohra, Yatharth Kabra, Adhikshit
-
-## ⚠️ Limitations & Future Scope
+## 11. Limitations & Future Scope
 
 **Current Limitations:**
 *   **ns-3 Simulation Overhead:** The environment relies on a high-fidelity ns-3 simulation which is CPU-intensive. Real-time factor is limited by single-core ns-3 performance (though vectorized envs alleviate this during training).
@@ -603,7 +721,7 @@ Shreyansh Kumar, Sarthak Sharma, Nikhil Agnihotri, Sarvesh Joshi, Tanush Dhiman,
 *   **Simplified E2 Interface:** The Kafka bridge is a functional proxy for the E2 interface but does not implement the full ASN.1 encoding overhead of a production O-RAN RIC.
 
 **Future Scope:**
-*   **Multi-Agent RL (MARL):** Transitioning from a single centralized centralized agent to distributed agents at each eNodeB cell.
+*   **Multi-Agent RL (MARL):** Transitioning from a single centralized agent to distributed agents at each eNodeB cell.
 *   **Hardware-in-the-Loop (HIL):** Testing the trained BDH policy on physical SDRs (Software Defined Radios) using srsRAN or OpenAirInterface.
 *   **Energy-Saving State Support:** Integrating deep sleep and MIMO antenna blanking into the action space for true Green-RAN optimization.
 *   **Zero-Shot Generalization:** Expanding the curriculum to train across varying spectrum bands simultaneously.
