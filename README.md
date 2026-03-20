@@ -30,10 +30,7 @@ Radio-Cortex is a closed-loop O-RAN congestion control system that uses Reinforc
 5. [Evaluation & Benchmarking](#5-evaluation--benchmarking)
 6. [Interpretability & Visualization](#6-interpretability--visualization)
 7. [Advanced Topics](#7-advanced-topics)
-8. [Complete Model Analysis](#8-complete-model-analysis)
-9. [Advanced Workflows](#9-advanced-workflows)
-10. [Demo & Screenshots](#10-demo--screenshots)
-11. [Limitations & Future Scope](#11-limitations--future-scope)
+8. [Limitations & Future Scope](#8-limitations--future-scope)
 
 ---
 
@@ -497,6 +494,8 @@ $$R_{total} = \text{clip}(r_{tput} + r_{delay} + r_{loss} + r_{load} + r_{energy
 - **Gradient Clipping** — `max_grad_norm=0.5`
 - **Mixed Precision** — BFloat16 AMP with `torch.cuda.amp.autocast()` on CUDA
 
+## 4. Training System
+
 ### Policy Network Architectures
 
 All policies share the same actor-critic interface: `forward(state)` → `(action_mean, action_logstd, value)`. All use **state-dependent exploration** (learned log-std heads).
@@ -563,138 +562,84 @@ sequenceDiagram
 
 ---
 
-## 8. Complete Model Analysis
+## 5. Evaluation & Benchmarking
 
-This section provides a comprehensive analysis of the reinforcement learning models found in the `models/` directory. The metadata (parameter counts, training steps, layer architectures) is extracted **directly from the `.pt` checkpoint files** rather than relying on prior documentation.
+The evaluation framework rigorously tests trained models across the 12 congestion scenarios, generating comprehensive CSV reports (`results/experiment_results.csv`).
 
-### 📊 Summary Table
+* **Execution:** Run evaluations via `python3 radio_cortex_complete.py --mode eval --model [model_path]`.
+* **Metrics Tracked:** 67 distinct metrics per scenario, including base RAN metrics, SLA satisfaction rates, queue delays, and composite scores.
+* **Analysis:** The output CSV is fully compatible with the **ModelBench** component in the Control Center UI for instant ranking and trade-off visualization.
 
-| Model | File Size (MB) | Total Params | Timesteps Trained | Hidden Dim | Architecture |
-| :--- | :--- | :--- | :--- | :--- | :--- |
-| **BDH** | 72.94 | 6,418,451 | 983,040 | 512 | BDH |
-| **GPT2** | 36.96 | 3,234,323 | 1,000,000 | 256 | GPT-2 Style Transformer |
-| **LINEAR** | 36.89 | 3,217,939 | 1,000,000 | 256 | Linear Attention Transformer |
-| **REFORMER** | 37.05 | 3,232,019 | 1,000,000 | 256 | Reformer Transformer |
-| **TRXL** | 36.62 | 3,195,155 | 1,000,000 | 256 | Transformer-XL |
-| **UNIVERSAL** | 9.73 | 851,475 | 1,000,000 | 256 | Universal Transformer |
-| **NN** | 1.62 | 140,563 | 1,000,000 | 256 | 2-layer MLP Baseline |
+## 6. Interpretability & Visualization
 
-### 🔬 Per-Model Detailed Metadata
+The Radio-Cortex suite includes a powerful **Control Center Web UI** (`ui/index.html`) spanning three main capabilities:
 
-#### 1. BDH 
-- **Total Parameters:** 6,418,451
-- **Timesteps Trained:** 983,040
-- **Hyperparameters:**
-  - `hidden_dim`: 512
-  - `lr`: 3e-05 (stable learning rate config)
-  - `batch_size`: 512, `rollout_steps`: 512, `n_envs`: 48
-  - `clip_epsilon`: 0.1, `vf_coef`: 1.0
-  - Entropy annealing: `ent_coef_start`: 0.03 → `ent_coef_end`: 0.005 (`ent_decay_fraction`: 0.8)
-- **Key Architecture Characteristics:**
-  - Uses an independent `logstd_head`: [1, 9] mapped to 9 action spaces.
-  - Scale-free slot-based memory mapping inside the `encoder`: [4, 128, 4096] (4 heads, 128 dim, 4096 keys) and `decoder`: [16384, 128].
+<table style="width:100%; text-align:center; border:none;">
+<tr>
+<td width="33%" style="vertical-align:top;">
+<br>
+<b>📉 Eval Dashboard</b><br>
+Loads <code>experiment_results.csv</code> to explore evaluation metrics across models. Features component-wise radar charts and scenario throughput comparisons.
+</td>
+<td width="33%" style="vertical-align:top;">
+<br>
+<b>🏆 ModelBench</b><br>
+Drag & drop your experiment CSV for instant, interactive multi-metric analysis, model overall ranking, and metric trade-off scatter plots.
+</td>
+<td width="33%" style="vertical-align:top;">
+<br>
+<b>🌐 Live Signal Matrix</b><br>
+Loads <code>simulation_data_*.db</code> files to replay live step-by-step O-RAN metrics. Provides live cell commands, SLA monitoring, and handover dynamics.
+</td>
+</tr>
+</table>
 
-#### 2. GPT2
-- **Total Parameters:** 3,234,323
-- **Timesteps Trained:** 1,000,000 
-- **Hyperparameters:** `hidden_dim`: 256, `lr`: 0.0005, `batch_size`: 512, `rollout_steps`: 512, `n_envs`: 48
-- **Key Architecture Characteristics:**
-  - `pos_embed`: [1, 64, 256] contextual sequence embedding for sequential state representations.
-  - State projection block utilizes an initialized size of `state_embed.weight` [256, 144].
+#### Control Center Previews
 
-#### 3. LINEAR (Linear Attention Transformer)
-- **Total Parameters:** 3,217,939
-- **Timesteps Trained:** 1,000,000 
-- **Hyperparameters:** `hidden_dim`: 256, `lr`: 0.0005, `batch_size`: 512, `rollout_steps`: 512, `n_envs`: 48
-- **Key Architecture Characteristics:**
-  - Standard autoregressive linear attention mechanisms. Identical input mapping block to the GPT2 backbone via `pos_embed`: [1, 64, 256] and `state_embed.weight`: [256, 144]. 
+<div align="center">
+  <img src="docs/image1.png" width="48%" alt="Live Signal Matrix">
+  <img src="docs/image3.png" width="48%" alt="ModelBench Tradeoff Analysis">
+  <br>
+  <em>(Left: Live Signal Matrix Replay | Right: ModelBench Tradeoff Analysis)</em>
+</div>
 
-#### 4. REFORMER
-- **Total Parameters:** 3,232,019
-- **Timesteps Trained:** 1,000,000 
-- **Hyperparameters:** `hidden_dim`: 256, `lr`: 0.0005, `batch_size`: 512, `rollout_steps`: 512, `n_envs`: 48
-- **Key Architecture Characteristics:**
-  - Designed for much longer context sequence history. 
-  - Notable distinction in position embedding sequence length - `pos_embed`: [1, 128, 256] (128 context tokens compared to 64 for GPT2/Linear)
-  - Also utilizes independent `actor_logstd`: [1, 9] for log-based standard deviation bounding.
+<br>
 
-#### 5. TRXL (Transformer-XL)
-- **Total Parameters:** 3,195,155
-- **Timesteps Trained:** 1,000,000 
-- **Hyperparameters:** `hidden_dim`: 256, `lr`: 0.0005, `batch_size`: 512, `rollout_steps`: 512, `n_envs`: 48
-- **Key Architecture Characteristics:**
-  - Standard TrXL blocks without hardcoded positional embeddings natively printed, but features the standard projection mappings such as `state_embed.weight`: [256, 144] and independent `actor_logstd`: [1, 9]. 
+#### BDH Neural Activation Visualization
+The self-healing Base Station policies leverage the Baby Dragon Hatchling (BDH) architecture, which features scale-free sparse routing that can be inspected live via the Gradio Dashboard (`python3 gradio_app.py`).
 
-#### 6. UNIVERSAL (Universal Transformer)
-- **Total Parameters:** 851,475
-- **Timesteps Trained:** 1,000,000 
-- **Hyperparameters:** `hidden_dim`: 256, `lr`: 0.0005, `batch_size`: 512, `rollout_steps`: 512, `n_envs`: 48
-- **Key Architecture Characteristics:**
-  - Uniquely features a fraction of the parameter count relative to other Transformer variants due to **weight-tied blocks** across depth.
-  - Implements recurrent depth embeddings (`step_embed.weight`: [4, 256]) for depth conditioning. Uses standard `pos_embed`: [1, 64, 256].
+<div align="center">
+  <img src="docs/image2.png" width="85%" alt="BDH Interpretability Dashboard">
+</div>
 
-#### 7. NN (MLP Baseline)
-- **Total Parameters:** 140,563
-- **Timesteps Trained:** 1,000,000
-- **Hyperparameters:** `hidden_dim`: 256, `lr`: 0.0005, `batch_size`: 512, `rollout_steps`: 512, `n_envs`: 48
-- **Key Architecture Characteristics:**
-  - The lightest model mapping observations using simple dense mappings (`feature_net.0.weight`: [256, 144] and `feature_net.2.weight`: [256, 256]) then linearly mapped independently to an `actor_mean` [9, 256] vector.
+#### System Walkthrough Video
+**Watch the full demonstration:** [youtu.be/ZvtCA4xGShE](https://youtu.be/ZvtCA4xGShE)
+
 
 ---
 
-## 9. Advanced Workflows
+## 7. Advanced Topics
 
-### Scenario Curriculum (8-Stage "Lean Power Suite")
-The curriculum script trains on progressively harder scenarios with automated inter-stage storage cleanup.
+### Parallel Simulation Scaling (Vectorized Environments)
+Radio-Cortex achieves high-throughput training using Gymnasium's `SubprocVecEnv` wrapped in `vec_env_wrapper.py`. To prevent Kafka message crosstalk between simultaneous `ns-3` instances, each environment dynamically appends a unique `topic_suffix` (e.g., `e2_kpm_stream_1`) during bootstrapping. This fully isolates the E2 message bus per worker, enabling linearly scalable rollout collection across multiple CPU cores.
+
+### Scenario Curriculum (Leveled Progression)
+The 8-stage curriculum (`scripts/train_curriculum.sh`) trains policies on progressively harder scenarios to prevent catastrophic forgetting.
 
 ```bash
-# Start the full 8-stage curriculum
+# Launch full 8-stage curriculum (~1M timesteps)
 bash scripts/train_curriculum.sh
-
-# Resume from a specific stage (e.g., Stage 5)
-bash scripts/train_curriculum.sh --start 5
 ```
+**Progression**: `1. Flash Crowd` ➔ `2. Sleepy Campus` ➔ `3. Urban Canyon` ➔ `4. Mobility Storm` ➔ `5. Traffic Burst` ➔ `6. Ambulance` ➔ `7. Spectrum Crunch` ➔ `8. Generalization Mix`. 
 
-**Core Principle**: Gradual introduction of complexity while maintaining exposure to mastered scenarios to prevent **catastrophic forgetting**.
+*Note: The curriculum uses a "maintenance dose" replay mechanism, mixing in 10-20% of previous scenario traffic during later stages to preserve generalized abilities.*
 
-**Key Strategy**: 
-- Start with 100% on easiest scenario (Flash Crowd).
-- Add new scenarios progressively via weighted mixing.
-- Keep exposure to previous scenarios as a "maintenance dose".
-- Focus majority of training on the newest/hardest targets.
-
-| Stage | Focus | Total-timesteps | Skill Description |
-|:---:|:---:|:---:|:---|
-| 1 | Flash Crowd | 400k | Basic load balancing (Bootstrap) |
-| 2 | Sleepy Campus | 450k | Energy efficiency (Green RAN) |
-| 3 | Urban Canyon | 500k | Signal recovery & Robustness |
-| 4 | Mobility Storm | 550k | Handover Optimization |
-| 5 | Traffic Burst | 600k | Congestion Management |
-| 6 | Ambulance | 650k | QoS Priority & Slicing |
-| 7 | Spectrum Crunch | 700k | Spectral Efficiency |
-| 8 | Generalization Mix | 1000k | Multi-goal Mastery |
-
-**Total: ~1M timesteps** to full multi-domain mastery. *(Note: Test `ping_pong` and `iot_tsunami` for zero-shot generalization after training)*
 
 ---
 
-## 10. Demo & Screenshots
 
-### 🎬 System Walkthrough Video
-https://youtu.be/ZvtCA4xGShE
 
-### 📉 Evaluation Dashboard
-![Signal Matrix](docs/image1.png)
-
-### 🧠 BDH Interpretability Dashboard
-![Interpretability](docs/image2.png)
-
-### 📊 ModelBench Tradeoff Analysis
-![ModelBench](docs/image3.png)
-
----
-
-## 11. Limitations & Future Scope
+## 8. Limitations & Future Scope
 
 **Current Limitations:**
 *   **ns-3 Simulation Overhead:** The environment relies on a high-fidelity ns-3 simulation which is CPU-intensive. Real-time factor is limited by single-core ns-3 performance (though vectorized envs alleviate this during training).
